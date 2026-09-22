@@ -42,6 +42,15 @@
             <Style BasedOn="{StaticResource DefaultUiTextBoxStyle}" TargetType="{x:Type ui:TextBox}">
                 <Setter Property="behavior:ClipboardInterceptor.EnableSafeClipboard" Value="True" />
             </Style>
+            <!--  日志页/缓存页的筛选小圆角按钮  -->
+            <Style x:Key="ChipButton"
+                   BasedOn="{StaticResource {x:Type ui:Button}}"
+                   TargetType="ui:Button">
+                <Setter Property="Padding" Value="10,3" />
+                <Setter Property="Margin" Value="4,0,0,0" />
+                <Setter Property="FontSize" Value="12" />
+                <Setter Property="CornerRadius" Value="12" />
+            </Style>
         </ResourceDictionary>
     </Application.Resources>
 </Application>

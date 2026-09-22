@@ -31,6 +31,12 @@ public partial class CommonConfig : ObservableObject
     private bool _exitToTray;
 
     /// <summary>
+    /// 启动时不显示主窗口，只保留托盘图标
+    /// </summary>
+    [ObservableProperty]
+    private bool _startMinimized;
+
+    /// <summary>
     /// 当前主题类型
     /// </summary>
     [ObservableProperty]

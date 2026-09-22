@@ -1,6 +1,8 @@
 using Microsoft.Extensions.Logging;
+using RetryProxy.Core.Logging;
 using RetryProxy.Helpers.DpiAwareness;
 using RetryProxy.Helpers.Ui;
+using RetryProxy.Helpers.Win32;
 using RetryProxy.ViewModel;
 using System;
 using System.Windows;
@@ -17,6 +19,7 @@ namespace RetryProxy.View;
 public partial class MainWindow : FluentWindow, INavigationWindow
 {
     private readonly ILogger<MainWindow> _logger = App.GetLogger<MainWindow>();
+    private readonly WindowRecovery _windowRecovery;
     private ScrollViewer? _currentScrollViewer;
     private double _targetOffset;
     private double _inputVelocity;
@@ -34,13 +37,14 @@ public partial class MainWindow : FluentWindow, INavigationWindow
 
     public MainWindowViewModel ViewModel { get; }
 
-    public MainWindow(MainWindowViewModel viewModel, INavigationService navigationService, ISnackbarService snackbarService, IContentDialogService contentDialogService)
+    public MainWindow(MainWindowViewModel viewModel, INavigationService navigationService, ISnackbarService snackbarService, IContentDialogService contentDialogService, ProxyLogger proxyLogger)
     {
         _logger.LogDebug("主窗体实例化");
         DataContext = ViewModel = viewModel;
 
         InitializeComponent();
         this.InitializeDpiAwareness();
+        _windowRecovery = new WindowRecovery(this, proxyLogger);
 
         snackbarService.SetSnackbarPresenter(SnackbarPresenter);
         contentDialogService.SetDialogHost(RootContentDialogPresenter);
@@ -233,6 +237,7 @@ public partial class MainWindow : FluentWindow, INavigationWindow
     protected override void OnClosed(EventArgs e)
     {
         _logger.LogDebug("主窗体退出");
+        _windowRecovery.Dispose();
         CompositionTarget.Rendering -= OnCompositionTargetRendering;
         RemoveHandler(PreviewMouseWheelEvent, new MouseWheelEventHandler(OnGlobalPreviewMouseWheel));
         base.OnClosed(e);

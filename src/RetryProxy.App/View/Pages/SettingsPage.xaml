@@ -64,6 +64,38 @@
             </ui:CardControl.Header>
         </ui:CardControl>
 
+        <!--  日志目录  -->
+        <ui:CardControl Margin="0,0,0,12" Icon="{ui:SymbolIcon DocumentText24}">
+            <ui:CardControl.Header>
+                <StackPanel>
+                    <ui:TextBlock FontTypography="Body" Text="{i18n:T 日志目录}" TextWrapping="Wrap" />
+                    <ui:TextBlock Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
+                                  Text="{Binding LogDirectory}"
+                                  TextWrapping="Wrap" />
+                </StackPanel>
+            </ui:CardControl.Header>
+            <ui:Button Command="{Binding OpenLogDirectoryCommand}"
+                       Content="{i18n:T 打开目录}"
+                       Icon="{ui:SymbolIcon FolderOpen24}"
+                       ToolTip="{i18n:T 运行日志 retry-proxy.log 所在目录}" />
+        </ui:CardControl>
+
+        <!--  每日统计目录  -->
+        <ui:CardControl Margin="0,0,0,12" Icon="{ui:SymbolIcon DataHistogram24}">
+            <ui:CardControl.Header>
+                <StackPanel>
+                    <ui:TextBlock FontTypography="Body" Text="{i18n:T 每日统计目录}" TextWrapping="Wrap" />
+                    <ui:TextBlock Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
+                                  Text="{Binding StatisticsDirectory}"
+                                  TextWrapping="Wrap" />
+                </StackPanel>
+            </ui:CardControl.Header>
+            <ui:Button Command="{Binding OpenStatisticsDirectoryCommand}"
+                       Content="{i18n:T 打开目录}"
+                       Icon="{ui:SymbolIcon FolderOpen24}"
+                       ToolTip="{i18n:T 每个通道一个子目录，按天保存 jsonl 统计记录}" />
+        </ui:CardControl>
+
         <!--  随系统启动  -->
         <ui:CardExpander Margin="0,0,0,12"
                          ContentPadding="0"
@@ -120,7 +152,7 @@
                                      Grid.RowSpan="2"
                                      Grid.Column="1"
                                      Margin="0,0,36,0"
-                                     IsChecked="{Binding StartMinimized, Mode=TwoWay}" />
+                                     IsChecked="{Binding Config.CommonConfig.StartMinimized, Mode=TwoWay}" />
                 </Grid>
                 <Separator Margin="-18,0" BorderThickness="0,1,0,0" />
                 <Grid Margin="16">

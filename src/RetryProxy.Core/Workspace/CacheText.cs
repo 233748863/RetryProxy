@@ -93,4 +93,39 @@ public static class CacheText
         return "缓存写入 = 本次回复报告的新建缓存用量，不计为缓存命中。\n"
             + $"{cache.CacheCreationMeasuredRequests} / {cache.MeasuredRequests} 个有效请求取得写入用量，合计 {cache.CacheCreationTokens} token；未获取的写入用量不填成 0。";
     }
+
+    public const string ClaudeHelp = "Claude 总输入 = 未缓存输入 + 缓存读取 + 缓存写入；任一项未获取时不计算命中率。其他兼容接口使用回复中的总输入量。";
+
+    /// <summary>明细页首行的日期标题，例如“今日 09-22 命中”。</summary>
+    public static string DateHeadline(DateTime now) => $"今日 {now:MM-dd} 命中";
+
+    public static string TokensText(CacheSnapshot cache) => $"已复用 {CountText(cache.CachedTokens)} / 总输入 {CountText(cache.InputTokens)} token";
+
+    public static string TokensHelp(CacheSnapshot cache) => $"已复用 {cache.CachedTokens} / 总输入 {cache.InputTokens} token\n{UsageHelp}";
+
+    public static string RecentSummary(CacheSnapshot cache) => $"今日最近 {cache.RecentRequests.Count} 次成功请求 · 命中 {RateText(cache.RecentHitRatePercent())}";
+
+    public static string LegendCounts(CacheSnapshot cache) => $"· 今日有效 {CountText(cache.MeasuredRequests)} 次 / 未计入 {CountText(cache.UnmeasuredRequests)} 次";
+
+    /// <summary>表格“读取 / 总输入 token”一列。</summary>
+    public static string UsageCell(CacheRequest request) => $"{OptionalCount(request.CachedTokens)} / {OptionalCount(request.TotalInputTokens())}";
+
+    public static string EmptyRowsText(CacheSnapshot cache) => cache.RecentRequests.Count == 0
+        ? "收到成功回复后，这里会显示缓存记录"
+        : "最近记录中没有符合筛选的请求";
+
+    /// <summary>GPT 缓存标识说明；没有任何标识计数时为 null。</summary>
+    public static string? CacheKeyHelp(CacheSnapshot cache)
+    {
+        if (cache.ClientKeyRequests == 0 && cache.AddedKeyRequests == 0 && cache.MissingSessionRequests == 0
+            && cache.UnsupportedKeyRequests == 0 && cache.CompatibilityFallbacks == 0)
+        {
+            return null;
+        }
+
+        return "GPT 缓存标识 = 供服务商识别同一会话的信息。\n"
+            + $"客户端自带 {cache.ClientKeyRequests} 次 · 代理补全 {cache.AddedKeyRequests} 次\n"
+            + $"未补全：缺少会话 {cache.MissingSessionRequests} 次 / 服务商不兼容 {cache.UnsupportedKeyRequests} 次；兼容重发 {cache.CompatibilityFallbacks} 次。\n"
+            + $"补全计数包含处理中和失败请求，明细仅保留最近 {CacheSnapshot.HistoryLimit} 次成功请求。";
+    }
 }

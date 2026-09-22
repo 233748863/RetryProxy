@@ -126,6 +126,13 @@ public sealed class ProxyService
         return KeepAlive.RequestPreparation();
     }
 
+    /// <summary><paramref name="credential"/> 非 null 时切换到该 Key，null 切回本机默认配置；之后的自动保活也随之切换。</summary>
+    public bool RequestPreparationWith(Core.Cli.CliCredential? credential)
+    {
+        EnsureRunning();
+        return KeepAlive.RequestPreparationWith(credential);
+    }
+
     private void EnsureRunning()
     {
         lock (_lock)

@@ -115,11 +115,122 @@ public sealed class RetryProxy
         return this;
     }
 
-    /// <summary>到点就发一轮保活探测；M4 接入 CLI 之前只做判定，不实际执行。</summary>
-    public Task SendDueKeepAliveProbeAsync()
+    /// <summary>到点就发一轮保活探测（对应 send_due_keepalive_probe）。</summary>
+    public async Task SendDueKeepAliveProbeAsync()
     {
-        _ = KeepAlive.TakeDue();
-        return Task.CompletedTask;
+        var probe = KeepAlive.BeginDueProbe();
+        if (probe is not null)
+        {
+            await SendProbeAsync(probe).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>按模板立刻发一轮（测试与验收用；对应 send_keepalive_probe）。</summary>
+    public async Task SendKeepAliveProbeAsync(KeepAliveTemplate template)
+    {
+        var probe = KeepAlive.BeginProbe(template);
+        if (probe is not null)
+        {
+            await SendProbeAsync(probe).ConfigureAwait(false);
+        }
+    }
+
+    private async Task SendProbeAsync(KeepAliveProbe probe)
+    {
+        using var _ = probe;
+        var startedAt = MonotonicInstant.Now;
+        var timeoutSeconds = Math.Min(Config.TimeoutSeconds, Config.TotalTimeoutSeconds);
+        var sessionLabel = probe.SessionId.Length > 8 ? probe.SessionId[..8] : probe.SessionId;
+        var configuration = probe.UsesSuppliedKey ? "使用本次输入的 Key 经本通道转发" : "沿用本机客户端配置";
+        Logger.Info($"供应商保活 [会话 {sessionLabel}] 第 {probe.Turn} 轮，随机题号 {probe.QuestionIndex + 1}/250，{probe.Flavor.Label()} CLI，{configuration}，问题：{probe.Question}");
+
+        Cli.CliReply? reply = null;
+        string? failure = null;
+        string? interruption = null;
+        using (var timeout = new CancellationTokenSource())
+        using (var linked = CancellationTokenSource.CreateLinkedTokenSource(Cancel, probe.Cancel, timeout.Token))
+        {
+            timeout.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
+            try
+            {
+                reply = await probe.ExecuteAsync(linked.Token).ConfigureAwait(false);
+            }
+            catch (Cli.CliException error)
+            {
+                failure = error.Message;
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            catch (Exception error)
+            {
+                failure = $"CLI 调用异常：{error.GetType().Name}";
+            }
+
+            // 与 Rust 的 biased select 一致：先看通道取消，再看会话让行，最后才是超时。
+            if (Cancel.IsCancellationRequested)
+            {
+                interruption = "通道或应用已停止";
+            }
+            else if (probe.Cancel.IsCancellationRequested)
+            {
+                interruption = "已让行真实请求或保活设置发生变化，本轮会话已清理";
+            }
+            else if (reply is null && failure is null)
+            {
+                failure = $"CLI 本轮执行超过 {StreamLifecycle.Format(timeoutSeconds)} 秒，已终止并清理会话";
+            }
+        }
+
+        var elapsed = startedAt.Elapsed.TotalSeconds;
+        var nextRound = KeepAlive.Enabled ? $"空闲 {(long)KeepAlive.Idle.TotalSeconds} 秒后进行下一轮" : "自动保活已关闭";
+        var afterFailure = KeepAlive.Snapshot().Preparing && !Cancel.IsCancellationRequested
+            ? $"准备未完成，随机等待 {KeepAliveWatchdog.PreparationRetryMinDelay.TotalSeconds:F3}～{KeepAliveWatchdog.PreparationRetryMaxDelay.TotalSeconds:F3} 秒后继续重试；可点击“终止准备”取消"
+            : nextRound;
+        var prefix = $"供应商保活 [会话 {sessionLabel}] 第 {probe.Turn} 轮 {probe.Flavor.Label()} CLI";
+        if (interruption is not null)
+        {
+            probe.Interrupt(interruption);
+            Logger.Info($"{prefix}，本轮已中断：{interruption}，耗时 {elapsed:F2} 秒，{afterFailure}");
+            return;
+        }
+
+        if (failure is not null)
+        {
+            probe.Fail(failure);
+            Logger.Warn($"{prefix}，响应未完成：{failure}，耗时 {elapsed:F2} 秒，{afterFailure}");
+            return;
+        }
+
+        var answerPreview = new System.Text.StringBuilder();
+        var taken = 0;
+        foreach (var rune in (reply!.Stats.Answer() ?? string.Empty).EnumerateRunes())
+        {
+            if (System.Text.Rune.IsControl(rune))
+            {
+                continue;
+            }
+
+            if (taken++ == 180)
+            {
+                break;
+            }
+
+            answerPreview.Append(rune.ToString());
+        }
+
+        var completion = probe.Complete(reply.Model, reply.Stats.ContextTokens(probe.Flavor == KeepAliveFlavor.Claude));
+        if (completion is null)
+        {
+            const string reason = "完整回复确认前本轮已取消，未计为成功";
+            probe.Interrupt(reason);
+            Logger.Info($"{prefix}，本轮已中断：{reason}，耗时 {elapsed:F2} 秒，{afterFailure}");
+            return;
+        }
+
+        var context = completion.ContextTokens?.ToString(CultureInfo.InvariantCulture) ?? "未获取";
+        var reset = completion.ResetReason is { } resetReason ? $"，{resetReason}" : string.Empty;
+        Logger.Info($"{prefix} 完整回复{reply.Stats.LogFields()}，当前会话 {context}/{completion.ContextLimit} token，{LogText.TimingText(reply.FirstContentSeconds, elapsed)}，回答：{answerPreview}{reset}，{nextRound}");
     }
 
     // ---------------------------------------------------------------------

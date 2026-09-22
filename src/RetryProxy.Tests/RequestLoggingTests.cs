@@ -139,8 +139,7 @@ public class RequestLoggingTests
         Assert.Equal(1UL, fixture.Metrics.Snapshot().ActiveRequests);
         Assert.True(oldTemplate.Body.Span.SequenceEqual(fixture.Proxy.KeepAlive.Template()!.Body.Span));
         await Task.Delay(1100);
-        Assert.Null(fixture.Proxy.KeepAlive.TakeDue());
-        Assert.False(fixture.Proxy.KeepAlive.IsProbeDue());
+        await fixture.Proxy.SendKeepAliveProbeAsync(oldTemplate);
         Assert.Equal(1, requests);
         response.Dispose();
         var logs = await CompletedLogs(fixture);

@@ -45,7 +45,7 @@
 | D5 | 配置存储 | **已确认：完全沿用 BetterGI 方式**，`{exe 目录}\User\config.json`，System.Text.Json 缩进输出，`ConfigService` 读失败时把坏文件备份到 `User\backup\` 后用默认值重建；`AllConfig` 任一属性变更即整体落盘（200 ms 防抖）。代理配置（`ProxyConfig`：providers/routes/selected_route_id/schema_version）作为 `AllConfig.Proxy` 子对象存放，界面偏好（主题、语言、托盘行为、窗口尺寸）作为 `AllConfig.Common` 等同级子对象。 | 与 Rust 版**不再共用**配置。首次启动若 `config.json` 不存在而注册表 `HKCU\Software\LLM Retry Proxy\ConfigJson` 存在，则读取并迁移一次（走同一套 schema 6 迁移逻辑），写入 config.json 后不再回写注册表；日志记录 `已从注册表导入旧配置`。`RETRY_PROXY_CONFIG_JSON` 环境变量注入仍保留供测试使用，此时保存为空操作。 |
 | D6 | HTTP 服务端 | 每条通道一个独立 Kestrel `WebApplication`，绑定 `127.0.0.1:port`；停用即硬停（不做优雅关闭），与 Rust 语义一致。 | 用 `<FrameworkReference Include="Microsoft.AspNetCore.App"/>`。不用 HttpListener（http.sys 无法精细控制流式与 499）。 |
 | D7 | HTTP 客户端 | 每通道一个 `HttpClient`（`SocketsHttpHandler`：禁重定向、ConnectTimeout=单次超时、自定义 `IWebProxy` 复刻 `system_proxy.rs` 规则、TLS 走 SChannel）。连续无数据超时用逐段读取 + `CancellationTokenSource` 实现。 | .NET 无原生 read-timeout。 |
-| D8 | 页面结构 | **已确认（2026-09-22，用户明确"首页要和参考项目一致"）**：NavigationView 四页：**首页**（照搬 BetterGI 首页：横幅 + 一张「代理服务，启动！」折叠卡，见 5.2）、**缓存明细**（原独立窗口改为页面，只从左侧导航进入）、**设置**（语言 + 「开机自动启动」折叠组：开机自启/启动时最小化到托盘/关闭时最小化到托盘）、**关于**。Rust 版首页的统计瓦片、请求明细、运行日志、策略行**不再放首页**，落点待定（见 5.2 末尾）。 | 首页视觉与 BetterGI 一致优先于沿用 Rust 工作流。M0 已按此实现并截图验证。 |
+| D8 | 页面结构 | **已确认（2026-09-22，用户明确"首页要和参考项目一致"；同日拍板落点）**：NavigationView 六页：**首页**（照搬 BetterGI 首页：横幅 + 一张「代理服务，启动！」折叠卡，卡内含服务商/通道的新增/编辑/删除按钮，见 5.2）、**运行状态**（新增：通道计数与全部启停、状态胶囊、保活状态、统计瓦片、缓存摘要、请求明细、策略行）、**运行日志**（新增：日志面板独占一页）、**缓存明细**（原独立窗口改为页面，只从左侧导航进入）、**设置**（语言 + 「开机自动启动」折叠组）、**关于**。 | 首页视觉与 BetterGI 一致优先于沿用 Rust 工作流。M0 已按此实现首页/设置页并截图验证；运行状态、运行日志两页在 M5 实现。 |
 | D9 | 日志面板 | 不用 Serilog RichTextBox sink；自实现 `LogPage` 控件：虚拟化 `ListView` + 按行着色（等价 Rust `log_line_job`）。文件日志沿用 Rust 格式（自实现轮转 5 MiB × 3），**不用 Serilog 按日滚动**，否则 legacy 恢复解析失效。 | 旧日志恢复逻辑依赖 `retry-proxy.log(.1/.2/.3)` 与 `WARNING` 级别字样。 |
 | D10 | JSON 库 | 统一 `System.Text.Json`；prompt_cache_key 插入采用字节级操作，不反序列化重写。 | AGENTS.md 偏好 Newtonsoft，但本项目需要保留原始字节，STJ 足够。 |
 | D11 | 图标 | 用 Rust `icon.rs` 的配色重新绘制静态 `logo.ico`/`logo.png`（深靛底、青绿链路、橙色箭头）。 | 不复用 BetterGI 的原神图标。 |
@@ -136,29 +136,30 @@ D:\RetryProxy\
 2. **「代理服务，启动！」`CardExpander`**（对应 BetterGI 的「启动！」卡）
    - 头部：标题 + 说明 `服务启动后本地端口才会开始转发请求，点击展开启动相关配置。` + 右侧 `TwoStateButton`（`启动`/`停止`，绑定当前通道运行状态）。
    - 展开后五行（每行 Body 标题 + Tertiary 说明 + 右侧控件，行间 `Separator`）：`服务商` ComboBox、`通道` ComboBox、`本地监听端口` TextBox、`本通道保活` ToggleSwitch + `一键准备` 按钮、`本地监听地址` + `复制` 按钮。
+   - **已确认（2026-09-22）**：`服务商` 行与 `通道` 行的 ComboBox 右侧各加三个图标小按钮 `新增` / `编辑` / `删除`，点击弹 WPF-UI `ContentDialog`，内容与 5.3 的对话框一致；通道运行中 `编辑`/`删除` 禁用（提示 `请先停用通道`）。ComboBox 项文案沿用 Rust：服务商 `{name} · {url} · {n} 通道`，通道 `{name} · {port} · {状态}`。空态提示两条沿用。
    - 文案全部走 `{i18n:T 中文}`，英文在 `User\I18n\en.json`；句号也作为 i18n 键（`"。": "."`）。
 3. 页面为 `ScrollViewer` 内 `StackPanel`，`PagePadding` 与 BetterGI 相同。
 
-**待定（M5 前需用户拍板）**：Rust 版首页的其余区域——顶栏计数/全部启停、状态胶囊、服务商与通道的新增/编辑/删除入口、保活三行状态文本与会话上限、五个统计瓦片、缓存摘要、请求明细列表、策略行、运行日志面板——不放首页。候选：(a) 并入「代理服务」卡的更多行或第二张卡；(b) 缓存明细页扩为「统计与日志」页；(c) 新增导航页。以下为这些区域的原始规格，供落点确定后沿用：
+**已确认（2026-09-22，用户在 a/b/c 中选 c）**：Rust 版首页的其余区域**新增两个导航页**承载——「运行状态」与「运行日志」，均为 `ScrollViewer` 内 `StackPanel` + `CardControl/CardExpander` 样板。原始规格如下，按落点分配：
 
-1. **顶栏区**：`{running} / {total} 个通道在运行`、`全部启用`、`全部停用`、版本号（M0 已把 `全部启用`/`全部停用` 放进托盘菜单）。
-2. **服务商与通道卡片**
-   - 服务商 ComboBox（项：`{name} · {url} · {n} 通道`）、`＋ 新增服务商`、`编辑`、`删除`。
-   - 通道 ComboBox（项：`{name} · {port} · {状态}`）、状态胶囊（已停止/启动中/运行中/停止中/异常，颜色同 Rust）、`＋ 新增通道`、`编辑`、`删除`、`启用通道`/`停用通道`。
-   - 空态提示两条。
+#### 运行状态页（StatusPage，M5 新增）
+1. **顶栏区**（页面首张卡）：`{running} / {total} 个通道在运行`、`全部启用`、`全部停用`、版本号（M0 已把 `全部启用`/`全部停用` 放进托盘菜单，页面上再放一份）。
+2. **当前通道卡**：通道 ComboBox（与首页同步选中项）、状态胶囊（已停止/启动中/运行中/停止中/异常，颜色同 Rust）、`启用通道`/`停用通道`。
 3. **保活与统计卡片**
    - 保活行：`本通道保活` 开关 + 空闲分钟（0.5–1440）+ `会话上限` NumberBox（步进 1000，后缀 token）+ 拆分按钮 `一键准备 ▼` / `终止准备` + 三行状态文本（`keepalive_hint`）。
    - `本地监听` 可点击复制（三态标题）。
    - 日期说明 `今日 {date} · 重启保留 [· 历史未完成 n]`，异常时 `统计日志异常`，悬停帮助全文。
    - 五个统计瓦片：今日请求 / 成功 / 重试 / 失败 / 用户处理中。
-   - 缓存摘要三列（今日缓存命中 + 进度条 + 已记录写入；最近一次成功；完全未命中 + `明细`）。
+   - 缓存摘要三列（今日缓存命中 + 进度条 + 已记录写入；最近一次成功；完全未命中 + `明细` 按钮跳转缓存明细页）。
    - 请求明细列表：`request_id · 第 n 次 · 阶段 · METHOD path`，最多 66 px 高度可滚动。
-   - 策略行（最大重试 / 单次·总等待 / 退避间隔），窗口高度 ≥ 680 显示。
-4. **运行日志卡片**（占满剩余高度）
-   - 头部：`运行日志 {shown}/{total}`、级别 chip（全部/信息/警告/错误）、`仅 {通道}` chip、`目录`、`清空`、`自动滚动` 开关、搜索框。
-   - 行渲染：`HH:MM:SS`（淡）+ 级别徽章 `INFO/WARN/ERR`（绿/橙/红）+ `[通道][请求ID]` 强调色 + 正文按级别色；正文首个 `HTTP ddd` 单独着色（2xx/3xx 跟随级别色，4xx 橙，5xx 红）。
-   - 内存缓冲 2000 行，超过一次丢 500；自动滚动：手动上滚暂停，5 秒无操作恢复；关闭后保持手动。
-   - 虚拟化列表（`VirtualizingStackPanel`，Recycling）。
+   - 策略行（最大重试 / 单次·总等待 / 退避间隔），页面内不再按窗口高度隐藏。
+
+#### 运行日志页（LogPage，M5 新增）
+- 整页为日志面板，占满导航内容区高度。
+- 头部：`运行日志 {shown}/{total}`、级别 chip（全部/信息/警告/错误）、`仅 {通道}` chip、`目录`、`清空`、`自动滚动` 开关、搜索框。
+- 行渲染：`HH:MM:SS`（淡）+ 级别徽章 `INFO/WARN/ERR`（绿/橙/红）+ `[通道][请求ID]` 强调色 + 正文按级别色；正文首个 `HTTP ddd` 单独着色（2xx/3xx 跟随级别色，4xx 橙，5xx 红）。
+- 内存缓冲 2000 行，超过一次丢 500；自动滚动：手动上滚暂停，5 秒无操作恢复；关闭后保持手动。
+- 虚拟化列表（`VirtualizingStackPanel`，Recycling）。页面未显示时仍持续消费 `ProxyLogger.UiLines` 队列进缓冲，切回即见。
 
 #### 缓存明细页（CachePage）
 - **已确认**：只从左侧导航进入，不再提供「弹出独立窗口」按钮（BetterGI 无此模式）。M0 为占位卡片。
@@ -314,7 +315,7 @@ D:\RetryProxy\
 | M2 Core 代理（3–4 天） | Kestrel 主机、请求管线、重试、等待生成、暂存上限、交付语义、ResponseStats、SystemProxy、health | `request_lifecycle` + `request_logging` 用例通过 | 最重 |
 | M3 Core 缓存与统计（2 天） | PromptCache、兼容重发、ProxyMetrics、DailyJournal、Legacy 恢复 | `prompt_cache` 用例通过；jsonl 互换 | |
 | M4 Core 保活与 CLI（2–3 天） | Watchdog、Probe、Codex/Claude 会话、Job Object、SafeCliError、JavaQuestions | `proxy_integration` 用例通过；假 CLI 脚本通过 | |
-| M5 首页与对话框（3 天） | 服务商/通道/保活/统计/请求明细/日志面板，全部对话框，一键准备编排 | 手工对照 Rust 版 | |
+| M5 首页、运行状态、运行日志与对话框（3–4 天） | 首页卡内服务商/通道增删改按钮 + 全部对话框；新增 StatusPage（计数/全部启停/状态胶囊/保活/统计瓦片/缓存摘要/请求明细/策略行）与 LogPage（日志面板）；一键准备编排 | 手工对照 Rust 版 | 落点已于 2026-09-22 拍板（D8） |
 | M6 缓存页、设置、关于（1–2 天） | CachePage 内容、SettingsPage 补日志目录入口、AboutPage、窗口恢复 | | 设置页骨架已在 M0 完成 |
 | M7 验收与发布（1–2 天） | 两个 PowerShell 脚本适配并跑通、发布脚本、单文件 EXE、README | `dist\RetryProxy.exe` | |
 

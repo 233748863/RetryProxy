@@ -1,0 +1,74 @@
+<ui:ContentDialog x:Class="RetryProxy.View.Dialogs.RouteEditorDialog"
+                  xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                  xmlns:i18n="clr-namespace:RetryProxy.Service.I18n"
+                  xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+                  Title="{i18n:T 新增通道}"
+                  CloseButtonText="{i18n:T 取消}"
+                  DefaultButton="Primary"
+                  DialogMaxWidth="560"
+                  FontFamily="{StaticResource TextThemeFontFamily}"
+                  Style="{DynamicResource {x:Type ui:ContentDialog}}"
+                  PrimaryButtonText="{i18n:T 保存}">
+    <StackPanel MinWidth="460">
+        <ui:TextBlock x:Name="ProviderText"
+                      Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
+                      TextWrapping="Wrap" />
+        <ui:TextBlock Margin="0,14,0,4" Text="{i18n:T 通道名称}" />
+        <ui:TextBox x:Name="NameBox" PlaceholderText="{i18n:T 例如 Claude Code}" />
+
+        <Grid Margin="0,10,0,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="16" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+            <ui:TextBlock Grid.Row="0" Grid.Column="0" Margin="0,0,0,4" Text="{i18n:T 客户端（必选）}" />
+            <ComboBox x:Name="ClientBox"
+                      Grid.Row="1"
+                      Grid.Column="0"
+                      AutomationProperties.Name="{i18n:T 客户端类型}"
+                      DisplayMemberPath="Text" />
+            <ui:TextBlock Grid.Row="0" Grid.Column="2" Margin="0,0,0,4" Text="{i18n:T 本地端口}" />
+            <ui:TextBox x:Name="PortBox" Grid.Row="1" Grid.Column="2" />
+
+            <ui:TextBlock Grid.Row="2" Grid.Column="0" Margin="0,10,0,4" Text="{i18n:T 最大重试次数}" />
+            <ui:TextBox x:Name="RetriesBox" Grid.Row="3" Grid.Column="0" />
+            <ui:TextBlock Grid.Row="2" Grid.Column="2" Margin="0,10,0,4" Text="{i18n:T 单次超时（秒）}" />
+            <ui:TextBox x:Name="TimeoutBox" Grid.Row="3" Grid.Column="2" />
+
+            <ui:TextBlock Grid.Row="4" Grid.Column="0" Margin="0,10,0,4" Text="{i18n:T 总等待上限（秒）}" />
+            <ui:TextBox x:Name="TotalTimeoutBox"
+                        Grid.Row="5"
+                        Grid.Column="0"
+                        ToolTip="{i18n:T 包含连接、重试等待和接收响应；到时结束本次请求，不再重试。}" />
+            <ui:TextBlock Grid.Row="4" Grid.Column="2" Margin="0,10,0,4" Text="{i18n:T 等待生成上限（秒）}" />
+            <ui:TextBox x:Name="GenerationTimeoutBox"
+                        Grid.Row="5"
+                        Grid.Column="2"
+                        ToolTip="{i18n:T 每次收到上游成功事件流的响应头后开始计时；空消息不重置。尚未转发内容时到期可重试，总等待上限优先。}" />
+
+            <ui:TextBlock Grid.Row="6" Grid.Column="0" Margin="0,10,0,4" Text="{i18n:T 退避最小间隔（秒）}" />
+            <ui:TextBox x:Name="BaseDelayBox" Grid.Row="7" Grid.Column="0" />
+            <ui:TextBlock Grid.Row="6" Grid.Column="2" Margin="0,10,0,4" Text="{i18n:T 退避最大间隔（秒）}" />
+            <ui:TextBox x:Name="MaxDelayBox" Grid.Row="7" Grid.Column="2" />
+        </Grid>
+
+        <ui:TextBlock x:Name="ErrorText"
+                      Margin="0,10,0,0"
+                      Foreground="{ui:ThemeResource SystemFillColorCriticalBrush}"
+                      TextWrapping="Wrap"
+                      Visibility="Collapsed" />
+    </StackPanel>
+</ui:ContentDialog>

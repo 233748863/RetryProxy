@@ -54,7 +54,8 @@ internal static class LegacyLogRestore
             byte[] bytes;
             try
             {
-                bytes = File.ReadAllBytes(Path.Combine(directory, $"retry-proxy.log{suffix}"));
+                // 日志器还开着当前文件写入，读取时必须允许写共享（对应 Rust std::fs::read 的共享方式）。
+                bytes = ReadShared(Path.Combine(directory, $"retry-proxy.log{suffix}"));
             }
             catch (FileNotFoundException)
             {
@@ -398,5 +399,13 @@ internal static class LegacyLogRestore
         }
 
         return null;
+    }
+
+    private static byte[] ReadShared(string path)
+    {
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        using var buffer = new MemoryStream();
+        stream.CopyTo(buffer);
+        return buffer.ToArray();
     }
 }

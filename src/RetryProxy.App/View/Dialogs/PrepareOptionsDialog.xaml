@@ -1,0 +1,71 @@
+<ui:ContentDialog x:Class="RetryProxy.View.Dialogs.PrepareOptionsDialog"
+                  xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                  xmlns:i18n="clr-namespace:RetryProxy.Service.I18n"
+                  xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+                  Title="{i18n:T 一键准备}"
+                  CloseButtonText="{i18n:T 取消}"
+                  DefaultButton="Primary"
+                  DialogMaxWidth="560"
+                  FontFamily="{StaticResource TextThemeFontFamily}"
+                  Style="{DynamicResource {x:Type ui:ContentDialog}}"
+                  PrimaryButtonText="{i18n:T 开始准备}">
+    <StackPanel MinWidth="460">
+        <ui:TextBlock x:Name="SubtitleText"
+                      Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
+                      TextWrapping="Wrap" />
+
+        <RadioButton x:Name="DefaultRadio"
+                     Margin="0,14,0,0"
+                     Checked="OnModeChanged"
+                     Content="{i18n:T 当前通道，沿用本机默认配置}"
+                     GroupName="prepare-mode"
+                     IsChecked="True" />
+        <ui:TextBlock x:Name="DefaultHint"
+                      Margin="28,2,0,0"
+                      Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
+                      TextWrapping="Wrap" />
+
+        <RadioButton x:Name="SeparateRadio"
+                     Margin="0,10,0,0"
+                     Checked="OnModeChanged"
+                     Content="{i18n:T 单独准备另一个供应商，开新通道}"
+                     GroupName="prepare-mode" />
+        <StackPanel x:Name="SeparatePanel" Margin="28,2,0,0">
+            <ui:TextBlock x:Name="SeparateHint"
+                          Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
+                          TextWrapping="Wrap" />
+            <ui:TextBlock Margin="0,8,0,4" Text="{i18n:T 目标服务商}" />
+            <ComboBox x:Name="ProviderBox"
+                      HorizontalAlignment="Stretch"
+                      DisplayMemberPath="Text"
+                      SelectionChanged="OnProviderChanged" />
+            <StackPanel x:Name="NewProviderPanel">
+                <ui:TextBlock Margin="0,8,0,4" Text="{i18n:T 服务商名称}" />
+                <ui:TextBox x:Name="NewProviderNameBox"
+                            PlaceholderText="{i18n:T 例如 备用供应商}"
+                            TextChanged="OnFieldChanged" />
+                <ui:TextBlock Margin="0,8,0,4" Text="{i18n:T 服务商地址}" />
+                <ui:TextBox x:Name="NewProviderUrlBox"
+                            PlaceholderText="https://api.example.com"
+                            TextChanged="OnFieldChanged" />
+            </StackPanel>
+            <ui:TextBlock Margin="0,8,0,4" Text="API Key" />
+            <ui:PasswordBox x:Name="ApiKeyBox"
+                            PasswordChanged="OnFieldChanged"
+                            PlaceholderText="sk-…"
+                            RevealButtonEnabled="True"
+                            ToolTip="{i18n:T 仅在本窗口内显示，便于核对。}" />
+            <ui:TextBlock x:Name="PlanText"
+                          Margin="0,8,0,0"
+                          Foreground="{ui:ThemeResource TextFillColorSecondaryBrush}"
+                          TextWrapping="Wrap" />
+        </StackPanel>
+
+        <ui:TextBlock x:Name="ErrorText"
+                      Margin="0,10,0,0"
+                      Foreground="{ui:ThemeResource SystemFillColorCriticalBrush}"
+                      TextWrapping="Wrap"
+                      Visibility="Collapsed" />
+    </StackPanel>
+</ui:ContentDialog>

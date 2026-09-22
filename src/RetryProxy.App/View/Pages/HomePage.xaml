@@ -127,13 +127,31 @@
                                   Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
                                   Text="{i18n:T 选择上游服务商，通道将转发到该服务商的基础地址}"
                                   TextWrapping="Wrap" />
-                    <ComboBox Grid.Row="0"
-                              Grid.RowSpan="2"
-                              Grid.Column="1"
-                              MinWidth="220"
-                              Margin="0,0,36,0"
-                              ItemsSource="{Binding ProviderNames, Mode=OneWay}"
-                              SelectedItem="{Binding SelectedProvider, Mode=TwoWay}" />
+                    <StackPanel Grid.Row="0"
+                                Grid.RowSpan="2"
+                                Grid.Column="1"
+                                Margin="0,0,36,0"
+                                Orientation="Horizontal">
+                        <ComboBox MinWidth="220"
+                                  VerticalAlignment="Center"
+                                  DisplayMemberPath="Text"
+                                  ItemsSource="{Binding Providers, Mode=OneWay}"
+                                  SelectedItem="{Binding SelectedProvider, Mode=TwoWay}" />
+                        <ui:Button Margin="6,0,0,0"
+                                   Command="{Binding AddProviderCommand}"
+                                   Icon="{ui:SymbolIcon Add24}"
+                                   ToolTip="{i18n:T 新增服务商}" />
+                        <ui:Button Margin="4,0,0,0"
+                                   Command="{Binding EditProviderCommand}"
+                                   Icon="{ui:SymbolIcon Edit24}"
+                                   IsEnabled="{Binding HasProvider}"
+                                   ToolTip="{i18n:T 编辑服务商}" />
+                        <ui:Button Margin="4,0,0,0"
+                                   Command="{Binding DeleteProviderCommand}"
+                                   Icon="{ui:SymbolIcon Delete24}"
+                                   IsEnabled="{Binding HasProvider}"
+                                   ToolTip="{i18n:T 删除服务商}" />
+                    </StackPanel>
                 </Grid>
                 <Separator Margin="-18,0" BorderThickness="0,1,0,0" />
                 <Grid Margin="16">
@@ -153,16 +171,45 @@
                     <ui:TextBlock Grid.Row="1"
                                   Grid.Column="0"
                                   Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
-                                  Text="{i18n:T 每个通道占用一个本地端口，可独立启停}"
-                                  TextWrapping="Wrap" />
-                    <ComboBox Grid.Row="0"
-                              Grid.RowSpan="2"
-                              Grid.Column="1"
-                              MinWidth="220"
-                              Margin="0,0,36,0"
-                              ItemsSource="{Binding ChannelNames, Mode=OneWay}"
-                              SelectedItem="{Binding SelectedChannel, Mode=TwoWay}" />
+                                  TextWrapping="Wrap">
+                        <Run Text="{i18n:T 每个通道占用一个本地端口，可独立启停}" /><Run Text=" · " /><Run Text="{Binding ProviderUsage, Mode=OneWay}" />
+                    </ui:TextBlock>
+                    <StackPanel Grid.Row="0"
+                                Grid.RowSpan="2"
+                                Grid.Column="1"
+                                Margin="0,0,36,0"
+                                Orientation="Horizontal">
+                        <ComboBox MinWidth="220"
+                                  VerticalAlignment="Center"
+                                  AutomationProperties.Name="{i18n:T 通道选择}"
+                                  DisplayMemberPath="Text"
+                                  IsEnabled="{Binding HasChannel}"
+                                  ItemsSource="{Binding Channels, Mode=OneWay}"
+                                  SelectedItem="{Binding SelectedChannel, Mode=TwoWay}" />
+                        <ui:Button Margin="6,0,0,0"
+                                   Command="{Binding AddChannelCommand}"
+                                   Icon="{ui:SymbolIcon Add24}"
+                                   IsEnabled="{Binding HasProvider}"
+                                   ToolTip="{i18n:T 新增通道}" />
+                        <ui:Button Margin="4,0,0,0"
+                                   Command="{Binding EditChannelCommand}"
+                                   Icon="{ui:SymbolIcon Edit24}"
+                                   IsEnabled="{Binding CanEditChannel}"
+                                   ToolTip="{Binding ChannelEditToolTip}"
+                                   ToolTipService.ShowOnDisabled="True" />
+                        <ui:Button Margin="4,0,0,0"
+                                   Command="{Binding DeleteChannelCommand}"
+                                   Icon="{ui:SymbolIcon Delete24}"
+                                   IsEnabled="{Binding CanEditChannel}"
+                                   ToolTip="{Binding ChannelEditToolTip}"
+                                   ToolTipService.ShowOnDisabled="True" />
+                    </StackPanel>
                 </Grid>
+                <ui:TextBlock Margin="16,0,16,12"
+                              Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
+                              Text="{Binding EmptyHint}"
+                              TextWrapping="Wrap"
+                              Visibility="{Binding HasChannel, Converter={StaticResource BooleanToVisibilityRevertConverter}}" />
                 <Separator Margin="-18,0" BorderThickness="0,1,0,0" />
                 <Grid Margin="16">
                     <Grid.RowDefinitions>
@@ -188,6 +235,8 @@
                                 Grid.Column="1"
                                 MinWidth="90"
                                 Margin="0,0,36,0"
+                                IsEnabled="{Binding HasChannel}"
+                                IsReadOnly="{Binding IsProxyRunning}"
                                 Text="{Binding ListenPort, Mode=TwoWay}" />
                 </Grid>
                 <Separator Margin="-18,0" BorderThickness="0,1,0,0" />
@@ -215,7 +264,8 @@
                                      Grid.RowSpan="2"
                                      Grid.Column="1"
                                      Margin="0,0,10,0"
-                                     IsChecked="{Binding KeepAliveEnabled, Mode=TwoWay}" />
+                                     IsChecked="{Binding KeepAliveEnabled, Mode=TwoWay}"
+                                     IsEnabled="{Binding HasChannel}" />
                     <ui:Button Grid.Row="0"
                                Grid.RowSpan="2"
                                Grid.Column="2"

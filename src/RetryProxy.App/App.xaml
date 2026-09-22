@@ -33,12 +33,13 @@
             <conv:StringToColorConverter x:Key="StringToColorConverter" />
             <conv:AdaptiveUniformGridColumnsConverter x:Key="AdaptiveUniformGridColumnsConverter" />
             <conv:MillisecondsToTimeConverter x:Key="MillisecondsToTimeConverter" />
+            <conv:BooleanToChipAppearanceConverter x:Key="BooleanToChipAppearanceConverter" />
 
             <!-- ===== 全局 TextBox 安全剪贴板 ===== -->
             <Style BasedOn="{StaticResource DefaultTextBoxStyle}" TargetType="{x:Type TextBox}">
                 <Setter Property="behavior:ClipboardInterceptor.EnableSafeClipboard" Value="True" />
             </Style>
-            <Style BasedOn="{StaticResource DefaultTextBoxStyle}" TargetType="{x:Type ui:TextBox}">
+            <Style BasedOn="{StaticResource DefaultUiTextBoxStyle}" TargetType="{x:Type ui:TextBox}">
                 <Setter Property="behavior:ClipboardInterceptor.EnableSafeClipboard" Value="True" />
             </Style>
         </ResourceDictionary>

@@ -37,6 +37,7 @@ public class ApplicationHostService(IServiceProvider serviceProvider) : IHostedS
             _navigationWindow = (serviceProvider.GetService(typeof(INavigationWindow)) as INavigationWindow)!;
             _navigationWindow.ShowWindow();
             _ = _navigationWindow.Navigate(typeof(HomePage));
+            (serviceProvider.GetService(typeof(WorkspaceService)) as WorkspaceService)?.Start();
         }
 
         await Task.CompletedTask;

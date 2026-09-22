@@ -34,7 +34,7 @@ public partial class MainWindow : FluentWindow, INavigationWindow
 
     public MainWindowViewModel ViewModel { get; }
 
-    public MainWindow(MainWindowViewModel viewModel, INavigationService navigationService, ISnackbarService snackbarService)
+    public MainWindow(MainWindowViewModel viewModel, INavigationService navigationService, ISnackbarService snackbarService, IContentDialogService contentDialogService)
     {
         _logger.LogDebug("主窗体实例化");
         DataContext = ViewModel = viewModel;
@@ -43,6 +43,7 @@ public partial class MainWindow : FluentWindow, INavigationWindow
         this.InitializeDpiAwareness();
 
         snackbarService.SetSnackbarPresenter(SnackbarPresenter);
+        contentDialogService.SetDialogHost(RootContentDialogPresenter);
         navigationService.SetNavigationControl(RootNavigation);
 
         Application.Current.MainWindow = this;
@@ -112,7 +113,8 @@ public partial class MainWindow : FluentWindow, INavigationWindow
         {
             if (current is ScrollViewer scrollViewer && scrollViewer.ScrollableHeight > 0)
             {
-                return scrollViewer;
+                // 日志列表等虚拟化列表自己滚，平滑滚动会把 CanContentScroll 关掉从而失去虚拟化。
+                return scrollViewer.Tag is "NoSmoothScroll" ? null : scrollViewer;
             }
 
             if (current is System.Windows.Controls.ListViewItem listViewItem

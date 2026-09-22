@@ -1,0 +1,461 @@
+<Page x:Class="RetryProxy.View.Pages.StatusPage"
+      xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+      xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+      xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+      xmlns:i18n="clr-namespace:RetryProxy.Service.I18n"
+      xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+      xmlns:pages="clr-namespace:RetryProxy.ViewModel.Pages"
+      xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+      Title="StatusPage"
+      d:DataContext="{d:DesignInstance Type=pages:StatusPageViewModel}"
+      d:DesignHeight="900"
+      d:DesignWidth="800"
+      ui:Design.Background="{DynamicResource ApplicationBackgroundBrush}"
+      ui:Design.Foreground="{DynamicResource TextFillColorPrimaryBrush}"
+      FontFamily="{StaticResource TextThemeFontFamily}"
+      Foreground="{DynamicResource TextFillColorPrimaryBrush}"
+      mc:Ignorable="d">
+
+    <Page.Resources>
+        <Style x:Key="TileBorder" TargetType="Border">
+            <Setter Property="Background" Value="{DynamicResource ControlFillColorDefaultBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource ControlStrokeColorDefaultBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="7" />
+            <Setter Property="Padding" Value="4,8" />
+            <Setter Property="Margin" Value="0,0,8,0" />
+        </Style>
+        <Style x:Key="TileValue" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="18" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="HorizontalAlignment" Value="Center" />
+        </Style>
+        <Style x:Key="TileLabel" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="HorizontalAlignment" Value="Center" />
+            <Setter Property="Foreground" Value="{DynamicResource TextFillColorTertiaryBrush}" />
+        </Style>
+        <Style x:Key="FieldLabel" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="Foreground" Value="{DynamicResource TextFillColorTertiaryBrush}" />
+            <Setter Property="Margin" Value="0,0,0,4" />
+        </Style>
+    </Page.Resources>
+
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel Margin="{StaticResource PagePadding}">
+            <TextBlock Margin="0,0,0,12"
+                       FontSize="18"
+                       FontWeight="SemiBold"
+                       Text="{i18n:T 运行状态}" />
+
+            <!--  顶栏：运行数量 + 全部启用/停用 + 版本  -->
+            <ui:CardControl Margin="0,0,0,12" Icon="{ui:SymbolIcon Pulse24}">
+                <ui:CardControl.Header>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0">
+                            <ui:TextBlock FontTypography="Body"
+                                          Foreground="{Binding RunningBrush}"
+                                          Text="{Binding RunningSummary}" />
+                            <ui:TextBlock Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}" Text="{Binding VersionText}" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="1"
+                                    Margin="0,0,24,0"
+                                    Orientation="Horizontal">
+                            <ui:Button Appearance="Primary"
+                                       Command="{Binding EnableAllCommand}"
+                                       Content="{i18n:T 全部启用}"
+                                       Icon="{ui:SymbolIcon Play24}" />
+                            <ui:Button Margin="8,0,0,0"
+                                       Command="{Binding DisableAllCommand}"
+                                       Content="{i18n:T 全部停用}"
+                                       Icon="{ui:SymbolIcon Stop24}"
+                                       ToolTip="{i18n:T 立即停止所有通道，并丢弃所有处理中的请求}" />
+                        </StackPanel>
+                    </Grid>
+                </ui:CardControl.Header>
+            </ui:CardControl>
+
+            <!--  当前通道  -->
+            <ui:CardControl Margin="0,0,0,12" Icon="{ui:SymbolIcon Channel24}">
+                <ui:CardControl.Header>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0">
+                            <ui:TextBlock FontTypography="Body" Text="{i18n:T 当前通道}" />
+                            <ui:TextBlock Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
+                                          Text="{Binding EmptyHint}"
+                                          TextWrapping="Wrap"
+                                          Visibility="{Binding HasChannel, Converter={StaticResource BooleanToVisibilityRevertConverter}}" />
+                            <ui:TextBlock Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
+                                          Text="{i18n:T 与首页选中的通道保持同步，切换后统计与保活随之更新}"
+                                          TextWrapping="Wrap"
+                                          Visibility="{Binding HasChannel, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="1"
+                                    Margin="0,0,24,0"
+                                    Orientation="Horizontal">
+                            <ComboBox MinWidth="220"
+                                      VerticalAlignment="Center"
+                                      AutomationProperties.Name="{i18n:T 通道选择}"
+                                      DisplayMemberPath="Text"
+                                      IsEnabled="{Binding HasChannel}"
+                                      ItemsSource="{Binding Channels, Mode=OneWay}"
+                                      SelectedItem="{Binding SelectedChannel, Mode=TwoWay}" />
+                            <Border Margin="10,0,0,0"
+                                    Padding="8,2"
+                                    VerticalAlignment="Center"
+                                    Background="{Binding StateBackground}"
+                                    CornerRadius="20"
+                                    Visibility="{Binding HasChannel, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                <StackPanel Orientation="Horizontal">
+                                    <Ellipse Width="6"
+                                             Height="6"
+                                             Margin="0,0,4,0"
+                                             VerticalAlignment="Center"
+                                             Fill="{Binding StateBrush}" />
+                                    <TextBlock VerticalAlignment="Center"
+                                               FontSize="11"
+                                               Foreground="{Binding StateBrush}"
+                                               Text="{Binding StateLabel}" />
+                                </StackPanel>
+                            </Border>
+                            <ui:Button Margin="10,0,0,0"
+                                       Appearance="Primary"
+                                       Command="{Binding StartRouteCommand}"
+                                       Content="{i18n:T 启用通道}"
+                                       IsEnabled="{Binding HasChannel}"
+                                       Visibility="{Binding IsRouteActive, Converter={StaticResource BooleanToVisibilityRevertConverter}}" />
+                            <ui:Button Margin="10,0,0,0"
+                                       Command="{Binding StopRouteCommand}"
+                                       Content="{i18n:T 停用通道}"
+                                       ToolTip="{i18n:T 立即停止监听，并丢弃所有处理中的请求}"
+                                       Visibility="{Binding IsRouteActive, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                        </StackPanel>
+                    </Grid>
+                </ui:CardControl.Header>
+            </ui:CardControl>
+
+            <!--  保活与统计  -->
+            <ui:Card Margin="0,0,0,12"
+                     Padding="16"
+                     IsEnabled="{Binding HasChannel}">
+                <StackPanel>
+                    <!--  保活行  -->
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" Margin="0,0,16,0">
+                            <TextBlock Style="{StaticResource FieldLabel}" Text="{i18n:T 本通道保活}" />
+                            <StackPanel Orientation="Horizontal">
+                                <ui:ToggleSwitch AutomationProperties.Name="{i18n:T 本通道保活}"
+                                                 IsChecked="{Binding KeepAliveEnabled, Mode=TwoWay}"
+                                                 ToolTip="{Binding Hint}" />
+                                <ui:TextBox Width="64"
+                                            Margin="6,0,4,0"
+                                            IsEnabled="{Binding KeepAliveEnabled}"
+                                            Text="{Binding KeepAliveMinutes, Mode=TwoWay}"
+                                            ToolTip="{Binding Hint}" />
+                                <TextBlock VerticalAlignment="Center" Text="{i18n:T 分钟}" />
+                            </StackPanel>
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" Margin="0,0,16,0">
+                            <TextBlock Style="{StaticResource FieldLabel}" Text="{i18n:T 会话上限}" />
+                            <StackPanel Orientation="Horizontal">
+                                <ui:NumberBox Width="140"
+                                              LargeChange="10000"
+                                              MaxDecimalPlaces="0"
+                                              Minimum="1"
+                                              SmallChange="1000"
+                                              SpinButtonPlacementMode="Compact"
+                                              ToolTip="{i18n:T 仅作用于当前通道；超过该用量后清理后台会话，下轮重新创建，不会清理您的聊天记录。}"
+                                              Value="{Binding ContextLimit, Mode=TwoWay}" />
+                                <TextBlock Margin="4,0,0,0"
+                                           VerticalAlignment="Center"
+                                           Text="token" />
+                            </StackPanel>
+                        </StackPanel>
+                        <StackPanel Grid.Column="2" Margin="0,0,16,0">
+                            <TextBlock Style="{StaticResource FieldLabel}" Text=" " />
+                            <StackPanel Orientation="Horizontal" Visibility="{Binding IsPreparing, Converter={StaticResource BooleanToVisibilityRevertConverter}}">
+                                <ui:Button Appearance="Primary"
+                                           Command="{Binding PrepareCommand}"
+                                           Content="{i18n:T 一键准备}"
+                                           CornerRadius="6,0,0,6"
+                                           ToolTip="{Binding PrepareToolTip}" />
+                                <ui:Button Margin="1,0,0,0"
+                                           Padding="6,0"
+                                           Appearance="Primary"
+                                           Command="{Binding ChoosePrepareCommand}"
+                                           CornerRadius="0,6,6,0"
+                                           Icon="{ui:SymbolIcon ChevronDown24}"
+                                           ToolTip="{i18n:T 选择准备方式：本通道沿用本机默认配置，或选定另一个供应商、输入其 Key，开一条新通道单独准备，不影响本通道。该选择同时决定之后自动保活使用的配置。}" />
+                            </StackPanel>
+                            <StackPanel Orientation="Horizontal" Visibility="{Binding IsPreparing, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                <ui:Button Appearance="Danger"
+                                           Command="{Binding CancelPreparationCommand}"
+                                           Content="{i18n:T 终止准备}"
+                                           ToolTip="{i18n:T 终止当前通道的本次准备和后续重试。}" />
+                                <ui:ProgressRing Width="18"
+                                                 Height="18"
+                                                 Margin="8,0,0,0"
+                                                 IsIndeterminate="True" />
+                            </StackPanel>
+                        </StackPanel>
+                    </Grid>
+                    <StackPanel Margin="0,10,0,0">
+                        <TextBlock FontSize="11"
+                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                   Text="{i18n:T 仅当前通道 · 后台 Java 问答 · 250 题随机抽取}" />
+                        <TextBlock FontSize="11"
+                                   Foreground="{DynamicResource TextFillColorTertiaryBrush}"
+                                   Text="{Binding Hint}"
+                                   TextWrapping="Wrap"
+                                   ToolTip="{Binding HintToolTip}" />
+                    </StackPanel>
+
+                    <Separator Margin="0,12" />
+
+                    <!--  本地监听 + 日期说明  -->
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <ui:Button Grid.Column="0"
+                                   Padding="10,6"
+                                   Command="{Binding CopyLocalUrlCommand}"
+                                   ToolTip="{i18n:T 点击复制}">
+                            <StackPanel>
+                                <TextBlock FontSize="11"
+                                           Foreground="{Binding CopyLabelBrush}"
+                                           Text="{Binding CopyLabel}" />
+                                <TextBlock FontFamily="Consolas"
+                                           FontWeight="SemiBold"
+                                           Foreground="{DynamicResource AccentTextFillColorPrimaryBrush}"
+                                           Text="{Binding LocalUrl}" />
+                            </StackPanel>
+                        </ui:Button>
+                        <TextBlock Grid.Column="1"
+                                   HorizontalAlignment="Right"
+                                   VerticalAlignment="Center"
+                                   FontSize="11"
+                                   Foreground="{Binding DateCaptionBrush}"
+                                   Text="{Binding DateCaption}"
+                                   TextTrimming="CharacterEllipsis"
+                                   ToolTip="{Binding DateHelp}" />
+                    </Grid>
+
+                    <!--  五个统计瓦片  -->
+                    <UniformGrid Margin="0,12,-8,0" Columns="5">
+                        <Border Style="{StaticResource TileBorder}">
+                            <StackPanel>
+                                <TextBlock Style="{StaticResource TileValue}" Text="{Binding TotalRequests}" />
+                                <TextBlock Style="{StaticResource TileLabel}" Text="{i18n:T 今日请求}" />
+                            </StackPanel>
+                        </Border>
+                        <Border Style="{StaticResource TileBorder}">
+                            <StackPanel>
+                                <TextBlock Foreground="{DynamicResource SystemFillColorSuccessBrush}"
+                                           Style="{StaticResource TileValue}"
+                                           Text="{Binding SuccessfulRequests}" />
+                                <TextBlock Style="{StaticResource TileLabel}" Text="{i18n:T 成功}" />
+                            </StackPanel>
+                        </Border>
+                        <Border Style="{StaticResource TileBorder}">
+                            <StackPanel>
+                                <TextBlock Foreground="{DynamicResource AccentTextFillColorPrimaryBrush}"
+                                           Style="{StaticResource TileValue}"
+                                           Text="{Binding RetryCount}" />
+                                <TextBlock Style="{StaticResource TileLabel}" Text="{i18n:T 重试}" />
+                            </StackPanel>
+                        </Border>
+                        <Border Style="{StaticResource TileBorder}">
+                            <StackPanel>
+                                <TextBlock Foreground="{DynamicResource SystemFillColorCriticalBrush}"
+                                           Style="{StaticResource TileValue}"
+                                           Text="{Binding FailedRequests}" />
+                                <TextBlock Style="{StaticResource TileLabel}" Text="{i18n:T 失败}" />
+                            </StackPanel>
+                        </Border>
+                        <Border Style="{StaticResource TileBorder}">
+                            <StackPanel>
+                                <TextBlock Foreground="{DynamicResource SystemFillColorCautionBrush}"
+                                           Style="{StaticResource TileValue}"
+                                           Text="{Binding ActiveRequests}" />
+                                <TextBlock Style="{StaticResource TileLabel}" Text="{i18n:T 用户处理中}" />
+                            </StackPanel>
+                        </Border>
+                    </UniformGrid>
+
+                    <!--  缓存摘要  -->
+                    <Border Margin="0,12,0,0"
+                            Padding="10,8"
+                            Background="{DynamicResource ControlFillColorDefaultBrush}"
+                            BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
+                            BorderThickness="1"
+                            CornerRadius="7">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0" Margin="0,0,12,0">
+                                <StackPanel Orientation="Horizontal" ToolTip="{Binding RateHelp}">
+                                    <TextBlock VerticalAlignment="Center"
+                                               FontSize="11"
+                                               Foreground="{DynamicResource TextFillColorTertiaryBrush}"
+                                               Text="{i18n:T 今日缓存命中}" />
+                                    <TextBlock Margin="6,0,0,0"
+                                               FontSize="14"
+                                               FontWeight="SemiBold"
+                                               Foreground="{Binding HitRateBrush}"
+                                               Text="{Binding HitRateText}" />
+                                </StackPanel>
+                                <ProgressBar Height="5"
+                                             Margin="0,4,0,4"
+                                             Foreground="{DynamicResource SystemFillColorSuccessBrush}"
+                                             Maximum="100"
+                                             ToolTip="{Binding HitRateHelp}"
+                                             Value="{Binding HitRateProgress, Mode=OneWay}" />
+                                <TextBlock FontSize="11"
+                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                           Text="{Binding CreationText}"
+                                           TextTrimming="CharacterEllipsis"
+                                           ToolTip="{Binding CreationHelp}" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="1" Margin="0,0,12,0">
+                                <StackPanel Orientation="Horizontal" ToolTip="{Binding LatestHelp}">
+                                    <TextBlock VerticalAlignment="Center"
+                                               FontSize="11"
+                                               Foreground="{DynamicResource TextFillColorTertiaryBrush}"
+                                               Text="{i18n:T 最近一次成功}" />
+                                    <TextBlock Margin="6,0,0,0"
+                                               FontSize="14"
+                                               FontWeight="SemiBold"
+                                               Foreground="{Binding LatestBrush}"
+                                               Text="{Binding LatestText}" />
+                                </StackPanel>
+                                <TextBlock Margin="0,4,0,0"
+                                           FontSize="11"
+                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                           Text="{Binding LatestDetail}"
+                                           TextTrimming="CharacterEllipsis" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="2">
+                                <StackPanel Orientation="Horizontal" ToolTip="{Binding ZeroHitHelp}">
+                                    <TextBlock VerticalAlignment="Center"
+                                               FontSize="11"
+                                               Foreground="{DynamicResource TextFillColorTertiaryBrush}"
+                                               Text="{i18n:T 完全未命中}" />
+                                    <TextBlock Margin="6,0,0,0"
+                                               FontSize="14"
+                                               FontWeight="SemiBold"
+                                               Foreground="{Binding ZeroHitBrush}"
+                                               Text="{Binding ZeroHitText}" />
+                                </StackPanel>
+                                <Grid Margin="0,4,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0"
+                                               VerticalAlignment="Center"
+                                               FontSize="11"
+                                               Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                               Text="{Binding MeasuredText}"
+                                               TextTrimming="CharacterEllipsis"
+                                               ToolTip="{Binding RateHelp}" />
+                                    <ui:Button Grid.Column="1"
+                                               Margin="6,0,0,0"
+                                               Padding="8,2"
+                                               Command="{Binding OpenCacheDetailsCommand}"
+                                               Content="{i18n:T 明细}"
+                                               ToolTip="{i18n:T 在缓存明细页查看}" />
+                                </Grid>
+                            </StackPanel>
+                        </Grid>
+                    </Border>
+
+                    <!--  请求明细  -->
+                    <ScrollViewer MaxHeight="66"
+                                  Margin="0,8,0,0"
+                                  VerticalScrollBarVisibility="Auto"
+                                  Visibility="{Binding HasRequests, Converter={StaticResource BooleanToVisibilityConverter}}">
+                        <ItemsControl ItemsSource="{Binding Requests}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Grid Height="18">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0"
+                                                   VerticalAlignment="Center"
+                                                   FontFamily="Consolas"
+                                                   FontSize="12"
+                                                   Text="{Binding RequestId}" />
+                                        <TextBlock Grid.Column="1"
+                                                   Margin="8,0,0,0"
+                                                   VerticalAlignment="Center"
+                                                   FontSize="11"
+                                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                                   Text="{Binding Attempt}" />
+                                        <TextBlock Grid.Column="2"
+                                                   Margin="8,0,0,0"
+                                                   VerticalAlignment="Center"
+                                                   FontSize="12"
+                                                   Foreground="{Binding PhaseBrush}"
+                                                   Text="{Binding Phase}" />
+                                        <TextBlock Grid.Column="3"
+                                                   Margin="8,0,0,0"
+                                                   VerticalAlignment="Center"
+                                                   FontSize="11"
+                                                   Foreground="{DynamicResource TextFillColorTertiaryBrush}"
+                                                   Text="{Binding Target}"
+                                                   TextTrimming="CharacterEllipsis"
+                                                   ToolTip="{Binding Target}" />
+                                    </Grid>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </ScrollViewer>
+
+                    <!--  策略行  -->
+                    <Border Margin="0,12,0,0"
+                            Padding="11,6"
+                            Background="{DynamicResource ControlFillColorDefaultBrush}"
+                            CornerRadius="7">
+                        <UniformGrid Columns="3">
+                            <StackPanel>
+                                <TextBlock Style="{StaticResource FieldLabel}" Text="{i18n:T 最大重试}" />
+                                <TextBlock Text="{Binding MaxRetriesText}" />
+                            </StackPanel>
+                            <StackPanel>
+                                <TextBlock Style="{StaticResource FieldLabel}" Text="{i18n:T 单次 / 总等待}" />
+                                <TextBlock Text="{Binding TimeoutsText}" />
+                            </StackPanel>
+                            <StackPanel>
+                                <TextBlock Style="{StaticResource FieldLabel}" Text="{i18n:T 退避间隔}" />
+                                <TextBlock Text="{Binding BackoffText}" />
+                            </StackPanel>
+                        </UniformGrid>
+                    </Border>
+                </StackPanel>
+            </ui:Card>
+        </StackPanel>
+    </ScrollViewer>
+</Page>

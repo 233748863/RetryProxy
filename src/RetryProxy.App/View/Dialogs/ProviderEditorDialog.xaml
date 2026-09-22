@@ -1,0 +1,27 @@
+<ui:ContentDialog x:Class="RetryProxy.View.Dialogs.ProviderEditorDialog"
+                  xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                  xmlns:i18n="clr-namespace:RetryProxy.Service.I18n"
+                  xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+                  Title="{i18n:T 新增服务商}"
+                  CloseButtonText="{i18n:T 取消}"
+                  DefaultButton="Primary"
+                  DialogMaxWidth="480"
+                  FontFamily="{StaticResource TextThemeFontFamily}"
+                  Style="{DynamicResource {x:Type ui:ContentDialog}}"
+                  PrimaryButtonText="{i18n:T 保存}">
+    <StackPanel MinWidth="380">
+        <ui:TextBlock Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
+                      Text="{i18n:T 上游基础地址只需填到域名，路径与查询串会原样转发}"
+                      TextWrapping="Wrap" />
+        <ui:TextBlock Margin="0,14,0,4" Text="{i18n:T 服务商名称}" />
+        <ui:TextBox x:Name="NameBox" PlaceholderText="{i18n:T 例如 anyrouter.top}" />
+        <ui:TextBlock Margin="0,10,0,4" Text="{i18n:T 上游基础地址}" />
+        <ui:TextBox x:Name="UrlBox" PlaceholderText="https://example.com" />
+        <ui:TextBlock x:Name="ErrorText"
+                      Margin="0,10,0,0"
+                      Foreground="{ui:ThemeResource SystemFillColorCriticalBrush}"
+                      TextWrapping="Wrap"
+                      Visibility="Collapsed" />
+    </StackPanel>
+</ui:ContentDialog>

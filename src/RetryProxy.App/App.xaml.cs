@@ -63,6 +63,9 @@ public partial class App : Application
             services.AddHostedService<ApplicationHostService>();
             services.AddSingleton<INavigationService, NavigationService>();
             services.AddSingleton<ISnackbarService, SnackbarService>();
+            services.AddSingleton<IContentDialogService, ContentDialogService>();
+            services.AddSingleton<WorkspaceService>();
+            services.AddSingleton<Dialogs>();
 
             // Main window with navigation
             services.AddView<INavigationWindow, MainWindow, MainWindowViewModel>();
@@ -70,6 +73,8 @@ public partial class App : Application
 
             // Pages
             services.AddView<HomePage, HomePageViewModel>();
+            services.AddView<StatusPage, StatusPageViewModel>();
+            services.AddView<LogPage, LogPageViewModel>();
             services.AddView<CachePage, CachePageViewModel>();
             services.AddView<SettingsPage, SettingsPageViewModel>();
             services.AddView<AboutPage, AboutPageViewModel>();
@@ -160,7 +165,8 @@ public partial class App : Application
 
         TempManager.CleanUp();
 
-        // 把防抖中尚未落盘的配置写掉。
+        // 先停所有通道（每条最多等 15 秒）并保存配置，再把防抖中尚未落盘的配置写掉。
+        GetService<WorkspaceService>()?.Shutdown();
         GetService<IConfigService>()?.Save();
 
         await _host.StopAsync();

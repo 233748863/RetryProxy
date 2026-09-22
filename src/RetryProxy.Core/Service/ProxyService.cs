@@ -69,6 +69,12 @@ public sealed class ProxyService
         return new ProxyService(logger, routeName, metrics);
     }
 
+    /// <summary>沿用已有统计实例新建服务（通道改名或换看门狗后替换服务时使用）。</summary>
+    public static ProxyService WithMetrics(ProxyLogger logger, string routeName, ProxyMetrics metrics)
+    {
+        return new ProxyService(logger, routeName, metrics);
+    }
+
     public string RouteName { get; }
 
     public ProxyMetrics Metrics { get; }

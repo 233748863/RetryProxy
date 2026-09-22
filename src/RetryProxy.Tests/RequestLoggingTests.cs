@@ -190,14 +190,27 @@ public class RequestLoggingTests
         {
             await using var fixture = await LifecycleProxy.StartAsync(context => Upstream.EventStream(context, payload), LoggingConfig(5.0, 0));
             using var client = TestClient.Create();
-            var response = await TestClient.Send(client, HttpMethod.Get, $"{fixture.Address}/v1/responses");
             if (payload.Contains("response.failed"))
             {
+                var response = await TestClient.Send(client, HttpMethod.Get, $"{fixture.Address}/v1/responses");
                 Assert.Equal(payload, await response.Content.ReadAsStringAsync());
             }
             else
             {
-                Assert.Null(await TestClient.TryReadAll(response));
+                // 上游提前 EOF 时代理会中止连接；RST 偶尔先于响应头到达，Send 本身抛错同样视为“正文不完整”。
+                HttpResponseMessage? response = null;
+                try
+                {
+                    response = await TestClient.Send(client, HttpMethod.Get, $"{fixture.Address}/v1/responses");
+                }
+                catch (HttpRequestException)
+                {
+                }
+
+                if (response is not null)
+                {
+                    Assert.Null(await TestClient.TryReadAll(response));
+                }
             }
 
             var logs = await CompletedLogs(fixture);

@@ -1,6 +1,7 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Microsoft.Extensions.Logging;
+using RetryProxy.Service;
 using RetryProxy.Service.Interface;
 using System;
 using System.Windows;
@@ -12,10 +13,12 @@ namespace RetryProxy.ViewModel;
 public partial class NotifyIconViewModel : ObservableObject
 {
     private readonly ILogger<NotifyIconViewModel> _logger;
+    private readonly WorkspaceService _workspaceService;
 
-    public NotifyIconViewModel(ILogger<NotifyIconViewModel> logger)
+    public NotifyIconViewModel(ILogger<NotifyIconViewModel> logger, WorkspaceService workspaceService)
     {
         _logger = logger;
+        _workspaceService = workspaceService;
     }
 
     [RelayCommand]
@@ -34,22 +37,22 @@ public partial class NotifyIconViewModel : ObservableObject
         }
     }
 
-    /// <summary>
-    /// 启用全部通道。M0 占位，M2 接入代理服务。
-    /// </summary>
+    /// <summary>启用全部通道。</summary>
     [RelayCommand]
     public void EnableAll()
     {
-        _logger.LogInformation("托盘：全部启用（占位）");
+        _logger.LogInformation("托盘：全部启用");
+        _workspaceService.Workspace.StartAll();
+        _workspaceService.Flush();
     }
 
-    /// <summary>
-    /// 停用全部通道。M0 占位，M2 接入代理服务。
-    /// </summary>
+    /// <summary>停用全部通道。</summary>
     [RelayCommand]
     public void DisableAll()
     {
-        _logger.LogInformation("托盘：全部停用（占位）");
+        _logger.LogInformation("托盘：全部停用");
+        _workspaceService.Workspace.StopAll();
+        _workspaceService.Flush();
     }
 
     [RelayCommand]

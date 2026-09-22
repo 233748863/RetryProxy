@@ -64,6 +64,22 @@
                     </ui:NavigationViewItem.Icon>
                 </ui:NavigationViewItem>
 
+                <ui:NavigationViewItem Content="{i18n:T 运行状态}"
+                                       NavigationCacheMode="Enabled"
+                                       TargetPageType="{x:Type pages:StatusPage}">
+                    <ui:NavigationViewItem.Icon>
+                        <ui:SymbolIcon Symbol="Pulse24" />
+                    </ui:NavigationViewItem.Icon>
+                </ui:NavigationViewItem>
+
+                <ui:NavigationViewItem Content="{i18n:T 运行日志}"
+                                       NavigationCacheMode="Enabled"
+                                       TargetPageType="{x:Type pages:LogPage}">
+                    <ui:NavigationViewItem.Icon>
+                        <ui:SymbolIcon Symbol="DocumentText24" />
+                    </ui:NavigationViewItem.Icon>
+                </ui:NavigationViewItem>
+
                 <ui:NavigationViewItem Content="{i18n:T 缓存明细}"
                                        NavigationCacheMode="Enabled"
                                        TargetPageType="{x:Type pages:CachePage}">
@@ -92,6 +108,7 @@
             <ui:NavigationView.ContentOverlay>
                 <Grid>
                     <ui:SnackbarPresenter x:Name="SnackbarPresenter" />
+                    <ContentPresenter x:Name="RootContentDialogPresenter" />
                 </Grid>
             </ui:NavigationView.ContentOverlay>
         </ui:NavigationView>

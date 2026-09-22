@@ -1,4 +1,5 @@
 using RetryProxy.Core.Config;
+using RetryProxy.Core.Logging;
 using RetryProxy.Service.Interface;
 using RetryProxy.View.Windows;
 using System;
@@ -14,8 +15,11 @@ public class ConfigService : IConfigService
 {
     private readonly object _locker = new();
     private readonly ReaderWriterLockSlim _rwLock = new();
+    private readonly ProxyLogger? _proxyLogger;
+    private readonly Timer _debounce;
     private const string ConfigRelativePath = @"User/config.json";
     private const string BackupFolderName = "backup";
+    private static readonly TimeSpan DebounceDelay = TimeSpan.FromMilliseconds(200);
 
     public static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -33,23 +37,80 @@ public class ConfigService : IConfigService
     /// </summary>
     public static AllConfig? Config { get; private set; }
 
+    public ConfigService(ProxyLogger? proxyLogger = null)
+    {
+        _proxyLogger = proxyLogger;
+        _debounce = new Timer(_ => Save(), null, Timeout.Infinite, Timeout.Infinite);
+    }
+
     public AllConfig Get()
     {
         lock (_locker)
         {
             if (Config == null)
             {
-                Config = Read();
-                Config.OnAnyChangedAction = Save;
+                var config = Read();
+                var importedFromRegistry = ResolveProxyConfig(config);
+                Config = config;
+                Config.OnAnyChangedAction = ScheduleSave;
                 Config.InitEvent();
+                if (importedFromRegistry)
+                {
+                    // 注册表只读一次；落盘后以 config.json 为准。
+                    Write(config);
+                }
             }
 
             return Config;
         }
     }
 
+    /// <summary>
+    /// 按"环境变量注入 → config.json → 注册表 → 内置默认"确定代理配置并套用环境变量覆盖。
+    /// 返回是否来自注册表导入。
+    /// </summary>
+    private bool ResolveProxyConfig(AllConfig config)
+    {
+        ProxyConfigLoadResult loaded;
+        try
+        {
+            loaded = ProxyConfigLoader.Load(config.Proxy);
+        }
+        catch (ConfigException error)
+        {
+            _proxyLogger?.Error($"代理配置无效，已改用内置默认配置：{error.Message}");
+            ShowConfigExceptionDialog("读取", error);
+            loaded = ProxyConfigLoader.Load(ProxyConfig.Builtin(), registryReader: () => null);
+        }
+
+        config.Proxy = loaded.Config;
+        switch (loaded.Source)
+        {
+            case ProxyConfigSource.Registry:
+                _proxyLogger?.Info("已从注册表导入旧配置");
+                return true;
+            case ProxyConfigSource.EnvironmentInjection:
+                _proxyLogger?.Info($"已使用环境变量 {ProxyConfigLoader.TestConfigEnv} 注入的配置，本次运行不写入配置文件");
+                break;
+            case ProxyConfigSource.Builtin:
+                _proxyLogger?.Info("未找到已保存的代理配置，已使用内置默认配置");
+                break;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// 任一属性变更后 200 ms 内合并为一次落盘。
+    /// </summary>
+    public void ScheduleSave()
+    {
+        _debounce.Change(DebounceDelay, Timeout.InfiniteTimeSpan);
+    }
+
     public void Save()
     {
+        _debounce.Change(Timeout.Infinite, Timeout.Infinite);
         if (Config != null)
         {
             Write(Config);
@@ -74,13 +135,13 @@ public class ConfigService : IConfigService
                 return new AllConfig();
             }
 
-            Config = config;
             return config;
         }
         catch (Exception e)
         {
             Console.WriteLine(e.Message);
             Console.WriteLine(e.StackTrace);
+            _proxyLogger?.Error($"配置文件读取失败，已备份后重建：{e.GetBaseException().Message}");
             BackupConfigFile(filePath);
             ShowConfigExceptionDialog("读取", e);
             return new AllConfig();
@@ -93,6 +154,12 @@ public class ConfigService : IConfigService
 
     public void Write(AllConfig config)
     {
+        // 自动化测试通过环境变量注入整份配置时，持久化必须保持无副作用。
+        if (ProxyConfigLoader.IsTestInjectionActive())
+        {
+            return;
+        }
+
         _rwLock.EnterWriteLock();
         var file = Global.Absolute(ConfigRelativePath);
         try
@@ -109,6 +176,7 @@ public class ConfigService : IConfigService
         {
             Console.WriteLine(e.Message);
             Console.WriteLine(e.StackTrace);
+            _proxyLogger?.Error($"配置文件写入失败：{e.GetBaseException().Message}");
             ShowConfigExceptionDialog("写入", e);
         }
         finally

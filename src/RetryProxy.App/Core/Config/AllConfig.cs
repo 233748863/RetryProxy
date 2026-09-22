@@ -27,9 +27,12 @@ public partial class AllConfig : ObservableObject
     public OtherConfig OtherConfig { get; set; } = new();
 
     /// <summary>
-    /// 代理配置
+    /// 代理配置（schema 6，snake_case 固定键序）。文件里没有该节点时为 null，
+    /// 由 ConfigService 按"注入 → 文件 → 注册表 → 内置"顺序补齐。
+    /// 它不是 ObservableObject；改动后需显式调用 IConfigService.Save()。
     /// </summary>
-    public ProxyConfig Proxy { get; set; } = new();
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ProxyConfig? Proxy { get; set; }
 
     public void InitEvent()
     {

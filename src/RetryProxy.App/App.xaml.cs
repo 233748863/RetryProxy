@@ -4,6 +4,8 @@ using Microsoft.Extensions.Logging;
 using RetryProxy.Helpers;
 using RetryProxy.Helpers.Extensions;
 using RetryProxy.Helpers.Win32;
+using RetryProxy.Core.Config;
+using RetryProxy.Core.Logging;
 using RetryProxy.Service;
 using RetryProxy.Service.I18n;
 using RetryProxy.Service.Interface;
@@ -44,8 +46,12 @@ public partial class App : Application
         })
         .ConfigureServices((context, services) =>
         {
+            // 文件日志先于配置就绪，配置导入/失败信息才能进 retry-proxy.log。
+            var proxyLogger = ProxyLogger.Create(Global.Absolute("logs"));
+            services.AddSingleton(proxyLogger);
+
             // 提前初始化配置
-            var configService = new ConfigService();
+            var configService = new ConfigService(proxyLogger);
             services.AddSingleton<IConfigService>(sp => configService);
             var all = configService.Get();
 
@@ -154,7 +160,11 @@ public partial class App : Application
 
         TempManager.CleanUp();
 
+        // 把防抖中尚未落盘的配置写掉。
+        GetService<IConfigService>()?.Save();
+
         await _host.StopAsync();
+        GetService<ProxyLogger>()?.Dispose();
         _host.Dispose();
 
         ConsoleHelper.FreeConsoleWindow();

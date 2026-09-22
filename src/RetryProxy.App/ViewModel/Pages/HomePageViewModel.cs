@@ -7,6 +7,7 @@ using System;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Windows;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
@@ -28,20 +29,20 @@ public partial class HomePageViewModel : ViewModel
     private bool _isProxyRunning;
 
     [ObservableProperty]
-    private ObservableCollection<string> _providerNames = ["示例服务商 · https://api.example.com · 1 通道"];
+    private ObservableCollection<string> _providerNames = [];
 
     [ObservableProperty]
     private string? _selectedProvider;
 
     [ObservableProperty]
-    private ObservableCollection<string> _channelNames = ["默认通道 · 8080 · 已停止"];
+    private ObservableCollection<string> _channelNames = [];
 
     [ObservableProperty]
     private string? _selectedChannel;
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(ListenAddress))]
-    private int _listenPort = 8080;
+    private int _listenPort = ConfigDefaults.ListenPort;
 
     [ObservableProperty]
     private bool _keepAliveEnabled;
@@ -52,9 +53,34 @@ public partial class HomePageViewModel : ViewModel
     {
         _logger = logger;
         Config = configService.Get();
-        ListenPort = Config.Proxy.BasePort;
-        SelectedProvider = ProviderNames.Count > 0 ? ProviderNames[0] : null;
-        SelectedChannel = ChannelNames.Count > 0 ? ChannelNames[0] : null;
+        LoadFromProxyConfig();
+    }
+
+    /// <summary>
+    /// 用当前代理配置填充下拉框与端口。M4/M5 接入编辑与启停后再改为双向。
+    /// </summary>
+    private void LoadFromProxyConfig()
+    {
+        var proxy = Config.Proxy ?? ProxyConfig.Builtin();
+        ProviderNames = new ObservableCollection<string>(proxy.Providers.Select(provider =>
+        {
+            var routeCount = proxy.Routes.Count(route =>
+                string.Equals(route.ProviderName, provider.Name, StringComparison.OrdinalIgnoreCase));
+            return $"{provider.Name} · {provider.BaseUrl} · {routeCount} 通道";
+        }));
+        ChannelNames = new ObservableCollection<string>(proxy.Routes.Select(route =>
+            $"{route.Name} · {route.ListenPort} · 已停止"));
+
+        var selectedRoute = proxy.SelectedRoute;
+        var selectedProvider = selectedRoute is null ? null : proxy.ProviderByName(selectedRoute.ProviderName);
+        SelectedProvider = selectedProvider is null
+            ? ProviderNames.FirstOrDefault()
+            : ProviderNames.FirstOrDefault(name => name.StartsWith($"{selectedProvider.Name} · ", StringComparison.Ordinal));
+        SelectedChannel = selectedRoute is null
+            ? ChannelNames.FirstOrDefault()
+            : ChannelNames.FirstOrDefault(name => name.StartsWith($"{selectedRoute.Name} · ", StringComparison.Ordinal));
+        ListenPort = proxy.ListenPort;
+        KeepAliveEnabled = proxy.KeepaliveEnabled;
     }
 
     [RelayCommand]

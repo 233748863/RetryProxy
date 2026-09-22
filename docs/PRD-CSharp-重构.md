@@ -310,7 +310,7 @@ D:\RetryProxy\
 | 阶段 | 内容 | 产出 | 预估 |
 |---|---|---|---|
 | M0 骨架（1–2 天） | 建目录、复制 BetterGI 框架层并裁剪到能编译运行空壳（MainWindow + 五个空页 + 托盘 + 主题 + 设置持久化）；改命名空间、图标、标题 | 可运行空壳 | 附录 A 清单 |
-| M1 Core 配置与日志（1 天） | Config + 迁移 + config.json 存储 + 注册表一次性导入；RotatingFileLogger；单测 | 通过 config 单测 | |
+| M1 Core 配置与日志（1 天） | Config + 迁移 + config.json 存储 + 注册表一次性导入；RotatingFileLogger；单测 | 通过 config 单测 | **已完成（2026-09-22）**：`Core\Config` 12 个文件 + `Core\Logging` 2 个文件；30 个 xUnit 用例通过（移植 Rust 20 个 + 加载顺序/键序/文案 10 个）；实机验证注册表导入一次后只读写 config.json。`AllConfig.Proxy` 为可空的 `ProxyConfig`，用自定义 JsonConverter 写 snake_case 固定键序；改动后需显式 `Save()`。 |
 | M2 Core 代理（3–4 天） | Kestrel 主机、请求管线、重试、等待生成、暂存上限、交付语义、ResponseStats、SystemProxy、health | `request_lifecycle` + `request_logging` 用例通过 | 最重 |
 | M3 Core 缓存与统计（2 天） | PromptCache、兼容重发、ProxyMetrics、DailyJournal、Legacy 恢复 | `prompt_cache` 用例通过；jsonl 互换 | |
 | M4 Core 保活与 CLI（2–3 天） | Watchdog、Probe、Codex/Claude 会话、Job Object、SafeCliError、JavaQuestions | `proxy_integration` 用例通过；假 CLI 脚本通过 | |

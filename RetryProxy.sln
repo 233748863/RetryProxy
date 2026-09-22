@@ -1,0 +1,69 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{827E0CD3-B72D-47B6-A68D-7590B98EB39B}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "RetryProxy.App", "src\RetryProxy.App\RetryProxy.App.csproj", "{7C985665-405B-463E-82B0-1F7BAD870F71}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "RetryProxy.Core", "src\RetryProxy.Core\RetryProxy.Core.csproj", "{B516081D-9B23-49A4-9956-BE89B2847E41}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "RetryProxy.Tests", "src\RetryProxy.Tests\RetryProxy.Tests.csproj", "{914AFDBA-A386-49C7-8CD5-83EE349A02E3}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Debug|x64 = Debug|x64
+		Debug|x86 = Debug|x86
+		Release|Any CPU = Release|Any CPU
+		Release|x64 = Release|x64
+		Release|x86 = Release|x86
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{7C985665-405B-463E-82B0-1F7BAD870F71}.Debug|Any CPU.ActiveCfg = Debug|x64
+		{7C985665-405B-463E-82B0-1F7BAD870F71}.Debug|Any CPU.Build.0 = Debug|x64
+		{7C985665-405B-463E-82B0-1F7BAD870F71}.Debug|x64.ActiveCfg = Debug|x64
+		{7C985665-405B-463E-82B0-1F7BAD870F71}.Debug|x64.Build.0 = Debug|x64
+		{7C985665-405B-463E-82B0-1F7BAD870F71}.Debug|x86.ActiveCfg = Debug|x64
+		{7C985665-405B-463E-82B0-1F7BAD870F71}.Debug|x86.Build.0 = Debug|x64
+		{7C985665-405B-463E-82B0-1F7BAD870F71}.Release|Any CPU.ActiveCfg = Release|x64
+		{7C985665-405B-463E-82B0-1F7BAD870F71}.Release|Any CPU.Build.0 = Release|x64
+		{7C985665-405B-463E-82B0-1F7BAD870F71}.Release|x64.ActiveCfg = Release|x64
+		{7C985665-405B-463E-82B0-1F7BAD870F71}.Release|x64.Build.0 = Release|x64
+		{7C985665-405B-463E-82B0-1F7BAD870F71}.Release|x86.ActiveCfg = Release|x64
+		{7C985665-405B-463E-82B0-1F7BAD870F71}.Release|x86.Build.0 = Release|x64
+		{B516081D-9B23-49A4-9956-BE89B2847E41}.Debug|Any CPU.ActiveCfg = Debug|x64
+		{B516081D-9B23-49A4-9956-BE89B2847E41}.Debug|Any CPU.Build.0 = Debug|x64
+		{B516081D-9B23-49A4-9956-BE89B2847E41}.Debug|x64.ActiveCfg = Debug|x64
+		{B516081D-9B23-49A4-9956-BE89B2847E41}.Debug|x64.Build.0 = Debug|x64
+		{B516081D-9B23-49A4-9956-BE89B2847E41}.Debug|x86.ActiveCfg = Debug|x64
+		{B516081D-9B23-49A4-9956-BE89B2847E41}.Debug|x86.Build.0 = Debug|x64
+		{B516081D-9B23-49A4-9956-BE89B2847E41}.Release|Any CPU.ActiveCfg = Release|x64
+		{B516081D-9B23-49A4-9956-BE89B2847E41}.Release|Any CPU.Build.0 = Release|x64
+		{B516081D-9B23-49A4-9956-BE89B2847E41}.Release|x64.ActiveCfg = Release|x64
+		{B516081D-9B23-49A4-9956-BE89B2847E41}.Release|x64.Build.0 = Release|x64
+		{B516081D-9B23-49A4-9956-BE89B2847E41}.Release|x86.ActiveCfg = Release|x64
+		{B516081D-9B23-49A4-9956-BE89B2847E41}.Release|x86.Build.0 = Release|x64
+		{914AFDBA-A386-49C7-8CD5-83EE349A02E3}.Debug|Any CPU.ActiveCfg = Debug|x64
+		{914AFDBA-A386-49C7-8CD5-83EE349A02E3}.Debug|Any CPU.Build.0 = Debug|x64
+		{914AFDBA-A386-49C7-8CD5-83EE349A02E3}.Debug|x64.ActiveCfg = Debug|x64
+		{914AFDBA-A386-49C7-8CD5-83EE349A02E3}.Debug|x64.Build.0 = Debug|x64
+		{914AFDBA-A386-49C7-8CD5-83EE349A02E3}.Debug|x86.ActiveCfg = Debug|x64
+		{914AFDBA-A386-49C7-8CD5-83EE349A02E3}.Debug|x86.Build.0 = Debug|x64
+		{914AFDBA-A386-49C7-8CD5-83EE349A02E3}.Release|Any CPU.ActiveCfg = Release|x64
+		{914AFDBA-A386-49C7-8CD5-83EE349A02E3}.Release|Any CPU.Build.0 = Release|x64
+		{914AFDBA-A386-49C7-8CD5-83EE349A02E3}.Release|x64.ActiveCfg = Release|x64
+		{914AFDBA-A386-49C7-8CD5-83EE349A02E3}.Release|x64.Build.0 = Release|x64
+		{914AFDBA-A386-49C7-8CD5-83EE349A02E3}.Release|x86.ActiveCfg = Release|x64
+		{914AFDBA-A386-49C7-8CD5-83EE349A02E3}.Release|x86.Build.0 = Release|x64
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{7C985665-405B-463E-82B0-1F7BAD870F71} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
+		{B516081D-9B23-49A4-9956-BE89B2847E41} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
+		{914AFDBA-A386-49C7-8CD5-83EE349A02E3} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
+	EndGlobalSection
+EndGlobal

@@ -1,0 +1,17 @@
+<Project>
+
+	<PropertyGroup>
+		<Version>3.0.0</Version>
+		<IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+		<Nullable>enable</Nullable>
+		<LangVersion>12.0</LangVersion>
+		<ImplicitUsings>disable</ImplicitUsings>
+		<Platforms>x64</Platforms>
+		<Authors>LZH</Authors>
+		<Product>LLM Retry Proxy</Product>
+		<Copyright>Copyright © 2026 LZH. Licensed under GPL-3.0.</Copyright>
+		<RepositoryType>git</RepositoryType>
+		<SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+	</PropertyGroup>
+
+</Project>

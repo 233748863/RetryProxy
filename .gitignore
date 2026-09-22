@@ -1,0 +1,28 @@
+# User-specific files
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+.vs/
+.idea/
+.vscode/
+
+# Build results
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+dist/
+*.zip
+
+# Runtime data
+src/RetryProxy.App/User/config.json
+src/RetryProxy.App/User/backup/
+src/RetryProxy.App/User/Temp/
+
+# Tooling
+.claude/*
+__pycache__/

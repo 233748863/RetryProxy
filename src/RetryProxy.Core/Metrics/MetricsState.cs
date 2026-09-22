@@ -9,7 +9,7 @@ namespace RetryProxy.Core.Metrics;
 /// <summary>
 /// 当日统计状态（对应 daily.rs 的 MetricsState）：按本地日历日累计，跨日自动切换。
 /// </summary>
-internal sealed class MetricsState
+internal sealed class MetricsState : IDisposable
 {
     private DateOnly _date;
     private readonly SortedDictionary<string, DailyRequest> _records = new(StringComparer.Ordinal);
@@ -43,13 +43,9 @@ internal sealed class MetricsState
         {
             opened = storage.Open(date, importLegacy);
         }
-        catch (IOException error)
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidDataException)
         {
-            opened = new DailyJournalOpenResult { OpenErrorKind = error.GetType().Name };
-        }
-        catch (UnauthorizedAccessException)
-        {
-            opened = new DailyJournalOpenResult { OpenErrorKind = "PermissionDenied" };
+            opened = new DailyJournalOpenResult { OpenErrorKind = IoErrorKind.Describe(error) };
         }
 
         if (opened.OpenErrorKind is not null)
@@ -116,6 +112,7 @@ internal sealed class MetricsState
         _totals = next._totals;
         _sequence = next._sequence;
         Active = next.Active;
+        (_journal as IDisposable)?.Dispose();
         _journal = next._journal;
         _dirty.Clear();
         foreach (var id in next._dirty)
@@ -260,7 +257,7 @@ internal sealed class MetricsState
             }
             catch (Exception error) when (error is IOException or UnauthorizedAccessException)
             {
-                _writeWarning = $"当日统计日志写入失败（{error.GetType().Name}），未保存数据将在下次更新时重试";
+                _writeWarning = $"当日统计日志写入失败（{IoErrorKind.Describe(error)}），未保存数据将在下次更新时重试";
                 return;
             }
 
@@ -282,4 +279,30 @@ internal sealed class MetricsState
         snapshot.StatisticsWarning = _writeWarning ?? _readWarning;
         return snapshot;
     }
+
+    /// <summary>测试用：当前的 jsonl 追加句柄。</summary>
+    internal IDailyJournal? JournalForTest => _journal;
+
+    public void Dispose()
+    {
+        (_journal as IDisposable)?.Dispose();
+        _journal = null;
+    }
+}
+
+/// <summary>把 .NET 的 IO 异常映射成 Rust io::ErrorKind 风格的短标签，供警告文案使用。</summary>
+internal static class IoErrorKind
+{
+    public static string Describe(Exception error) => error switch
+    {
+        FileNotFoundException or DirectoryNotFoundException => "NotFound",
+        UnauthorizedAccessException => "PermissionDenied",
+        InvalidDataException => "InvalidData",
+        PathTooLongException => "InvalidFilename",
+        IOException io when io.InnerException is InvalidDataException => "InvalidData",
+        IOException io when (io.HResult & 0xFFFF) == 32 => "ResourceBusy",
+        IOException io when (io.HResult & 0xFFFF) == 112 => "StorageFull",
+        IOException => "Other",
+        _ => error.GetType().Name,
+    };
 }

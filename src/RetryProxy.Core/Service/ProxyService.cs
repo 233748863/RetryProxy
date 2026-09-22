@@ -50,11 +50,10 @@ public sealed class ProxyService
         KeepAlive = new KeepAliveWatchdog(false, TimeSpan.FromSeconds(ConfigDefaults.KeepaliveIdleMinutes * 60.0));
     }
 
-    /// <summary>恢复当日统计后创建服务；恢复结果写进该通道的日志。</summary>
-    public static ProxyService WithDailyStatistics(ProxyLogger logger, string routeId, string routeName, IDailyStorage? storage)
+    /// <summary>从日志目录恢复当日统计后创建服务；恢复结果写进该通道的日志。</summary>
+    public static ProxyService WithDailyStatistics(ProxyLogger logger, string routeId, string routeName)
     {
-        _ = routeId;
-        var metrics = new ProxyMetrics(storage);
+        var metrics = ProxyMetrics.FromDailyLogs(logger.DirectoryPath, routeId, routeName);
         var snapshot = metrics.Snapshot();
         var routeLogger = logger.Route(routeName);
         if (snapshot.StatisticsWarning is { } warning)

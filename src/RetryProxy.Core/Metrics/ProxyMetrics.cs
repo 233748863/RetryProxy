@@ -6,7 +6,7 @@ namespace RetryProxy.Core.Metrics;
 /// <summary>
 /// 请求统计（对应 metrics.rs 的 ProxyMetrics）。所有以 <c>保活-</c> 开头的请求 ID 不计入当日统计。
 /// </summary>
-public sealed class ProxyMetrics
+public sealed class ProxyMetrics : IDisposable
 {
     public const string KeepAlivePrefix = "保活-";
 
@@ -23,6 +23,23 @@ public sealed class ProxyMetrics
     public ProxyMetrics(IDailyStorage? storage)
     {
         _state = new MetricsState(DateTime.Now, storage);
+    }
+
+    /// <summary>从日志目录下的当日 jsonl 恢复统计（对应 ProxyMetrics::from_daily_logs）。</summary>
+    public static ProxyMetrics FromDailyLogs(string logDirectory, string routeId, string routeName)
+    {
+        return new ProxyMetrics(new DailyStorage(logDirectory, routeId, routeName));
+    }
+
+    /// <summary>测试用：内部状态。</summary>
+    internal MetricsState StateForTest => _state;
+
+    public void Dispose()
+    {
+        lock (_lock)
+        {
+            _state.Dispose();
+        }
     }
 
     public void SetUiNotifier(Action? notifier)

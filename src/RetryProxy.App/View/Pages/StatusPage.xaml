@@ -163,6 +163,7 @@
                                                  ToolTip="{Binding Hint}" />
                                 <ui:TextBox Width="64"
                                             Margin="6,0,4,0"
+                                            AutomationProperties.Name="{i18n:T 保活间隔分钟}"
                                             IsEnabled="{Binding KeepAliveEnabled}"
                                             Text="{Binding KeepAliveMinutes, Mode=TwoWay}"
                                             ToolTip="{Binding Hint}" />

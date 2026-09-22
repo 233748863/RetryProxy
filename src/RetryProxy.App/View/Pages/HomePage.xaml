@@ -264,6 +264,7 @@
                                      Grid.RowSpan="2"
                                      Grid.Column="1"
                                      Margin="0,0,10,0"
+                                     AutomationProperties.Name="{i18n:T 本通道保活}"
                                      IsChecked="{Binding KeepAliveEnabled, Mode=TwoWay}"
                                      IsEnabled="{Binding HasChannel}" />
                     <ui:Button Grid.Row="0"

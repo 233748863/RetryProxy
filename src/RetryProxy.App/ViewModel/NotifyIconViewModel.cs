@@ -24,16 +24,16 @@ public partial class NotifyIconViewModel : ObservableObject
     [RelayCommand]
     public void ShowOrHide()
     {
-        if (Application.Current.MainWindow.Visibility == Visibility.Visible)
+        var window = Application.Current.MainWindow;
+        if (window.Visibility == Visibility.Visible && window.WindowState != WindowState.Minimized)
         {
-            Application.Current.MainWindow.Hide();
+            WindowBacktray.Hide(window);
         }
         else
         {
-            Application.Current.MainWindow.Activate();
-            Application.Current.MainWindow.Focus();
-            Application.Current.MainWindow.Show();
-            WindowBacktray.Show(Application.Current.MainWindow);
+            WindowBacktray.Show(window);
+            window.Activate();
+            window.Focus();
         }
     }
 
@@ -65,12 +65,12 @@ public partial class NotifyIconViewModel : ObservableObject
 
 file static class WindowBacktray
 {
+    /// <summary>只改可见性，不改 WindowState：还原时能回到隐藏前的普通/最大化状态。</summary>
     public static void Hide(Window window)
     {
         if (window != null)
         {
             window.Visibility = Visibility.Hidden;
-            window.WindowState = WindowState.Minimized;
         }
     }
 

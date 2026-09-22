@@ -139,6 +139,7 @@
                                Height="32"
                                Background="Transparent"
                                BorderBrush="Transparent"
+                               AutomationProperties.Name="{i18n:T 最小化到托盘}"
                                Command="{Binding HideCommand}"
                                CornerRadius="0"
                                Icon="{ui:SymbolIcon CaretDown24}"

@@ -38,6 +38,8 @@ public sealed class WindowRecovery : IDisposable
     private HwndSource? _source;
     private nint _hwnd;
     private WindowRect? _saved;
+    /// <summary>首次发现异常时的矩形；恢复成功（无论由哪一次轮询确认）时都要记一条日志。</summary>
+    private WindowRect? _damaged;
     private bool _suspended;
     private bool _pollQueued;
 
@@ -64,6 +66,7 @@ public sealed class WindowRecovery : IDisposable
     {
         _gate.Reset();
         _timer.Stop();
+        _damaged = null;
     }
 
     private void OnSourceInitialized(object? sender, EventArgs e)
@@ -144,11 +147,18 @@ public sealed class WindowRecovery : IDisposable
         if (metrics.IsUsable(current, monitors))
         {
             _saved = current;
+            var damaged = _damaged;
             Suspend();
+            if (damaged is { } from)
+            {
+                // SetWindowPos 之后 WPF 可能还要再走一轮布局，成功可能要到下一次轮询才能确认。
+                _logger.Warn($"窗口位置或尺寸异常，已自动恢复：{from} -> {current}");
+            }
             return;
         }
 
         // 异常矩形：从现在起定时轮询，直到恢复成功或窗口被藏起。
+        _damaged ??= current;
         if (!_timer.IsEnabled)
         {
             _timer.Start();
@@ -168,9 +178,10 @@ public sealed class WindowRecovery : IDisposable
         var succeeded = SetWindowPos(_hwnd, 0, target.Left, target.Top, target.Width, target.Height, SwpNoActivate | SwpNoZOrder);
         if (succeeded && Inspect() is var (restored, restoredMetrics) && restoredMetrics.IsUsable(restored, monitors))
         {
+            var from = _damaged ?? current;
             _saved = restored;
             Suspend();
-            _logger.Warn($"窗口位置或尺寸异常，已自动恢复：{current} -> {restored}");
+            _logger.Warn($"窗口位置或尺寸异常，已自动恢复：{from} -> {restored}");
             return;
         }
 

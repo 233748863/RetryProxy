@@ -1,3 +1,5 @@
+using System;
+
 namespace RetryProxy.Core.Logging;
 
 /// <summary>
@@ -7,16 +9,18 @@ public sealed class RouteLogger
 {
     private readonly ProxyLogger _logger;
     private readonly string _routeName;
+    private readonly Func<string>? _logLabel;
 
-    internal RouteLogger(ProxyLogger logger, string routeName)
+    internal RouteLogger(ProxyLogger logger, string routeName, Func<string>? logLabel = null)
     {
         _logger = logger;
         _routeName = routeName.Trim();
+        _logLabel = logLabel;
     }
 
     public ProxyLogger Base => _logger;
 
-    public string RouteName => _routeName;
+    public string RouteName => _logLabel?.Invoke() ?? _routeName;
 
     public void Info(string message) => _logger.Info(Prefix(message));
 
@@ -26,7 +30,8 @@ public sealed class RouteLogger
 
     private string Prefix(string message)
     {
-        if (_routeName != "保活"
+        var routeName = RouteName;
+        if (_logLabel is null && routeName != "保活"
             && (message.StartsWith("[保活-", System.StringComparison.Ordinal)
                 || message.StartsWith("供应商保活", System.StringComparison.Ordinal)
                 || message.StartsWith("后台准备 [会话", System.StringComparison.Ordinal)
@@ -35,13 +40,13 @@ public sealed class RouteLogger
             message = $"[保活]{message}";
         }
 
-        if (_routeName.Length == 0)
+        if (routeName.Length == 0)
         {
             return message;
         }
 
         return message.StartsWith('[')
-            ? $"[{_routeName}]{message}"
-            : $"[{_routeName}] {message}";
+            ? $"[{routeName}]{message}"
+            : $"[{routeName}] {message}";
     }
 }

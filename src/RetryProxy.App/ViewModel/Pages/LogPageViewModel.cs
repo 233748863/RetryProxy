@@ -38,6 +38,9 @@ public partial class LogPageViewModel : ViewModel
     private bool _onlyKeepAlive;
 
     [ObservableProperty]
+    private bool _onlyPreparation;
+
+    [ObservableProperty]
     private bool _autoScroll = true;
 
     [ObservableProperty]
@@ -118,7 +121,7 @@ public partial class LogPageViewModel : ViewModel
         for (var index = (int)(_nextGlobal - Buffer.Dropped); index < Buffer.Count; index++)
         {
             var line = Buffer[index];
-            if (LogLine.Matches(line, Filter, LowercaseQuery, RouteMarker, OnlyKeepAlive))
+            if (LogLine.Matches(line, Filter, LowercaseQuery, RouteMarker, OnlyKeepAlive, OnlyPreparation))
             {
                 Rows.Add(line);
                 _rowGlobals.Add(Buffer.Dropped + index);
@@ -143,7 +146,7 @@ public partial class LogPageViewModel : ViewModel
         for (var index = 0; index < Buffer.Count; index++)
         {
             var line = Buffer[index];
-            if (LogLine.Matches(line, Filter, query, route, OnlyKeepAlive))
+            if (LogLine.Matches(line, Filter, query, route, OnlyKeepAlive, OnlyPreparation))
             {
                 Rows.Add(line);
                 _rowGlobals.Add(Buffer.Dropped + index);
@@ -182,6 +185,11 @@ public partial class LogPageViewModel : ViewModel
             OnlyKeepAlive = false;
         }
 
+        if (value && OnlyPreparation)
+        {
+            OnlyPreparation = false;
+        }
+
         Rebuild();
     }
 
@@ -190,6 +198,26 @@ public partial class LogPageViewModel : ViewModel
         if (value && OnlySelected)
         {
             OnlySelected = false;
+        }
+
+        if (value && OnlyPreparation)
+        {
+            OnlyPreparation = false;
+        }
+
+        Rebuild();
+    }
+
+    partial void OnOnlyPreparationChanged(bool value)
+    {
+        if (value && OnlySelected)
+        {
+            OnlySelected = false;
+        }
+
+        if (value && OnlyKeepAlive)
+        {
+            OnlyKeepAlive = false;
         }
 
         Rebuild();
@@ -225,6 +253,12 @@ public partial class LogPageViewModel : ViewModel
     private void OnToggleKeepAlive()
     {
         OnlyKeepAlive = !OnlyKeepAlive;
+    }
+
+    [RelayCommand]
+    private void OnTogglePreparation()
+    {
+        OnlyPreparation = !OnlyPreparation;
     }
 
     [RelayCommand]

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace RetryProxy.Core.Workspace;
 
@@ -149,17 +150,26 @@ public static class LogLine
     public static LogLevelFilter Level(string line) => Split(line).Level;
 
     /// <summary>日志行是否通过当前的级别、关键字与通道筛选。</summary>
-    public static bool Matches(string line, LogLevelFilter filter, string lowercaseQuery, string? route, bool keepAliveOnly = false)
+    public static bool Matches(string line, LogLevelFilter filter, string lowercaseQuery, string? route, bool keepAliveOnly = false, bool preparationOnly = false)
     {
         if (!filter.Accepts(line))
         {
             return false;
         }
 
-        if (keepAliveOnly && !line.Contains("[保活]", StringComparison.Ordinal)
-            && !line.Contains("[保活-", StringComparison.Ordinal))
+        if (keepAliveOnly || preparationOnly)
         {
-            return false;
+            var tags = Split(line).Tags;
+            if (keepAliveOnly && !tags.Contains("保活")
+                && (tags.Contains("准备") || !tags.Any(tag => tag.StartsWith("保活-", StringComparison.Ordinal))))
+            {
+                return false;
+            }
+
+            if (preparationOnly && !tags.Contains("准备"))
+            {
+                return false;
+            }
         }
 
         if (route is not null && !line.Contains($"[{route}]", StringComparison.Ordinal))

@@ -77,7 +77,7 @@ public sealed class ProxyLogger : IDisposable
 
     public void Error(string message) => Write("ERROR", message);
 
-    public RouteLogger Route(string routeName) => new(this, routeName);
+    public RouteLogger Route(string routeName, Func<string>? logLabel = null) => new(this, routeName, logLabel);
 
     private void Write(string level, string message)
     {

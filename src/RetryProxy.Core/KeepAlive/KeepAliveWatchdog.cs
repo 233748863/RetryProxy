@@ -68,6 +68,8 @@ public sealed class KeepAliveSnapshot
 
     public bool Preparing { get; init; }
 
+    public bool Enabled { get; init; }
+
     /// <summary>本通道当前的准备与自动保活是否使用用户输入的 Key，而不是本机 CLI 默认配置。</summary>
     public bool WithKey { get; init; }
 
@@ -205,6 +207,7 @@ public sealed class KeepAliveWatchdog
     private readonly object _lock = new();
     private bool _enabled;
     private bool _preparationRequiresContext;
+    private bool _enableAfterPreparation;
     private TimeSpan _idle;
     private ulong _contextLimit = DefaultContextLimit;
     private long _lastActivityMs;
@@ -398,6 +401,14 @@ public sealed class KeepAliveWatchdog
         lock (_lock)
         {
             _preparationRequiresContext = true;
+        }
+    }
+
+    internal void EnableAfterPreparation()
+    {
+        lock (_lock)
+        {
+            _enableAfterPreparation = true;
         }
     }
 
@@ -781,6 +792,7 @@ public sealed class KeepAliveWatchdog
                 ActiveRequests = _activeRequests,
                 Probing = _flight is { Result: null },
                 Preparing = _preparation is not null,
+                Enabled = _enabled,
                 WithKey = _credential is { ApiKey.Length: > 0 },
                 PreparationAttempts = _preparationAttempts,
                 PreparationRetryAfter = _preparationRetryAtMs is { } retryAt ? TimeSpan.FromMilliseconds(Math.Max(0, retryAt - NowMs)) : null,
@@ -842,9 +854,9 @@ public sealed class KeepAliveWatchdog
         session.Model = model;
         session.ContextTokens = contextTokens;
         var preparing = _preparation is { } preparation && preparation == PreparationState.Running(probe.FlightId);
-        if (preparing && _preparationRequiresContext && contextTokens is null)
+        if (preparing && _preparationRequiresContext && contextTokens is null or 0)
         {
-            flight.Result = new PreparationResult.Failed("CLI 未返回上下文用量");
+            flight.Result = new PreparationResult.Failed("CLI 未返回上下文用量或用量为零");
             _totals.Failed = Saturating(_totals.Failed);
             ClearSessionLocked();
             return null;
@@ -861,6 +873,11 @@ public sealed class KeepAliveWatchdog
         if (resetReason is not null)
         {
             ClearSessionLocked();
+        }
+
+        if (preparing && _enableAfterPreparation)
+        {
+            _enabled = true;
         }
 
         flight.Result = new PreparationResult.Ready();

@@ -38,6 +38,7 @@ public sealed class ProxyService
     private Action? _notifier;
     private string? _upstreamApiKey;
     private string? _localAccessKey;
+    private Func<string>? _logLabel;
 
     public ProxyService(ProxyLogger logger, string routeName)
         : this(logger, routeName, new ProxyMetrics())
@@ -82,6 +83,12 @@ public sealed class ProxyService
     public ProxyMetrics Metrics { get; }
 
     public KeepAliveWatchdog KeepAlive { get; private set; }
+
+    public ProxyService WithLogLabel(Func<string> logLabel)
+    {
+        _logLabel = logLabel;
+        return this;
+    }
 
     /// <summary>通道状态、请求统计和保活状态变化时都通知界面；替换指标或看门狗后需重新调用。</summary>
     public void SetUiNotifier(Action? notifier)
@@ -274,7 +281,7 @@ public sealed class ProxyService
             _cancel = cancel;
         }
 
-        var logger = _logger.Route(RouteName);
+        var logger = _logger.Route(RouteName, _logLabel);
         RetryProxyPipeline proxy;
         try
         {

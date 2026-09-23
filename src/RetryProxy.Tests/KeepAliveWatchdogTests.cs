@@ -261,6 +261,57 @@ public class KeepAliveWatchdogTests
     }
 
     [Fact]
+    public void IndependentPreparationEnablesKeepAliveOnlyAfterValidContext()
+    {
+        var (watchdog, service) = Running(false);
+        using var _ = service;
+        watchdog.RequireContextForPreparation();
+        watchdog.EnableAfterPreparation();
+        Assert.True(watchdog.RequestPreparation());
+        Assert.False(watchdog.Snapshot().Enabled);
+        for (var attempt = 0; attempt < 3; attempt++)
+        {
+            if (attempt > 0)
+            {
+                watchdog.SetPreparationRetryNowForTest();
+            }
+
+            using var probe = watchdog.BeginDueProbe()!;
+            probe.Fail("上游 HTTP 500");
+            Assert.False(watchdog.Snapshot().Enabled);
+        }
+
+        watchdog.SetPreparationRetryNowForTest();
+        using (var missingContext = watchdog.BeginDueProbe()!)
+        {
+            Assert.Null(missingContext.Complete("test-model", null));
+        }
+
+        Assert.True(watchdog.Snapshot().Preparing);
+        Assert.False(watchdog.Snapshot().Enabled);
+        Assert.Null(watchdog.BeginDueProbe());
+        watchdog.SetPreparationRetryNowForTest();
+        using (var emptyContext = watchdog.BeginDueProbe()!)
+        {
+            Assert.Null(emptyContext.Complete("test-model", 0));
+        }
+
+        Assert.False(watchdog.Snapshot().Enabled);
+        watchdog.SetPreparationRetryNowForTest();
+        using (var validContext = watchdog.BeginDueProbe()!)
+        {
+            Assert.NotNull(validContext.Complete("test-model", 120));
+        }
+
+        Assert.IsType<PreparationResult.Ready>(watchdog.TakePreparationResult());
+        Assert.False(watchdog.Snapshot().Preparing);
+        Assert.True(watchdog.Snapshot().Enabled);
+        Assert.Null(watchdog.BeginDueProbe());
+        watchdog.MakeDueForTest();
+        Assert.NotNull(watchdog.BeginDueProbe());
+    }
+
+    [Fact]
     public void PreparationKeepsTryingAfterRepeatedFailuresUntilContextReturns()
     {
         var watchdog = new KeepAliveWatchdog(true, TimeSpan.FromMinutes(5));

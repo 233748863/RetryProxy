@@ -197,10 +197,6 @@ public sealed class RetryProxy
 
         var elapsed = startedAt.Elapsed.TotalSeconds;
         var nextRound = KeepAlive.Enabled ? $"空闲 {(long)KeepAlive.Idle.TotalSeconds} 秒后进行下一轮" : "自动保活已关闭";
-        if (preparing && KeepAlive.Enabled)
-        {
-            nextRound = $"首次准备成功，已转为自动保活；{nextRound}";
-        }
         var afterFailure = KeepAlive.Snapshot().Preparing && !Cancel.IsCancellationRequested
             ? $"准备未完成，随机等待 {KeepAliveWatchdog.PreparationRetryMinDelay.TotalSeconds:F3}～{KeepAliveWatchdog.PreparationRetryMaxDelay.TotalSeconds:F3} 秒后继续重试；可点击“终止准备”取消"
             : nextRound;
@@ -247,6 +243,10 @@ public sealed class RetryProxy
 
         var context = completion.ContextTokens?.ToString(CultureInfo.InvariantCulture) ?? "未获取";
         var reset = completion.ResetReason is { } resetReason ? $"，{resetReason}" : string.Empty;
+        if (preparing && KeepAlive.Enabled)
+        {
+            nextRound = $"首次准备成功，已转为自动保活；空闲 {(long)KeepAlive.Idle.TotalSeconds} 秒后进行下一轮";
+        }
         Logger.Info($"{prefix} 完整回复{reply.Stats.LogFields()}，当前会话 {context}/{completion.ContextLimit} token，{LogText.TimingText(reply.FirstContentSeconds, elapsed)}，回答：{answerPreview}{reset}，{nextRound}");
     }
 

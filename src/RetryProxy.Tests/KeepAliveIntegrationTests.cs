@@ -255,7 +255,8 @@ while ($null -ne $line) {
         Assert.Equal("preserved", metadata.GetProperty("fixture_field").GetString());
         Assert.Equal("{\"thread_id\":\"fake-thread\"}", metadata.GetProperty("x-codex-turn-metadata").GetString());
         var logs = await fixture.CompletedLogs();
-        Assert.True(logs.Contains("供应商保活 [会话 ") && logs.Contains("Codex CLI，沿用本机客户端配置，问题："), logs);
+        Assert.True(logs.Contains("后台准备 [会话 ") && logs.Contains("Codex CLI，沿用本机客户端配置，问题："), logs);
+        Assert.DoesNotContain("自动保活 [会话 ", logs);
         Assert.True(logs.Contains("完整回复") && logs.Contains("当前会话 52/50000 token") && logs.Contains("回答：Java CLI 验证回答") && logs.Contains("自动保活已关闭"), logs);
         Assert.DoesNotContain("local-validation-token", logs);
 
@@ -264,6 +265,12 @@ while ($null -ne $line) {
         await fixture.Proxy.SendDueKeepAliveProbeAsync();
         Assert.IsType<PreparationResult.Ready>(watchdog.TakePreparationResult());
         Assert.Equal(2, watchdog.Snapshot().Turns);
+        watchdog.Configure(true, TimeSpan.FromMinutes(5));
+        watchdog.MakeDueForTest();
+        await fixture.Proxy.SendDueKeepAliveProbeAsync();
+        Assert.Equal(3, watchdog.Snapshot().Turns);
+        Assert.Null(watchdog.TakePreparationResult());
+        Assert.Contains("自动保活 [会话 ", await fixture.CompletedLogs());
         service.Dispose();
         Assert.Null(watchdog.Snapshot().SessionId);
         Directory.Delete(directory, recursive: true);

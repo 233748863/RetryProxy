@@ -28,7 +28,9 @@ public sealed class RouteLogger
     {
         if (_routeName != "保活"
             && (message.StartsWith("[保活-", System.StringComparison.Ordinal)
-                || message.StartsWith("供应商保活", System.StringComparison.Ordinal)))
+                || message.StartsWith("供应商保活", System.StringComparison.Ordinal)
+                || message.StartsWith("后台准备 [会话", System.StringComparison.Ordinal)
+                || message.StartsWith("自动保活 [会话", System.StringComparison.Ordinal)))
         {
             message = $"[保活]{message}";
         }

@@ -153,7 +153,9 @@ public sealed class RetryProxy
         var timeoutSeconds = Math.Min(Config.TimeoutSeconds, Config.TotalTimeoutSeconds);
         var sessionLabel = probe.SessionId.Length > 8 ? probe.SessionId[..8] : probe.SessionId;
         var configuration = _localAccessKey is not null ? "经后台临时代理转发" : probe.UsesSuppliedKey ? "使用本次输入的 Key 经本通道转发" : "沿用本机客户端配置";
-        Logger.Info($"供应商保活 [会话 {sessionLabel}] 第 {probe.Turn} 轮，随机题号 {probe.QuestionIndex + 1}/250，{probe.Flavor.Label()} CLI，{configuration}，问题：{probe.Question}");
+        var preparing = KeepAlive.Snapshot().Preparing;
+        var activity = preparing ? "后台准备" : "自动保活";
+        Logger.Info($"{activity} [会话 {sessionLabel}] 第 {probe.Turn} 轮，随机题号 {probe.QuestionIndex + 1}/250，{probe.Flavor.Label()} CLI，{configuration}，问题：{probe.Question}");
 
         Cli.CliReply? reply = null;
         string? failure = null;
@@ -195,10 +197,14 @@ public sealed class RetryProxy
 
         var elapsed = startedAt.Elapsed.TotalSeconds;
         var nextRound = KeepAlive.Enabled ? $"空闲 {(long)KeepAlive.Idle.TotalSeconds} 秒后进行下一轮" : "自动保活已关闭";
+        if (preparing && KeepAlive.Enabled)
+        {
+            nextRound = $"首次准备成功，已转为自动保活；{nextRound}";
+        }
         var afterFailure = KeepAlive.Snapshot().Preparing && !Cancel.IsCancellationRequested
             ? $"准备未完成，随机等待 {KeepAliveWatchdog.PreparationRetryMinDelay.TotalSeconds:F3}～{KeepAliveWatchdog.PreparationRetryMaxDelay.TotalSeconds:F3} 秒后继续重试；可点击“终止准备”取消"
             : nextRound;
-        var prefix = $"供应商保活 [会话 {sessionLabel}] 第 {probe.Turn} 轮 {probe.Flavor.Label()} CLI";
+        var prefix = $"{activity} [会话 {sessionLabel}] 第 {probe.Turn} 轮 {probe.Flavor.Label()} CLI";
         if (interruption is not null)
         {
             probe.Interrupt(interruption);
@@ -743,7 +749,9 @@ public sealed class RetryProxy
                 else if (retryable)
                 {
                     Logger.Warn(_localAccessKey is not null && requestId.StartsWith(ProxyMetrics.KeepAlivePrefix, StringComparison.Ordinal)
-                        ? $"[{requestId}] 本轮上游 HTTP {status}，后台准备将在间隔后继续"
+                        ? KeepAlive.Snapshot().Preparing
+                            ? $"[{requestId}] 本轮上游 HTTP {status}，后台准备将在间隔后继续"
+                            : $"[{requestId}] 本轮上游 HTTP {status}，下次按保活间隔继续"
                         : $"[{requestId}] 重试耗尽，向客户端返回最后一次上游响应 HTTP {status}");
                 }
 
@@ -1251,7 +1259,11 @@ public sealed class RetryProxy
         var statusText = status is { } value ? $"上游 HTTP {value}" : "上游状态码：无";
         double? delay = attemptNumber < totalAttempts ? RetryDelay(attemptNumber - 1, null, null) : null;
         var isTemporaryKeepAlive = _localAccessKey is not null && ctx.RequestId.StartsWith(ProxyMetrics.KeepAlivePrefix, StringComparison.Ordinal);
-        var retryText = delay is { } seconds ? $"将在 {seconds:F3} 秒后重试" : isTemporaryKeepAlive ? "本轮结束，后台准备将在间隔后继续" : "已达到重试上限";
+        var retryText = delay is { } seconds ? $"将在 {seconds:F3} 秒后重试" : "已达到重试上限";
+        if (delay is null && isTemporaryKeepAlive)
+        {
+            retryText = KeepAlive.Snapshot().Preparing ? "本轮结束，后台准备将在间隔后继续" : "本轮结束，下次按保活间隔继续";
+        }
         var attemptText = isTemporaryKeepAlive ? "本轮" : $"第 {attemptNumber}/{totalAttempts} 次";
         Logger.Warn($"[{ctx.RequestId}] {attemptText} {ctx.Method} {ctx.SafePath} -> {statusText}，{label}，{retryText}，{LogText.TimingText(firstByteSeconds, elapsed)}");
         if (delay is not { } wait)

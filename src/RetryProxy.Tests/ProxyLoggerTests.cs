@@ -80,4 +80,19 @@ public class ProxyLoggerTests : IDisposable
         Assert.True(reader.TryRead(out var third));
         Assert.EndsWith(" INFO 无前缀", third);
     }
+
+    [Fact]
+    public void RouteLogsMarkPreparationAndAutomaticKeepAliveForFiltering()
+    {
+        using var logger = ProxyLogger.Create(_directory);
+        var route = logger.Route("alpha");
+        route.Info("后台准备 [会话 12345678] 第 1 轮");
+        route.Info("自动保活 [会话 12345678] 第 2 轮");
+
+        var reader = logger.UiLines!;
+        Assert.True(reader.TryRead(out var preparing));
+        Assert.Contains("[alpha][保活]后台准备 [会话", preparing);
+        Assert.True(reader.TryRead(out var keepingAlive));
+        Assert.Contains("[alpha][保活]自动保活 [会话", keepingAlive);
+    }
 }

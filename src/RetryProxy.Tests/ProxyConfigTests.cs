@@ -502,6 +502,10 @@ public class ProxyConfigTests
         duplicateName.Providers.Add(new ProviderEndpoint("ANYROUTER.TOP", "https://other.example"));
         Assert.Equal("服务商名称重复：ANYROUTER.TOP", Assert.Throws<ConfigException>(() => duplicateName.Validate(false)).Message);
 
+        var matchingAddress = ProxyConfig.Builtin();
+        matchingAddress.Providers.Add(new ProviderEndpoint("independent", matchingAddress.Providers[0].BaseUrl));
+        matchingAddress.Validate(false);
+
         var duplicatePort = ProxyConfig.Builtin();
         duplicatePort.Routes[1].ListenPort = 18080;
         Assert.Equal("本地端口重复：18080", Assert.Throws<ConfigException>(() => duplicatePort.Validate(false)).Message);

@@ -150,7 +150,7 @@ internal sealed class CliSession : IDisposable
     internal static List<string> CodexCredentialOverrides(CliCredential credential)
     {
         var provider = $"model_providers.{CodexCredentialProvider}";
-        return new List<string>
+        var overrides = new List<string>
         {
             $"model_provider=\"{CodexCredentialProvider}\"",
             $"{provider}.name=\"Retry Proxy 指定 Key 准备\"",
@@ -158,6 +158,12 @@ internal sealed class CliSession : IDisposable
             $"{provider}.wire_api=\"responses\"",
             $"{provider}.env_key=\"{CodexCredentialEnv}\"",
         };
+        if (credential.Model is { } model)
+        {
+            overrides.Add($"model={JsonText.Serialize(JsonValue.Create(model))}");
+        }
+
+        return overrides;
     }
 
     /// <summary>把用户配置里的每个 MCP 服务按原名禁用，不复制其余字段。</summary>
@@ -226,6 +232,12 @@ internal sealed class CliSession : IDisposable
 
             if (credential is not null)
             {
+                if (credential.Model is { } model)
+                {
+                    start.ArgumentList.Add("--model");
+                    start.ArgumentList.Add(model);
+                }
+
                 // 进程环境与 --settings 双重覆盖：无论 CLI 以哪一层为准，都只会用本次输入的 Key 与本通道地址。
                 start.Environment["ANTHROPIC_AUTH_TOKEN"] = credential.ApiKey;
                 start.Environment.Remove("ANTHROPIC_API_KEY");

@@ -480,6 +480,19 @@ public sealed class KeepAliveWatchdog
     /// <summary>按通道当前配置发起一次准备，不改变已选的默认配置或指定 Key。通道未运行时抛 <see cref="InvalidOperationException"/>。</summary>
     public bool RequestPreparation() => RequestPreparationInner(false, null);
 
+    public void RestoreCredential(CliCredential credential)
+    {
+        lock (_lock)
+        {
+            if (_credential is null && _preparation is null)
+            {
+                _credential = credential;
+            }
+        }
+
+        NotifyUi();
+    }
+
     /// <summary>
     /// 发起一次准备，并把 <paramref name="credential"/> 设为之后自动保活使用的配置：
     /// null 沿用本机 CLI 默认配置，非 null 则准备和后续保活都只用这把 Key 经本通道转发。
@@ -746,7 +759,7 @@ public sealed class KeepAliveWatchdog
             return new KeepAliveSnapshot
             {
                 Flavor = _flavor,
-                Model = _session?.Model,
+                Model = _session?.Model ?? _credential?.Model,
                 SessionId = _session?.Conversation.Id,
                 Turns = _session?.Turns ?? 0,
                 ContextTokens = _session?.ContextTokens,

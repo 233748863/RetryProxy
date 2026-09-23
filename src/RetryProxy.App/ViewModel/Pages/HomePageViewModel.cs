@@ -72,6 +72,24 @@ public partial class HomePageViewModel : ViewModel
     private bool _keepAliveEnabled;
 
     [ObservableProperty]
+    private string _keepAliveMinutes = string.Empty;
+
+    [ObservableProperty]
+    private double _contextLimit = ConfigDefaults.KeepaliveContextLimit;
+
+    [ObservableProperty]
+    private bool _isPreparing;
+
+    [ObservableProperty]
+    private string _prepareToolTip = string.Empty;
+
+    [ObservableProperty]
+    private string _keepAliveHint = string.Empty;
+
+    [ObservableProperty]
+    private string? _keepAliveHintToolTip;
+
+    [ObservableProperty]
     private string _listenAddress = string.Empty;
 
     public HomePageViewModel(ILogger<HomePageViewModel> logger, WorkspaceService workspaceService, Dialogs dialogs)
@@ -80,7 +98,19 @@ public partial class HomePageViewModel : ViewModel
         _workspaceService = workspaceService;
         _dialogs = dialogs;
         _workspaceService.Refreshed += Refresh;
+        _workspaceService.Tick += Refresh;
         Refresh();
+    }
+
+    public override void OnNavigatedTo()
+    {
+        _workspaceService.SetHintTimerWanted(this, true);
+        Refresh();
+    }
+
+    public override void OnNavigatedFrom()
+    {
+        _workspaceService.SetHintTimerWanted(this, false);
     }
 
     /// <summary>从工作区同步下拉框与开关；只有文案变化时才重建列表，避免下拉框闪动。</summary>
@@ -116,6 +146,17 @@ public partial class HomePageViewModel : ViewModel
                     : "请先停用通道";
             ListenPort = route?.ListenPort.ToString() ?? string.Empty;
             KeepAliveEnabled = route?.KeepaliveEnabled ?? false;
+            KeepAliveMinutes = route is null ? string.Empty : Workspace.KeepAliveMinutes;
+            ContextLimit = route?.KeepaliveContextLimit ?? ConfigDefaults.KeepaliveContextLimit;
+            var snapshot = route is not null && Workspace.RouteKeepAlives.TryGetValue(route.Id, out var watchdog)
+                ? watchdog.Snapshot()
+                : null;
+            IsPreparing = snapshot?.Preparing ?? false;
+            PrepareToolTip = route is null ? string.Empty : $"按当前配置为 {route.Name} 发起后台问答；需要修改地址、密钥或模型，请点击配置准备。";
+            KeepAliveHint = route is null ? string.Empty : Workspace.KeepAliveHint(route);
+            KeepAliveHintToolTip = snapshot?.PreparationLastError is { } reason
+                ? $"最近一次准备未完成：{reason}\n将持续重试，可点击“终止准备”取消。"
+                : null;
             ListenAddress = route is null ? string.Empty : LocalUrlOf(route);
         }
         finally
@@ -172,18 +213,24 @@ public partial class HomePageViewModel : ViewModel
         Refresh();
     }
 
-    partial void OnKeepAliveEnabledChanged(bool value)
+    partial void OnKeepAliveEnabledChanged(bool value) => ApplyKeepAlive();
+
+    partial void OnKeepAliveMinutesChanged(string value) => ApplyKeepAlive();
+
+    partial void OnContextLimitChanged(double value) => ApplyKeepAlive();
+
+    private void ApplyKeepAlive()
     {
         if (_syncing)
         {
             return;
         }
 
-        var route = Workspace.SelectedRouteRef();
-        if (route is not null && route.KeepaliveEnabled != value)
+        if (Workspace.SelectedRouteRef() is not null)
         {
-            Workspace.ApplyKeepAliveInput(value, Workspace.KeepAliveMinutes, route.KeepaliveContextLimit);
-            Refresh();
+            var limit = double.IsFinite(ContextLimit) && ContextLimit >= 1 ? (long)Math.Round(ContextLimit) : 1;
+            Workspace.ApplyKeepAliveInput(KeepAliveEnabled, KeepAliveMinutes, limit);
+            _workspaceService.Flush();
         }
     }
 
@@ -274,6 +321,22 @@ public partial class HomePageViewModel : ViewModel
     private void OnPrepareKeepAlive()
     {
         Workspace.PrepareSelectedRoute();
+        _workspaceService.Flush();
+    }
+
+    [RelayCommand]
+    private async Task OnConfigureKeepAlive()
+    {
+        if (Workspace.OpenPrepareDialog() is { } state)
+        {
+            await _dialogs.ShowPrepareOptionsAsync(state);
+        }
+    }
+
+    [RelayCommand]
+    private void OnCancelPreparation()
+    {
+        Workspace.CancelSelectedPreparation();
         _workspaceService.Flush();
     }
 

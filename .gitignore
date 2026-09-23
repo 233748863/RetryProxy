@@ -16,6 +16,8 @@ x86/
 [Oo]bj/
 [Ll]og/
 dist/
+build/release-stage/
+build/rollback/
 *.zip
 
 # Runtime data

@@ -105,10 +105,11 @@ public sealed class CliCommand
 /// </summary>
 public sealed class CliCredential : IEquatable<CliCredential>
 {
-    private CliCredential(string apiKey, string baseUrl)
+    private CliCredential(string apiKey, string baseUrl, string? model)
     {
         ApiKey = apiKey;
         BaseUrl = baseUrl;
+        Model = model;
     }
 
     public string ApiKey { get; }
@@ -116,8 +117,10 @@ public sealed class CliCredential : IEquatable<CliCredential>
     /// <summary>代理本通道的本地监听地址，例如 <c>http://127.0.0.1:18081</c>。</summary>
     public string BaseUrl { get; }
 
+    public string? Model { get; }
+
     /// <summary>校验并规范化；不合法时抛 <see cref="CliException"/>，消息可直接展示。</summary>
-    public static CliCredential Create(string apiKey, string baseUrl)
+    public static CliCredential Create(string apiKey, string baseUrl, string? model = null)
     {
         apiKey = apiKey.Trim();
         if (apiKey.Length == 0)
@@ -139,15 +142,15 @@ public sealed class CliCredential : IEquatable<CliCredential>
             throw new CliException("准备入口地址不能为空");
         }
 
-        return new CliCredential(apiKey, baseUrl);
+        return new CliCredential(apiKey, baseUrl, model);
     }
 
-    public bool Equals(CliCredential? other) => other is not null && ApiKey == other.ApiKey && BaseUrl == other.BaseUrl;
+    public bool Equals(CliCredential? other) => other is not null && ApiKey == other.ApiKey && BaseUrl == other.BaseUrl && Model == other.Model;
 
     public override bool Equals(object? obj) => Equals(obj as CliCredential);
 
-    public override int GetHashCode() => HashCode.Combine(ApiKey, BaseUrl);
+    public override int GetHashCode() => HashCode.Combine(ApiKey, BaseUrl, Model);
 
     /// <summary>调试输出绝不带出密钥。</summary>
-    public override string ToString() => $"CliCredential {{ ApiKey = <redacted>, BaseUrl = {BaseUrl} }}";
+    public override string ToString() => $"CliCredential {{ ApiKey = <redacted>, BaseUrl = {BaseUrl}, Model = {Model} }}";
 }

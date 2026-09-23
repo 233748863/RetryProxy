@@ -20,7 +20,12 @@ public class CliTests
         var credential = CliCredential.Create("  sk-test-secret \n", "http://127.0.0.1:18081/");
         Assert.Equal("sk-test-secret", credential.ApiKey);
         Assert.Equal("http://127.0.0.1:18081", credential.BaseUrl);
+        Assert.Null(credential.Model);
         Assert.DoesNotContain("sk-test-secret", credential.ToString());
+        var selected = CliCredential.Create("sk-test-secret", "http://127.0.0.1:18081", "chosen-model");
+        Assert.Equal("chosen-model", selected.Model);
+        Assert.NotEqual(credential, selected);
+        Assert.DoesNotContain("sk-test-secret", selected.ToString());
         Assert.Throws<CliException>(() => CliCredential.Create("   ", "http://127.0.0.1:18081"));
         Assert.Throws<CliException>(() => CliCredential.Create("sk-a b", "http://127.0.0.1:18081"));
         Assert.Throws<CliException>(() => CliCredential.Create("sk-a\tb", "http://127.0.0.1:18081"));
@@ -41,11 +46,12 @@ public class CliTests
     [Fact]
     public void CodexOverridesSelectATemporaryProviderWithoutPuttingTheKeyInArguments()
     {
-        var credential = CliCredential.Create("sk-test-secret", "http://127.0.0.1:18080");
+        var credential = CliCredential.Create("sk-test-secret", "http://127.0.0.1:18080", "chosen-model");
         var overrides = CliSession.CodexCredentialOverrides(credential);
         Assert.Contains("model_provider=\"retry_proxy_prepare\"", overrides);
         Assert.Contains("model_providers.retry_proxy_prepare.base_url=\"http://127.0.0.1:18080/v1\"", overrides);
         Assert.Contains("model_providers.retry_proxy_prepare.env_key=\"RETRY_PROXY_PREPARE_KEY\"", overrides);
+        Assert.Contains("model=\"chosen-model\"", overrides);
         Assert.All(overrides, setting => Assert.DoesNotContain("sk-test-secret", setting));
         foreach (var setting in overrides)
         {

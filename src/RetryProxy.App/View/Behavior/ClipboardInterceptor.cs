@@ -20,7 +20,11 @@
 // </copyright>
 
 
+using System;
 using System.Linq;
+using System.Net;
+using System.Runtime.InteropServices;
+using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Documents;
@@ -42,6 +46,19 @@ namespace RetryProxy.View.Behavior
 
         public static bool GetEnableSafeClipboard(DependencyObject element)
             => (bool)element.GetValue(EnableSafeClipboardProperty);
+
+        public static readonly DependencyProperty EnableUrlPasteProperty =
+            DependencyProperty.RegisterAttached(
+                "EnableUrlPaste",
+                typeof(bool),
+                typeof(ClipboardInterceptor),
+                new PropertyMetadata(false));
+
+        public static void SetEnableUrlPaste(DependencyObject element, bool value)
+            => element.SetValue(EnableUrlPasteProperty, value);
+
+        public static bool GetEnableUrlPaste(DependencyObject element)
+            => (bool)element.GetValue(EnableUrlPasteProperty);
 
         private static void OnEnableSafeClipboardChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
         {
@@ -121,23 +138,60 @@ namespace RetryProxy.View.Behavior
 
         private static void OnPasteTextBox(object sender, ExecutedRoutedEventArgs e)
         {
-            if (sender is not TextBox tb)
+            if (sender is not TextBox tb || tb.IsReadOnly || !tb.IsEnabled)
             {
                 return;
             }
 
-            if (System.Windows.Forms.Clipboard.ContainsText())
+            string? pasteText;
+            try
             {
-                var pasteText = System.Windows.Forms.Clipboard.GetText();
-
-                var start = tb.SelectionStart;
-
-                tb.SelectedText = pasteText;
-                tb.CaretIndex = start + pasteText.Length;
-                tb.SelectionLength = 0;
+                var data = Clipboard.GetDataObject();
+                pasteText = data?.GetData(DataFormats.UnicodeText, false) as string
+                    ?? data?.GetData(DataFormats.Text, false) as string;
+                if (pasteText is null && GetEnableUrlPaste(tb))
+                {
+                    pasteText = ExtractUrlFromHtml(data?.GetData(DataFormats.Html, false) as string);
+                }
+            }
+            catch (Exception error) when (error is ExternalException or InvalidOperationException)
+            {
+                return;
             }
 
+            if (pasteText is null)
+            {
+                return;
+            }
+
+            var start = tb.SelectionStart;
+            tb.SelectedText = pasteText;
+            tb.CaretIndex = start + pasteText.Length;
+            tb.SelectionLength = 0;
             e.Handled = true;
+        }
+
+        internal static string? ExtractUrlFromHtml(string? html)
+        {
+            if (string.IsNullOrEmpty(html) || html.Length > 256 * 1024)
+            {
+                return null;
+            }
+
+            try
+            {
+                var urls = Regex.Matches(html, "<a\\b[^>]*\\bhref\\s*=\\s*(?:\"(?<url>[^\"]+)\"|'(?<url>[^']+)'|(?<url>[^\\s>]+))", RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(200))
+                    .Select(match => WebUtility.HtmlDecode(match.Groups["url"].Value).Trim())
+                    .Where(url => Uri.TryCreate(url, UriKind.Absolute, out var parsed) && (parsed.Scheme == Uri.UriSchemeHttp || parsed.Scheme == Uri.UriSchemeHttps))
+                    .Distinct(StringComparer.Ordinal)
+                    .Take(2)
+                    .ToArray();
+                return urls.Length == 1 ? urls[0] : null;
+            }
+            catch (RegexMatchTimeoutException)
+            {
+                return null;
+            }
         }
 
         private static void OnCopyRichTextBox(object sender, ExecutedRoutedEventArgs e)

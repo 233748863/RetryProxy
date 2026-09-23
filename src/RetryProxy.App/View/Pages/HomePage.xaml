@@ -267,12 +267,91 @@
                                      AutomationProperties.Name="{i18n:T 本通道保活}"
                                      IsChecked="{Binding KeepAliveEnabled, Mode=TwoWay}"
                                      IsEnabled="{Binding HasChannel}" />
-                    <ui:Button Grid.Row="0"
-                               Grid.RowSpan="2"
-                               Grid.Column="2"
-                               Margin="0,0,36,0"
-                               Command="{Binding PrepareKeepAliveCommand}"
-                               Content="{i18n:T 一键准备}" />
+                    <StackPanel Grid.Row="0"
+                                Grid.RowSpan="2"
+                                Grid.Column="2"
+                                Margin="0,0,36,0"
+                                Orientation="Horizontal">
+                        <ui:Button Command="{Binding PrepareKeepAliveCommand}"
+                                   Content="{i18n:T 一键准备}"
+                                   IsEnabled="{Binding HasChannel}"
+                                   ToolTip="{Binding PrepareToolTip}"
+                                   Visibility="{Binding IsPreparing, Converter={StaticResource BooleanToVisibilityRevertConverter}}" />
+                        <ui:Button Margin="6,0,0,0"
+                                   Command="{Binding ConfigureKeepAliveCommand}"
+                                   Content="{i18n:T 配置准备}"
+                                   IsEnabled="{Binding HasChannel}"
+                                   ToolTip="{i18n:T 修改当前通道独立保存的地址、密钥和模型，或新建独立通道}" />
+                        <ui:Button Margin="6,0,0,0"
+                                   Appearance="Danger"
+                                   Command="{Binding CancelPreparationCommand}"
+                                   Content="{i18n:T 终止准备}"
+                                   Visibility="{Binding IsPreparing, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                        <ui:ProgressRing Width="18"
+                                         Height="18"
+                                         Margin="8,0,0,0"
+                                         IsIndeterminate="True"
+                                         Visibility="{Binding IsPreparing, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                    </StackPanel>
+                </Grid>
+                <Separator Margin="-18,0" BorderThickness="0,1,0,0" />
+                <Grid Margin="16">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Grid.Column="0" Margin="0,0,16,0">
+                        <ui:TextBlock FontTypography="Body" Text="{i18n:T 保活间隔}" />
+                        <ui:TextBlock FontSize="11"
+                                      Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
+                                      Text="{i18n:T 空闲指定分钟后发送保活请求}"
+                                      TextWrapping="Wrap" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" Margin="0,0,36,0" VerticalAlignment="Center" Orientation="Horizontal">
+                        <ui:TextBox Width="56"
+                                    IsEnabled="{Binding KeepAliveEnabled}"
+                                    Text="{Binding KeepAliveMinutes, Mode=TwoWay}" />
+                        <TextBlock Margin="6,0,0,0" VerticalAlignment="Center" Text="{i18n:T 分钟}" />
+                    </StackPanel>
+                </Grid>
+                <Separator Margin="-18,0" BorderThickness="0,1,0,0" />
+                <Grid Margin="16">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Grid.Column="0" Margin="0,0,16,0">
+                        <ui:TextBlock FontTypography="Body" Text="{i18n:T 会话上限}" />
+                        <ui:TextBlock FontSize="11"
+                                      Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
+                                      Text="{i18n:T 超过该用量后清理后台会话并重新创建，不影响聊天记录}"
+                                      TextWrapping="Wrap" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" Margin="0,0,36,0" VerticalAlignment="Center" Orientation="Horizontal">
+                        <ui:NumberBox Width="120"
+                                      LargeChange="10000"
+                                      MaxDecimalPlaces="0"
+                                      Minimum="1"
+                                      SmallChange="1000"
+                                      SpinButtonPlacementMode="Compact"
+                                      IsEnabled="{Binding HasChannel}"
+                                      Value="{Binding ContextLimit, Mode=TwoWay}" />
+                        <TextBlock Margin="6,0,0,0" VerticalAlignment="Center" Text="token" />
+                    </StackPanel>
+                </Grid>
+                <Separator Margin="-18,0" BorderThickness="0,1,0,0" />
+                <Grid Margin="16">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <ui:TextBlock Grid.Column="0" Margin="0,0,16,0" FontTypography="Body" Text="{i18n:T 保活状态}" />
+                    <ui:TextBlock Grid.Column="1"
+                                  FontSize="11"
+                                  Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
+                                  Text="{Binding KeepAliveHint}"
+                                  TextWrapping="Wrap"
+                                  ToolTip="{Binding KeepAliveHintToolTip}" />
                 </Grid>
                 <Separator Margin="-18,0" BorderThickness="0,1,0,0" />
                 <Grid Margin="16">

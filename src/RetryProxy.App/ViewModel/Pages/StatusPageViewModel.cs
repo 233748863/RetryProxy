@@ -22,15 +22,11 @@ public sealed record ActiveRequestRow(string RequestId, string Attempt, string P
 
 public partial class StatusPageViewModel : ViewModel
 {
-    public const string KeepAliveCaption = "仅当前通道 · 后台 Java 问答 · 250 题随机抽取";
-
     private const string DateHelpBase = "按本机日期统计，午夜自动切换。请求按编号去重，重试单独计数；跨日仍未完成的请求计入新一天。\n处理中只显示当前实际请求；历史未完成表示日志没有成功或失败的结束记录，计入总请求，单独列出。\n首次升级按现有日志恢复，已被覆盖的旧日志无法补回，缺失用量保持未获取。";
 
     private static readonly TimeSpan CopiedLabelDuration = TimeSpan.FromMilliseconds(1600);
 
     private readonly WorkspaceService _workspaceService;
-    private readonly Dialogs _dialogs;
-    private bool _syncing;
     private int _copyVersion;
 
     private ProxyWorkspace Workspace => _workspaceService.Workspace;
@@ -45,10 +41,7 @@ public partial class StatusPageViewModel : ViewModel
     private string _versionText = $"v{Global.Version}";
 
     [ObservableProperty]
-    private ObservableCollection<PickerItem> _channels = [];
-
-    [ObservableProperty]
-    private PickerItem? _selectedChannel;
+    private string _selectedChannelLabel = string.Empty;
 
     [ObservableProperty]
     private bool _hasChannel;
@@ -61,30 +54,6 @@ public partial class StatusPageViewModel : ViewModel
 
     [ObservableProperty]
     private InfoBadgeSeverity _stateSeverity = InfoBadgeSeverity.Informational;
-
-    [ObservableProperty]
-    private Brush _stateBrush = Brushes.Gray;
-
-    [ObservableProperty]
-    private Brush _stateBackground = Brushes.Transparent;
-
-    [ObservableProperty]
-    private bool _isRouteActive;
-
-    [ObservableProperty]
-    private bool _keepAliveEnabled;
-
-    [ObservableProperty]
-    private string _keepAliveMinutes = string.Empty;
-
-    [ObservableProperty]
-    private double _contextLimit = ConfigDefaults.KeepaliveContextLimit;
-
-    [ObservableProperty]
-    private bool _isPreparing;
-
-    [ObservableProperty]
-    private string _prepareToolTip = string.Empty;
 
     [ObservableProperty]
     private string _hint = string.Empty;
@@ -184,10 +153,9 @@ public partial class StatusPageViewModel : ViewModel
 
     public string RateHelp => CacheText.RateHelp;
 
-    public StatusPageViewModel(WorkspaceService workspaceService, Dialogs dialogs)
+    public StatusPageViewModel(WorkspaceService workspaceService)
     {
         _workspaceService = workspaceService;
-        _dialogs = dialogs;
         _workspaceService.Refreshed += Refresh;
         _workspaceService.Tick += Refresh;
         Refresh();
@@ -209,21 +177,6 @@ public partial class StatusPageViewModel : ViewModel
         return Application.Current?.TryFindResource(key) as Brush ?? Brushes.Gray;
     }
 
-    private static SolidColorBrush Rgb(byte r, byte g, byte b, byte alpha = 255)
-    {
-        var brush = new SolidColorBrush(Color.FromArgb(alpha, r, g, b));
-        brush.Freeze();
-        return brush;
-    }
-
-    private static Color StateColor(ServiceState state) => state switch
-    {
-        ServiceState.Running => Color.FromRgb(34, 168, 122),
-        ServiceState.Starting or ServiceState.Stopping => Color.FromRgb(214, 152, 42),
-        ServiceState.Error => Color.FromRgb(219, 76, 86),
-        _ => Color.FromRgb(146, 156, 173),
-    };
-
     private static Brush RateBrush(double? rate) => rate switch
     {
         > 0.0 => ThemeBrush("SystemFillColorSuccessBrush"),
@@ -233,62 +186,35 @@ public partial class StatusPageViewModel : ViewModel
 
     private void Refresh()
     {
-        _syncing = true;
-        try
+        var running = Workspace.RunningCount();
+        RunningSummary = $"{running} / {Workspace.Config.Routes.Count} 个通道在运行";
+        RunningBrush = running > 0 ? ThemeBrush("SystemFillColorSuccessBrush") : ThemeBrush("TextFillColorSecondaryBrush");
+
+        var route = Workspace.SelectedRouteRef();
+        HasChannel = route is not null;
+        EmptyHint = "请在首页选择或创建通道";
+        SelectedChannelLabel = route is null ? string.Empty : $"{route.Name} · {route.ListenPort}";
+        var state = route is null ? ServiceState.Stopped : Workspace.RouteState(route.Id);
+        StateLabel = UiText.StateLabel(state);
+        StateSeverity = state switch
         {
-            var running = Workspace.RunningCount();
-            RunningSummary = $"{running} / {Workspace.Config.Routes.Count} 个通道在运行";
-            RunningBrush = running > 0 ? ThemeBrush("SystemFillColorSuccessBrush") : ThemeBrush("TextFillColorSecondaryBrush");
-
-            var channels = Workspace.Config.Routes
-                .Select(route => new PickerItem(route.Id, $"{route.Name} · {route.ListenPort} · {UiText.StateLabel(Workspace.RouteState(route.Id))}"))
-                .ToList();
-            if (Channels.Count != channels.Count || !Channels.Zip(channels).All(pair => pair.First == pair.Second))
-            {
-                Channels.Clear();
-                foreach (var item in channels)
-                {
-                    Channels.Add(item);
-                }
-            }
-
-            SelectedChannel = Channels.FirstOrDefault(item => item.Key == Workspace.SelectedRoute);
-            var route = Workspace.SelectedRouteRef();
-            HasChannel = route is not null;
-            EmptyHint = Workspace.SelectedProvider.Length > 0 ? "该服务商暂无通道，点击「＋ 新增通道」创建" : "请先新增服务商，再为它创建通道";
-            var state = route is null ? ServiceState.Stopped : Workspace.RouteState(route.Id);
-            StateLabel = UiText.StateLabel(state);
-            StateSeverity = state switch
-            {
-                ServiceState.Running => InfoBadgeSeverity.Success,
-                ServiceState.Starting or ServiceState.Stopping => InfoBadgeSeverity.Caution,
-                ServiceState.Error => InfoBadgeSeverity.Critical,
-                _ => InfoBadgeSeverity.Informational,
-            };
-            var color = StateColor(state);
-            StateBrush = Rgb(color.R, color.G, color.B);
-            StateBackground = Rgb(color.R, color.G, color.B, 36);
-            IsRouteActive = state is not (ServiceState.Stopped or ServiceState.Error);
-            if (route is null)
-            {
-                ClearRouteDetails();
-                return;
-            }
-
-            RefreshKeepAlive(route);
-            RefreshStatistics(route);
-        }
-        finally
+            ServiceState.Running => InfoBadgeSeverity.Success,
+            ServiceState.Starting or ServiceState.Stopping => InfoBadgeSeverity.Caution,
+            ServiceState.Error => InfoBadgeSeverity.Critical,
+            _ => InfoBadgeSeverity.Informational,
+        };
+        if (route is null)
         {
-            _syncing = false;
+            ClearRouteDetails();
+            return;
         }
+
+        RefreshKeepAlive(route);
+        RefreshStatistics(route);
     }
 
     private void ClearRouteDetails()
     {
-        KeepAliveEnabled = false;
-        KeepAliveMinutes = string.Empty;
-        IsPreparing = false;
         Hint = string.Empty;
         HintToolTip = null;
         LocalUrl = string.Empty;
@@ -299,16 +225,10 @@ public partial class StatusPageViewModel : ViewModel
 
     private void RefreshKeepAlive(ProxyRoute route)
     {
-        KeepAliveEnabled = route.KeepaliveEnabled;
-        KeepAliveMinutes = Workspace.KeepAliveMinutes;
-        ContextLimit = route.KeepaliveContextLimit;
         var snapshot = Workspace.RouteKeepAlives.TryGetValue(route.Id, out var watchdog) ? watchdog.Snapshot() : null;
-        IsPreparing = snapshot?.Preparing ?? false;
-        var configuration = snapshot?.WithKey == true ? "指定 Key 经本通道" : "本机默认配置";
-        PrepareToolTip = $"立即按当前配置（{configuration}）用本机 {route.ClientType.Label()} 发起后台问答，不弹窗。\n要换成默认配置或输入 Key，点右侧箭头。";
         Hint = Workspace.KeepAliveHint(route);
         HintToolTip = snapshot?.PreparationLastError is { } reason
-            ? $"最近一次准备未完成：{reason}\n将持续重试，可点击“终止准备”取消。"
+            ? $"最近一次准备未完成：{reason}\n将持续重试，可在首页点击“终止准备”取消。"
             : null;
     }
 
@@ -399,35 +319,6 @@ public partial class StatusPageViewModel : ViewModel
         BackoffText = $"{UiText.TrimFloat(route.BaseDelaySeconds)} – {UiText.TrimFloat(route.MaxDelaySeconds)} 秒";
     }
 
-    partial void OnSelectedChannelChanged(PickerItem? value)
-    {
-        if (_syncing || value is null || value.Key == Workspace.SelectedRoute)
-        {
-            return;
-        }
-
-        Workspace.SelectRouteAcrossProviders(value.Key);
-        _workspaceService.Flush();
-    }
-
-    partial void OnKeepAliveEnabledChanged(bool value) => ApplyKeepAlive();
-
-    partial void OnKeepAliveMinutesChanged(string value) => ApplyKeepAlive();
-
-    partial void OnContextLimitChanged(double value) => ApplyKeepAlive();
-
-    private void ApplyKeepAlive()
-    {
-        if (_syncing)
-        {
-            return;
-        }
-
-        var limit = double.IsFinite(ContextLimit) && ContextLimit >= 1 ? (long)Math.Round(ContextLimit) : 1;
-        Workspace.ApplyKeepAliveInput(KeepAliveEnabled, KeepAliveMinutes, limit);
-        _workspaceService.Flush();
-    }
-
     [RelayCommand]
     private void OnEnableAll()
     {
@@ -439,52 +330,6 @@ public partial class StatusPageViewModel : ViewModel
     private void OnDisableAll()
     {
         Workspace.StopAll();
-        _workspaceService.Flush();
-    }
-
-    [RelayCommand]
-    private void OnStartRoute()
-    {
-        if (Workspace.SelectedRouteRef() is { } route)
-        {
-            Workspace.StartRoute(route.Id);
-            _workspaceService.Flush();
-        }
-    }
-
-    [RelayCommand]
-    private void OnStopRoute()
-    {
-        if (Workspace.SelectedRouteRef() is { } route)
-        {
-            Workspace.StopRoute(route.Id);
-            _workspaceService.Flush();
-        }
-    }
-
-    [RelayCommand]
-    private void OnPrepare()
-    {
-        Workspace.PrepareSelectedRoute();
-        _workspaceService.Flush();
-    }
-
-    [RelayCommand]
-    private async Task OnChoosePrepare()
-    {
-        var state = Workspace.OpenPrepareDialog();
-        if (state is null)
-        {
-            return;
-        }
-
-        await _dialogs.ShowPrepareOptionsAsync(state);
-    }
-
-    [RelayCommand]
-    private void OnCancelPreparation()
-    {
-        Workspace.CancelSelectedPreparation();
         _workspaceService.Flush();
     }
 

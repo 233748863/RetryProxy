@@ -15,6 +15,7 @@
       ui:Design.Foreground="{DynamicResource TextFillColorPrimaryBrush}"
       FontFamily="{StaticResource TextThemeFontFamily}"
       Foreground="{DynamicResource TextFillColorPrimaryBrush}"
+      ScrollViewer.CanContentScroll="False"
       mc:Ignorable="d">
 
     <Page.Resources>
@@ -139,6 +140,7 @@
                          ItemsSource="{Binding Rows}"
                          ScrollViewer.CanContentScroll="True"
                          ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                         ScrollViewer.VerticalScrollBarVisibility="Auto"
                          SelectionMode="Single"
                          VirtualizingPanel.IsVirtualizing="True"
                          VirtualizingPanel.ScrollUnit="Pixel"

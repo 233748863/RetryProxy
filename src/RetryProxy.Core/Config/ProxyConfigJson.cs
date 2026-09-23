@@ -317,6 +317,12 @@ public static class ProxyConfigJson
             writer.WriteBoolean("keepalive_enabled", route.KeepaliveEnabled);
             WriteDouble(writer, "keepalive_idle_minutes", route.KeepaliveIdleMinutes);
             writer.WriteNumber("keepalive_context_limit", route.KeepaliveContextLimit);
+            if (route.DedicatedPreparation)
+            {
+                writer.WriteBoolean("dedicated_preparation", true);
+                writer.WriteString("protected_api_key", route.ProtectedApiKey);
+                writer.WriteString("preparation_model", route.PreparationModel);
+            }
             writer.WriteEndObject();
         }
 
@@ -404,6 +410,9 @@ public static class ProxyConfigJson
             KeepaliveEnabled = Boolean(value, "keepalive_enabled", false, $"{label} keepalive_enabled"),
             KeepaliveIdleMinutes = Number(value, "keepalive_idle_minutes", ConfigDefaults.KeepaliveIdleMinutes, $"{label} keepalive_idle_minutes"),
             KeepaliveContextLimit = ToLong(Integer(value, "keepalive_context_limit", (ulong)ConfigDefaults.KeepaliveContextLimit, $"{label} keepalive_context_limit"), $"{label} keepalive_context_limit必须是整数"),
+            DedicatedPreparation = Boolean(value, "dedicated_preparation", false, $"{label} dedicated_preparation"),
+            ProtectedApiKey = value.TryGetProperty("protected_api_key", out _) ? OptionalString(value, "protected_api_key", string.Empty) : null,
+            PreparationModel = value.TryGetProperty("preparation_model", out _) ? OptionalString(value, "preparation_model", string.Empty) : null,
         };
         route.NormalizeInPlace();
         return route;

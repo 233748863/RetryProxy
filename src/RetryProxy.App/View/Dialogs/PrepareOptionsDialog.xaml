@@ -3,6 +3,7 @@
                   xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
                   xmlns:i18n="clr-namespace:RetryProxy.Service.I18n"
                   xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+                  xmlns:behavior="clr-namespace:RetryProxy.View.Behavior"
                   Title="{i18n:T 一键准备}"
                   CloseButtonText="{i18n:T 取消}"
                   DefaultButton="Primary"
@@ -26,16 +27,21 @@
                       Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
                       TextWrapping="Wrap" />
 
+        <RadioButton x:Name="CurrentRadio"
+                     Margin="0,10,0,0"
+                     Checked="OnModeChanged"
+                     Content="{i18n:T 在当前通道独立准备，修改地址、密钥和模型}"
+                     GroupName="prepare-mode" />
         <RadioButton x:Name="SeparateRadio"
                      Margin="0,10,0,0"
                      Checked="OnModeChanged"
-                     Content="{i18n:T 单独准备另一个供应商，开新通道}"
+                     Content="{i18n:T 新建独立通道，单独准备供应商}"
                      GroupName="prepare-mode" />
         <StackPanel x:Name="SeparatePanel" Margin="28,2,0,0">
             <ui:TextBlock x:Name="SeparateHint"
                           Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
                           TextWrapping="Wrap" />
-            <ui:TextBlock Margin="0,8,0,4" Text="{i18n:T 目标服务商}" />
+            <ui:TextBlock x:Name="ProviderLabel" Margin="0,8,0,4" Text="{i18n:T 目标服务商}" />
             <ComboBox x:Name="ProviderBox"
                       HorizontalAlignment="Stretch"
                       DisplayMemberPath="Text"
@@ -47,6 +53,7 @@
                             TextChanged="OnFieldChanged" />
                 <ui:TextBlock Margin="0,8,0,4" Text="{i18n:T 服务商地址}" />
                 <ui:TextBox x:Name="NewProviderUrlBox"
+                            behavior:ClipboardInterceptor.EnableUrlPaste="True"
                             PlaceholderText="https://api.example.com"
                             TextChanged="OnFieldChanged" />
             </StackPanel>
@@ -55,7 +62,30 @@
                             PasswordChanged="OnFieldChanged"
                             PlaceholderText="sk-…"
                             RevealButtonEnabled="True"
-                            ToolTip="{i18n:T 仅在本窗口内显示，便于核对。}" />
+                            ToolTip="{i18n:T 密钥将加密保存于当前 Windows 用户配置，供本通道重启后继续使用。}" />
+            <ui:TextBlock Margin="0,8,0,4" Text="{i18n:T 准备模型}" />
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <ComboBox x:Name="ModelBox"
+                          Grid.Column="0"
+                          HorizontalAlignment="Stretch"
+                          IsEditable="True"
+                          IsTextSearchEnabled="False"
+                          SelectionChanged="OnModelChanged"
+                          ToolTip="{i18n:T 可输入或粘贴模型名称，也可获取后选择}" />
+                <ui:Button x:Name="FetchModelsButton"
+                           Grid.Column="1"
+                           Margin="8,0,0,0"
+                           Click="OnFetchModels"
+                           Content="{i18n:T 获取模型}" />
+            </Grid>
+            <ui:TextBlock x:Name="ModelsLoadingText"
+                          Margin="0,6,0,0"
+                          Text="{i18n:T 正在获取模型…}"
+                          Visibility="Collapsed" />
             <ui:TextBlock x:Name="PlanText"
                           Margin="0,8,0,0"
                           Foreground="{ui:ThemeResource TextFillColorSecondaryBrush}"

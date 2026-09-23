@@ -3,6 +3,7 @@
                   xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
                   xmlns:i18n="clr-namespace:RetryProxy.Service.I18n"
                   xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+                  xmlns:behavior="clr-namespace:RetryProxy.View.Behavior"
                   Title="{i18n:T 新增服务商}"
                   CloseButtonText="{i18n:T 取消}"
                   DefaultButton="Primary"
@@ -17,7 +18,9 @@
         <ui:TextBlock Margin="0,14,0,4" Text="{i18n:T 服务商名称}" />
         <ui:TextBox x:Name="NameBox" PlaceholderText="{i18n:T 例如 anyrouter.top}" />
         <ui:TextBlock Margin="0,10,0,4" Text="{i18n:T 上游基础地址}" />
-        <ui:TextBox x:Name="UrlBox" PlaceholderText="https://example.com" />
+        <ui:TextBox x:Name="UrlBox"
+                    behavior:ClipboardInterceptor.EnableUrlPaste="True"
+                    PlaceholderText="https://example.com" />
         <ui:TextBlock x:Name="ErrorText"
                       Margin="0,10,0,0"
                       Foreground="{ui:ThemeResource SystemFillColorCriticalBrush}"

@@ -624,7 +624,7 @@ public class WorkspaceTests
         var provider = app.OpenProviderEditor(null);
         provider.Name = "ALPHA";
         provider.Url = "https://other.example";
-        Assert.Equal("服务商名称或地址重复", app.CommitProvider(provider));
+        Assert.Equal("服务商名称重复", app.CommitProvider(provider));
         provider.Name = "delta";
         Assert.Null(app.CommitProvider(provider));
         Assert.Equal("delta", app.SelectedProvider);
@@ -646,6 +646,59 @@ public class WorkspaceTests
     }
 
     // ---------------------------------------------------------------- 一键准备
+
+    private static void SelectTestModel(PreparationDialogState dialog)
+    {
+        dialog.Models = new[] { "test-model" };
+        dialog.SelectedModel = "test-model";
+    }
+
+    [Fact]
+    public void LegacyRouteCanBeConfiguredInPlaceWithoutChangingSharedProvider()
+    {
+        using var fixture = new Fixture();
+        var app = fixture.App;
+        app.TestCliCommand = new CliCommand(Path.Combine(fixture.Directory, "missing-client.exe"));
+        app.RouteKeepAlives.Clear();
+        app.Services.Clear();
+        BindRouteToFreePort(app, "alpha-one");
+        app.Config.Routes.Single(route => route.Id == "alpha-one").Name = "alpha · Codex";
+        app.Config.Routes.Single(route => route.Id == "alpha-two").ClientType = ClientType.Codex;
+        app.RefreshServices();
+        app.SelectedProvider = "alpha";
+        app.SelectRoute("alpha-one");
+        app.Services["alpha-one"].Start(app.Config.RuntimeConfigFor("alpha-one"), TimeSpan.FromSeconds(5));
+
+        var dialog = app.OpenPrepareDialog()!;
+        Assert.Equal(PrepareMode.CurrentRoute, dialog.Mode);
+        dialog.Mode = PrepareMode.CurrentRoute;
+        dialog.NewProviderName = "alpha";
+        dialog.NewProviderUrl = "https://alpha.example";
+        dialog.ApiKey = "sk-legacy-upgrade";
+        dialog.SelectedModel = "legacy-model";
+        Assert.True(app.SubmitPrepareDialog(dialog));
+        Assert.Equal(3, app.Config.Routes.Count);
+        Assert.Equal(4, app.Config.Providers.Count);
+        Assert.Equal("alpha · 独立", app.Config.Routes.Single(route => route.Id == "alpha-one").ProviderName);
+        Assert.Equal("alpha", app.Config.Routes.Single(route => route.Id == "alpha-two").ProviderName);
+        Assert.Equal("https://alpha.example", app.Config.ProviderByName("alpha")!.BaseUrl);
+        Assert.Equal("https://alpha.example", app.Config.ProviderByName("alpha · 独立")!.BaseUrl);
+        Assert.Equal("legacy-model", app.RouteKeepAlives["alpha-one"].Snapshot().Model);
+        Assert.False(app.RouteKeepAlives["alpha-two"].Snapshot().WithKey);
+
+        var saved = ProxyConfigJson.ToCanonicalJson(app.Config);
+        Assert.DoesNotContain("sk-legacy-upgrade", saved);
+        var restored = new ProxyWorkspace(fixture.Logger, ProxyConfigJson.Parse(saved).Config, null);
+        restored.RefreshServices();
+        Assert.True(restored.RouteKeepAlives["alpha-one"].Snapshot().WithKey);
+        Assert.Equal("legacy-model", restored.RouteKeepAlives["alpha-one"].Snapshot().Model);
+        Assert.False(restored.RouteKeepAlives["alpha-two"].Snapshot().WithKey);
+
+        foreach (var service in app.Services.Values)
+        {
+            service.Stop(TimeSpan.FromSeconds(5));
+        }
+    }
 
     [Fact]
     public void PreparationRequiresARunningProviderChannel()
@@ -705,17 +758,32 @@ public class WorkspaceTests
         Assert.Null(app.Pending);
         Assert.False(origin.Snapshot().Preparing);
 
-        // 目标服务商 beta 已有同类型通道 beta-one：复用它并启动，Key 只经它转发。
-        Assert.Contains("已有的通道“beta-one”", app.PlanText(dialog));
+        // 地址相同也创建私有服务商与通道，原 beta-one 不受影响。
+        Assert.Contains("将新建独立通道", app.PlanText(dialog));
         dialog.ApiKey = " sk-test-secret ";
+        Assert.False(app.SubmitPrepareDialog(dialog));
+        Assert.Equal("请输入模型名称，或获取模型后选择一个用于准备", dialog.Error);
+        SelectTestModel(dialog);
+        dialog.SelectedModel = "   ";
+        Assert.False(app.SubmitPrepareDialog(dialog));
+        Assert.Equal("请输入模型名称，或获取模型后选择一个用于准备", dialog.Error);
+        dialog.SelectedModel = "test-model";
         Assert.True(app.SubmitPrepareDialog(dialog));
         Assert.Null(app.Notice);
-        Assert.Equal(3, app.Config.Routes.Count);
-        Assert.Equal("beta", app.SelectedProvider);
-        Assert.Equal("beta-one", app.SelectedRoute);
+        Assert.Equal(4, app.Config.Routes.Count);
+        Assert.Equal(4, app.Config.Providers.Count);
+        Assert.Equal("beta · 独立", app.SelectedProvider);
+        var dedicatedRoute = app.SelectedRouteRef()!;
+        Assert.Equal("beta · 独立", dedicatedRoute.ProviderName);
+        Assert.True(dedicatedRoute.DedicatedPreparation);
+        Assert.NotNull(dedicatedRoute.ProtectedApiKey);
+        Assert.NotEqual("sk-test-secret", dedicatedRoute.ProtectedApiKey);
+        Assert.Equal("test-model", dedicatedRoute.PreparationModel);
+        Assert.False(app.RouteKeepAlives["beta-one"].Snapshot().Preparing);
         Assert.NotNull(app.Pending);
-        WaitForPendingPreparation(app, "beta-one");
-        var separate = app.RouteKeepAlives["beta-one"];
+        Assert.Equal("test-model", app.Pending.Credential.Model);
+        WaitForPendingPreparation(app, dedicatedRoute.Id);
+        var separate = app.RouteKeepAlives[dedicatedRoute.Id];
         var snapshot = separate.Snapshot();
         Assert.True(snapshot.Preparing);
         Assert.True(snapshot.WithKey);
@@ -729,7 +797,7 @@ public class WorkspaceTests
         Assert.DoesNotContain(logs, line => line.Contains("sk-test-secret"));
         Assert.True(separate.CancelPreparation());
         Assert.True(app.PollPreparationEvents());
-        Assert.Equal("通道“beta-one”：准备已终止", app.Notice);
+        Assert.Equal($"通道“{dedicatedRoute.Name}”：准备已终止", app.Notice);
         app.Notice = null;
         // 终止后新通道仍记住这把 Key，状态文字随之显示。
         Assert.True(separate.Snapshot().WithKey);
@@ -745,24 +813,23 @@ public class WorkspaceTests
 
         // 新建服务商：地址与已有服务商不同则新增，并为它新建、启动一条同类型通道。
         dialog = app.OpenPrepareDialog()!;
-        Assert.Equal("beta-one", dialog.RouteId);
-        Assert.Equal(PrepareMode.Default, dialog.Mode);
+        Assert.Equal(dedicatedRoute.Id, dialog.RouteId);
+        Assert.Equal(PrepareMode.CurrentRoute, dialog.Mode);
         dialog.Mode = PrepareMode.SeparateProvider;
         dialog.Provider = null;
-        Assert.Equal("将新增该服务商，并为它新建、启动一条通道。", app.PlanText(dialog));
+        dialog.NewProviderName = string.Empty;
+        Assert.Equal("将为输入的服务商新建独立通道。", app.PlanText(dialog));
         dialog.NewProviderUrl = "https://gamma.example/";
         dialog.ApiKey = "sk-gamma-secret";
         Assert.False(app.SubmitPrepareDialog(dialog));
         Assert.Equal("请输入服务商名称", dialog.Error);
-        dialog.NewProviderName = "alpha";
-        Assert.False(app.SubmitPrepareDialog(dialog));
-        Assert.Contains("已存在但地址不同", dialog.Error);
         dialog.NewProviderName = "gamma";
+        dialog.SelectedModel = "  manual-model  ";
         Assert.True(app.SubmitPrepareDialog(dialog));
         Assert.Null(app.Notice);
-        Assert.Equal(4, app.Config.Providers.Count);
+        Assert.Equal(5, app.Config.Providers.Count);
         Assert.Equal("https://gamma.example", app.Config.ProviderByName("gamma")!.BaseUrl);
-        Assert.Equal(4, app.Config.Routes.Count);
+        Assert.Equal(5, app.Config.Routes.Count);
         var created = app.Config.Routes.Single(route => route.ProviderName == "gamma").Clone();
         Assert.Equal("gamma · Codex", created.Name);
         Assert.Equal(ClientType.Codex, created.ClientType);
@@ -770,6 +837,7 @@ public class WorkspaceTests
         Assert.DoesNotContain(app.Config.Routes, route => route.Id != created.Id && route.ListenPort == created.ListenPort);
         Assert.Equal("gamma", app.SelectedProvider);
         Assert.Equal(created.Id, app.SelectedRoute);
+        Assert.Equal("manual-model", app.Pending!.Credential.Model);
         WaitForPendingPreparation(app, created.Id);
         var gamma = app.RouteKeepAlives[created.Id];
         Assert.True(gamma.Snapshot().Preparing);
@@ -780,50 +848,53 @@ public class WorkspaceTests
         Assert.True(app.PollPreparationEvents());
         app.Notice = null;
 
-        // 同一个地址再准备一次：直接复用 gamma 和它的通道，不再新建。
+        // 同一条独立通道修改 URL、Key、模型：保持通道 ID，不更改其他通道的配置。
         dialog = app.OpenPrepareDialog()!;
-        dialog.Mode = PrepareMode.SeparateProvider;
-        dialog.Provider = null;
-        dialog.NewProviderName = "whatever";
-        dialog.NewProviderUrl = "https://gamma.example";
-        dialog.ApiKey = "sk-gamma-secret";
-        // 本通道就是 gamma 的通道时，会为它再开一条，不复用自己。
-        Assert.IsType<SeparateChannelPlan.Create>(app.SeparateChannelPlanFor(created, "gamma"));
-        app.SelectedProvider = "beta";
-        app.SelectRoute("beta-one");
-        Assert.Equal("beta-one", app.SelectedRoute);
-        var retarget = new PreparationDialogState
-        {
-            RouteId = "beta-one",
-            Mode = dialog.Mode,
-            Provider = dialog.Provider,
-            NewProviderName = dialog.NewProviderName,
-            NewProviderUrl = dialog.NewProviderUrl,
-            ApiKey = dialog.ApiKey,
-        };
-        Assert.True(app.SubmitPrepareDialog(retarget));
-        Assert.Equal(4, app.Config.Providers.Count);
-        Assert.Equal(4, app.Config.Routes.Count);
+        Assert.Equal(PrepareMode.CurrentRoute, dialog.Mode);
+        Assert.Equal("sk-gamma-secret", dialog.ApiKey);
+        Assert.Equal("manual-model", dialog.SelectedModel);
+        Assert.Equal("https://gamma.example", dialog.NewProviderUrl);
+        dialog.NewProviderUrl = "https://gamma-updated.example";
+        dialog.ApiKey = "sk-updated-secret";
+        dialog.SelectedModel = "edited-model";
+        Assert.True(app.SubmitPrepareDialog(dialog));
+        Assert.Equal(5, app.Config.Routes.Count);
+        Assert.Equal("https://gamma-updated.example", app.Config.ProviderByName("gamma")!.BaseUrl);
+        Assert.Equal("https://beta.example", app.Config.ProviderByName("beta")!.BaseUrl);
         Assert.Equal(created.Id, app.SelectedRoute);
         WaitForPendingPreparation(app, created.Id);
         Assert.True(gamma.Snapshot().Preparing);
+        Assert.False(separate.Snapshot().Preparing);
         Assert.True(gamma.CancelPreparation());
         Assert.True(app.PollPreparationEvents());
         app.Notice = null;
 
-        // 箭头弹窗选默认提交后，新通道切回本机 CLI 配置。
+        // 重启后的新工作区能从加密配置恢复该通道的密钥与模型。
+        var saved = ProxyConfigJson.ToCanonicalJson(app.Config);
+        Assert.DoesNotContain("sk-updated-secret", saved);
+        Assert.DoesNotContain("sk-gamma-secret", saved);
+        var restored = new ProxyWorkspace(fixture.Logger, ProxyConfigJson.Parse(saved).Config, null);
+        restored.TestCliCommand = app.TestCliCommand;
+        restored.RefreshServices();
+        Assert.True(restored.RouteKeepAlives[created.Id].Snapshot().WithKey);
+        Assert.Equal("edited-model", restored.RouteKeepAlives[created.Id].Snapshot().Model);
+        Assert.True(restored.RouteKeepAlives[dedicatedRoute.Id].Snapshot().WithKey);
+        Assert.Equal("test-model", restored.RouteKeepAlives[dedicatedRoute.Id].Snapshot().Model);
+
+        // 选回默认准备会清除当前通道保存的密钥；其他独立通道仍保持自己的密钥。
         dialog = app.OpenPrepareDialog()!;
-        Assert.Equal(PrepareMode.Default, dialog.Mode);
+        dialog.Mode = PrepareMode.Default;
         Assert.True(app.SubmitPrepareDialog(dialog));
         snapshot = gamma.Snapshot();
         Assert.True(snapshot.Preparing);
         Assert.False(snapshot.WithKey);
-        Assert.Contains("本机默认配置", app.KeepAliveHint(created));
+        Assert.False(app.SelectedRouteRef()!.DedicatedPreparation);
+        Assert.True(separate.Snapshot().WithKey);
         Assert.True(gamma.CancelPreparation());
         Assert.True(app.PollPreparationEvents());
         app.Notice = null;
         logs = fixture.DrainLogs();
-        Assert.DoesNotContain(logs, line => line.Contains("sk-test-secret") || line.Contains("sk-gamma-secret"));
+        Assert.DoesNotContain(logs, line => line.Contains("sk-test-secret") || line.Contains("sk-gamma-secret") || line.Contains("sk-updated-secret"));
         foreach (var service in app.Services.Values)
         {
             service.Stop(TimeSpan.FromSeconds(5));

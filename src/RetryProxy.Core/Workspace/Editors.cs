@@ -1,3 +1,5 @@
+using System;
+using System.Collections.Generic;
 using RetryProxy.Core.Cli;
 using RetryProxy.Core.Config;
 
@@ -50,6 +52,7 @@ public enum PrepareMode
 {
     Default,
     SeparateProvider,
+    CurrentRoute,
 }
 
 /// <summary>“一键准备”选项窗的状态。</summary>
@@ -67,6 +70,16 @@ public sealed class PreparationDialogState
     public string NewProviderUrl { get; set; } = string.Empty;
 
     public string ApiKey { get; set; } = string.Empty;
+
+    public IReadOnlyList<string> Models { get; set; } = Array.Empty<string>();
+
+    public string? SelectedModel { get; set; }
+
+    public void ClearModels()
+    {
+        Models = Array.Empty<string>();
+        SelectedModel = null;
+    }
 
     public bool ShowKey { get; set; }
 

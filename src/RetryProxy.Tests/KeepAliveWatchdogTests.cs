@@ -546,6 +546,26 @@ public class KeepAliveWatchdogTests
     }
 
     [Fact]
+    public void SwitchingOnlyTheSelectedModelStartsANewSession()
+    {
+        var (watchdog, service) = Running(false);
+        using var _ = service;
+        var firstCredential = CliCredential.Create("sk-test-secret", "http://127.0.0.1:18081", "model-one");
+        watchdog.RequestPreparationWith(firstCredential);
+        var first = watchdog.BeginDueProbe()!;
+        var oldSession = first.SessionId;
+        Assert.NotNull(first.Complete(null, 10));
+        first.Dispose();
+        watchdog.TakePreparationResult();
+
+        var nextCredential = CliCredential.Create("sk-test-secret", "http://127.0.0.1:18081", "model-two");
+        watchdog.RequestPreparationWith(nextCredential);
+        var next = watchdog.BeginDueProbe()!;
+        Assert.NotEqual(oldSession, next.SessionId);
+        Assert.Equal(nextCredential, next.Credential);
+    }
+
+    [Fact]
     public void SuppliedKeyPreparationDoesNotReuseAnInflightDefaultProbe()
     {
         var (watchdog, service) = Running(true);

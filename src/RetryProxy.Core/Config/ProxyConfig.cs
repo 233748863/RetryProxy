@@ -281,7 +281,6 @@ public sealed class ProxyConfig : IEquatable<ProxyConfig>
             string.Empty);
 
         var providerNames = new HashSet<string>();
-        var providerUrls = new HashSet<string>();
         foreach (var provider in Providers)
         {
             provider.Validate();
@@ -290,10 +289,6 @@ public sealed class ProxyConfig : IEquatable<ProxyConfig>
                 throw new ConfigException($"服务商名称重复：{provider.Name}");
             }
 
-            if (!providerUrls.Add(provider.BaseUrl))
-            {
-                throw new ConfigException($"服务商地址重复：{provider.BaseUrl}");
-            }
         }
 
         var routeIds = new HashSet<string>();

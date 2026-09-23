@@ -19,7 +19,7 @@
 
     <StackPanel Margin="{StaticResource PagePadding}">
         <TextBlock Margin="0,0,0,12"
-                   FontSize="18"
+                   FontSize="16"
                    FontWeight="SemiBold"
                    Text="{i18n:T 软件设置}" />
 

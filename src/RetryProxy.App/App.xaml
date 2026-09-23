@@ -3,6 +3,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:behavior="clr-namespace:RetryProxy.View.Behavior"
              xmlns:conv="clr-namespace:RetryProxy.View.Converters"
+             xmlns:sys="clr-namespace:System;assembly=System.Runtime"
              xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
              xmlns:vio="http://schemas.lepo.co/wpfui/2022/xaml/violeta">
     <Application.Resources>
@@ -17,6 +18,39 @@
             <!-- ===== 字体 ===== -->
             <FontFamily x:Key="TextThemeFontFamily">/Resources/Fonts/MiSans-Regular.ttf#MiSans</FontFamily>
             <FontFamily x:Key="DigitalThemeFontFamily">/Resources/Fonts/deluge-led.ttf#Deluge LED</FontFamily>
+
+            <!-- ===== 全局字号：整体比 WPF-UI 默认小一档（控件 14→12，正文 14→13，标题同比缩小） ===== -->
+            <sys:Double x:Key="ControlContentThemeFontSize">12</sys:Double>
+            <Style x:Key="CaptionTextBlockStyle" TargetType="{x:Type TextBlock}">
+                <Setter Property="FontSize" Value="11" />
+            </Style>
+            <Style x:Key="BodyTextBlockStyle" TargetType="{x:Type TextBlock}">
+                <Setter Property="FontSize" Value="13" />
+            </Style>
+            <Style x:Key="BodyStrongTextBlockStyle" TargetType="{x:Type TextBlock}">
+                <Setter Property="FontSize" Value="13" />
+                <Setter Property="FontWeight" Value="SemiBold" />
+            </Style>
+            <Style x:Key="SubtitleTextBlockStyle" TargetType="{x:Type TextBlock}">
+                <Setter Property="FontSize" Value="17" />
+                <Setter Property="FontWeight" Value="SemiBold" />
+            </Style>
+            <Style x:Key="TitleTextBlockStyle" TargetType="{x:Type TextBlock}">
+                <Setter Property="FontSize" Value="22" />
+                <Setter Property="FontWeight" Value="SemiBold" />
+            </Style>
+            <Style x:Key="TitleLargeTextBlockStyle" TargetType="{x:Type TextBlock}">
+                <Setter Property="FontSize" Value="32" />
+                <Setter Property="FontWeight" Value="SemiBold" />
+            </Style>
+            <Style x:Key="DisplayTextBlockStyle" TargetType="{x:Type TextBlock}">
+                <Setter Property="FontSize" Value="54" />
+                <Setter Property="FontWeight" Value="SemiBold" />
+            </Style>
+            <!--  左侧导航项：库内样式用 StaticResource 取字号，令牌覆盖不到，单独压一档  -->
+            <Style BasedOn="{StaticResource {x:Type ui:NavigationViewItem}}" TargetType="{x:Type ui:NavigationViewItem}">
+                <Setter Property="FontSize" Value="13" />
+            </Style>
 
             <!-- ===== 设计令牌 ===== -->
             <CornerRadius x:Key="ControlCornerRadius">6</CornerRadius>
@@ -46,10 +80,10 @@
             <Style x:Key="ChipButton"
                    BasedOn="{StaticResource {x:Type ui:Button}}"
                    TargetType="ui:Button">
-                <Setter Property="Padding" Value="10,3" />
-                <Setter Property="Margin" Value="4,0,0,0" />
+                <Setter Property="Padding" Value="9,2" />
+                <Setter Property="Margin" Value="6,0,0,0" />
                 <Setter Property="FontSize" Value="12" />
-                <Setter Property="CornerRadius" Value="12" />
+                <Setter Property="CornerRadius" Value="11" />
             </Style>
         </ResourceDictionary>
     </Application.Resources>

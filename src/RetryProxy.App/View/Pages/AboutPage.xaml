@@ -19,7 +19,7 @@
     <ScrollViewer VerticalScrollBarVisibility="Auto">
         <StackPanel Margin="{StaticResource PagePadding}">
             <TextBlock Margin="0,0,0,12"
-                       FontSize="18"
+                       FontSize="16"
                        FontWeight="SemiBold"
                        Text="{i18n:T 关于}" />
 
@@ -42,22 +42,6 @@
                 <ui:Button Command="{Binding OpenUrlCommand}"
                            CommandParameter="{x:Static pages:AboutPageViewModel.RepositoryUrl}"
                            Content="{i18n:T 项目主页}"
-                           Icon="{ui:SymbolIcon Open24}" />
-            </ui:CardControl>
-
-            <!--  许可证  -->
-            <ui:CardControl Margin="0,0,0,12" Icon="{ui:SymbolIcon Certificate24}">
-                <ui:CardControl.Header>
-                    <StackPanel>
-                        <ui:TextBlock FontTypography="Body" Text="{i18n:T 许可证：GPL-3.0}" />
-                        <ui:TextBlock Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
-                                      Text="{Binding LicenseText}"
-                                      TextWrapping="Wrap" />
-                    </StackPanel>
-                </ui:CardControl.Header>
-                <ui:Button Command="{Binding OpenUrlCommand}"
-                           CommandParameter="{x:Static pages:AboutPageViewModel.LicenseUrl}"
-                           Content="{i18n:T 许可证全文}"
                            Icon="{ui:SymbolIcon Open24}" />
             </ui:CardControl>
 

@@ -33,77 +33,96 @@
         </Style>
     </Page.Resources>
 
-    <Grid Margin="42,16,42,16">
+    <Grid Margin="48,20,48,20">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
-        <!--  头部  -->
-        <Grid Grid.Row="0" Margin="0,0,0,8">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="Auto" />
-            </Grid.ColumnDefinitions>
-            <WrapPanel Grid.Column="0" VerticalAlignment="Center">
-                <TextBlock VerticalAlignment="Center"
-                           FontSize="14"
-                           FontWeight="SemiBold"
-                           Text="{i18n:T 运行日志}" />
-                <TextBlock Margin="8,0,4,0"
-                           VerticalAlignment="Center"
-                           FontSize="12"
-                           Foreground="{DynamicResource TextFillColorTertiaryBrush}"
-                           Text="{Binding Counter}" />
-                <ui:Button Appearance="{Binding IsAll, Converter={StaticResource BooleanToChipAppearanceConverter}}"
-                           Command="{Binding SetFilterCommand}"
-                           CommandParameter="all"
-                           Content="{i18n:T 全部}"
-                           Style="{StaticResource ChipButton}" />
-                <ui:Button Appearance="{Binding IsInfo, Converter={StaticResource BooleanToChipAppearanceConverter}}"
-                           Command="{Binding SetFilterCommand}"
-                           CommandParameter="info"
-                           Content="{i18n:T 信息}"
-                           Style="{StaticResource ChipButton}" />
-                <ui:Button Appearance="{Binding IsWarning, Converter={StaticResource BooleanToChipAppearanceConverter}}"
-                           Command="{Binding SetFilterCommand}"
-                           CommandParameter="warning"
-                           Content="{i18n:T 警告}"
-                           Style="{StaticResource ChipButton}" />
-                <ui:Button Appearance="{Binding IsError, Converter={StaticResource BooleanToChipAppearanceConverter}}"
-                           Command="{Binding SetFilterCommand}"
-                           CommandParameter="error"
-                           Content="{i18n:T 错误}"
-                           Style="{StaticResource ChipButton}" />
-                <ui:Button Appearance="{Binding OnlySelected, Converter={StaticResource BooleanToChipAppearanceConverter}}"
-                           Command="{Binding ToggleOnlySelectedCommand}"
-                           Content="{Binding OnlySelectedLabel}"
-                           Style="{StaticResource ChipButton}"
-                           Visibility="{Binding HasSelectedRoute, Converter={StaticResource BooleanToVisibilityConverter}}" />
-            </WrapPanel>
-            <StackPanel Grid.Column="1"
-                        VerticalAlignment="Center"
-                        Orientation="Horizontal">
-                <ui:Button Command="{Binding OpenDirectoryCommand}"
-                           Content="{i18n:T 目录}"
-                           Icon="{ui:SymbolIcon FolderOpen24}"
-                           Style="{StaticResource ChipButton}" />
-                <ui:Button Command="{Binding ClearCommand}"
-                           Content="{i18n:T 清空}"
-                           Icon="{ui:SymbolIcon Broom24}"
-                           Style="{StaticResource ChipButton}" />
-                <CheckBox Margin="8,0,0,0"
-                          VerticalAlignment="Center"
-                          Content="{i18n:T 自动滚动}"
-                          IsChecked="{Binding AutoScroll, Mode=TwoWay}"
-                          ToolTip="{Binding AutoScrollToolTip}" />
-                <ui:TextBox Width="200"
-                            Margin="8,0,0,0"
+        <!--  头部：第一行 标题 + 操作，第二行 过滤 + 搜索  -->
+        <StackPanel Grid.Row="0" Margin="0,0,0,10">
+            <Grid Margin="0,0,0,10">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <StackPanel Grid.Column="0"
+                            VerticalAlignment="Center"
+                            Orientation="Horizontal">
+                    <TextBlock VerticalAlignment="Center"
+                               FontSize="16"
+                               FontWeight="SemiBold"
+                               Text="{i18n:T 运行日志}" />
+                    <TextBlock Margin="8,2,0,0"
+                               VerticalAlignment="Center"
+                               Foreground="{DynamicResource TextFillColorTertiaryBrush}"
+                               Text="{Binding Counter}" />
+                </StackPanel>
+                <StackPanel Grid.Column="1"
+                            VerticalAlignment="Center"
+                            Orientation="Horizontal">
+                    <CheckBox Margin="0,0,12,0"
+                              VerticalAlignment="Center"
+                              Content="{i18n:T 自动滚动}"
+                              IsChecked="{Binding AutoScroll, Mode=TwoWay}"
+                              ToolTip="{Binding AutoScrollToolTip}" />
+                    <ui:Button Command="{Binding OpenDirectoryCommand}"
+                               Content="{i18n:T 打开目录}"
+                               Icon="{ui:SymbolIcon FolderOpen24}" />
+                    <ui:Button Margin="8,0,0,0"
+                               Command="{Binding ClearCommand}"
+                               Content="{i18n:T 清空}"
+                               Icon="{ui:SymbolIcon Broom24}" />
+                </StackPanel>
+            </Grid>
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <StackPanel Grid.Column="0"
+                            VerticalAlignment="Center"
+                            Orientation="Horizontal">
+                    <ui:Button Margin="0"
+                               Appearance="{Binding IsAll, Converter={StaticResource BooleanToChipAppearanceConverter}}"
+                               Command="{Binding SetFilterCommand}"
+                               CommandParameter="all"
+                               Content="{i18n:T 全部}"
+                               Style="{StaticResource ChipButton}" />
+                    <ui:Button Appearance="{Binding IsInfo, Converter={StaticResource BooleanToChipAppearanceConverter}}"
+                               Command="{Binding SetFilterCommand}"
+                               CommandParameter="info"
+                               Content="{i18n:T 信息}"
+                               Style="{StaticResource ChipButton}" />
+                    <ui:Button Appearance="{Binding IsWarning, Converter={StaticResource BooleanToChipAppearanceConverter}}"
+                               Command="{Binding SetFilterCommand}"
+                               CommandParameter="warning"
+                               Content="{i18n:T 警告}"
+                               Style="{StaticResource ChipButton}" />
+                    <ui:Button Appearance="{Binding IsError, Converter={StaticResource BooleanToChipAppearanceConverter}}"
+                               Command="{Binding SetFilterCommand}"
+                               CommandParameter="error"
+                               Content="{i18n:T 错误}"
+                               Style="{StaticResource ChipButton}" />
+                    <Border Width="1"
+                            Height="16"
+                            Margin="10,0,6,0"
+                            VerticalAlignment="Center"
+                            Background="{DynamicResource ControlStrokeColorDefaultBrush}"
+                            Visibility="{Binding HasSelectedRoute, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                    <ui:Button Appearance="{Binding OnlySelected, Converter={StaticResource BooleanToChipAppearanceConverter}}"
+                               Command="{Binding ToggleOnlySelectedCommand}"
+                               Content="{Binding OnlySelectedLabel}"
+                               Style="{StaticResource ChipButton}"
+                               Visibility="{Binding HasSelectedRoute, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                </StackPanel>
+                <ui:TextBox Grid.Column="1"
+                            Width="220"
                             Icon="{ui:SymbolIcon Search24}"
                             PlaceholderText="{i18n:T 搜索关键字 / 请求 ID}"
                             Text="{Binding Query, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged, Delay=200}" />
-            </StackPanel>
-        </Grid>
+            </Grid>
+        </StackPanel>
 
         <!--  日志列表  -->
         <Border Grid.Row="1"

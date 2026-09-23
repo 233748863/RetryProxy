@@ -5,7 +5,6 @@ using RetryProxy.Core.Metrics;
 using RetryProxy.Core.Service;
 using RetryProxy.Core.Workspace;
 using RetryProxy.Service;
-using RetryProxy.View.Pages;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
@@ -14,6 +13,7 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Media;
 using Wpf.Ui;
+using Wpf.Ui.Controls;
 
 namespace RetryProxy.ViewModel.Pages;
 
@@ -30,7 +30,6 @@ public partial class StatusPageViewModel : ViewModel
 
     private readonly WorkspaceService _workspaceService;
     private readonly Dialogs _dialogs;
-    private readonly INavigationService _navigation;
     private bool _syncing;
     private int _copyVersion;
 
@@ -59,6 +58,9 @@ public partial class StatusPageViewModel : ViewModel
 
     [ObservableProperty]
     private string _stateLabel = string.Empty;
+
+    [ObservableProperty]
+    private InfoBadgeSeverity _stateSeverity = InfoBadgeSeverity.Informational;
 
     [ObservableProperty]
     private Brush _stateBrush = Brushes.Gray;
@@ -182,11 +184,10 @@ public partial class StatusPageViewModel : ViewModel
 
     public string RateHelp => CacheText.RateHelp;
 
-    public StatusPageViewModel(WorkspaceService workspaceService, Dialogs dialogs, INavigationService navigation)
+    public StatusPageViewModel(WorkspaceService workspaceService, Dialogs dialogs)
     {
         _workspaceService = workspaceService;
         _dialogs = dialogs;
-        _navigation = navigation;
         _workspaceService.Refreshed += Refresh;
         _workspaceService.Tick += Refresh;
         Refresh();
@@ -257,6 +258,13 @@ public partial class StatusPageViewModel : ViewModel
             EmptyHint = Workspace.SelectedProvider.Length > 0 ? "该服务商暂无通道，点击「＋ 新增通道」创建" : "请先新增服务商，再为它创建通道";
             var state = route is null ? ServiceState.Stopped : Workspace.RouteState(route.Id);
             StateLabel = UiText.StateLabel(state);
+            StateSeverity = state switch
+            {
+                ServiceState.Running => InfoBadgeSeverity.Success,
+                ServiceState.Starting or ServiceState.Stopping => InfoBadgeSeverity.Caution,
+                ServiceState.Error => InfoBadgeSeverity.Critical,
+                _ => InfoBadgeSeverity.Informational,
+            };
             var color = StateColor(state);
             StateBrush = Rgb(color.R, color.G, color.B);
             StateBackground = Rgb(color.R, color.G, color.B, 36);
@@ -498,11 +506,5 @@ public partial class StatusPageViewModel : ViewModel
             CopyLabel = "本地监听";
             CopyLabelBrush = ThemeBrush("TextFillColorSecondaryBrush");
         }
-    }
-
-    [RelayCommand]
-    private void OnOpenCacheDetails()
-    {
-        _navigation.Navigate(typeof(CachePage));
     }
 }

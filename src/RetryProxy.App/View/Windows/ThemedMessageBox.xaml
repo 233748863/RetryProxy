@@ -58,7 +58,7 @@
                 <ui:TextBlock x:Name="MessageTextBlock"
                               TextAlignment="Left"
                               TextWrapping="Wrap"
-                              FontSize="14"
+                              FontSize="13"
                               VerticalAlignment="Top"
                               Foreground="{DynamicResource TextFillColorPrimaryBrush}" />
             </ScrollViewer>

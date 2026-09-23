@@ -46,7 +46,7 @@
                 </Grid.ColumnDefinitions>
                 <TextBlock Grid.Column="0"
                            VerticalAlignment="Center"
-                           FontSize="18"
+                           FontSize="16"
                            FontWeight="SemiBold"
                            Text="{Binding Title}" />
                 <ComboBox Grid.Column="1"

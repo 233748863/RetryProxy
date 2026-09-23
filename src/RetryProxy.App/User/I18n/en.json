@@ -99,8 +99,6 @@
   "今日缓存命中": "Cache hits today",
   "最近一次成功": "Latest success",
   "完全未命中": "Zero hits",
-  "明细": "Details",
-  "在缓存明细页查看": "Open the cache details page",
   "最大重试": "Max retries",
   "单次 / 总等待": "Attempt / total wait",
   "退避间隔": "Backoff",
@@ -132,8 +130,6 @@
   "运行日志 retry-proxy.log 所在目录": "Folder containing retry-proxy.log",
   "每个通道一个子目录，按天保存 jsonl 统计记录": "One sub-folder per channel, one jsonl file per day",
   "项目主页": "Project page",
-  "许可证：GPL-3.0": "License: GPL-3.0",
-  "许可证全文": "Full license text",
   "依赖致谢": "Acknowledgements",
   "感谢以下开源项目": "Thanks to these open-source projects",
   "打开": "Open"

@@ -26,7 +26,7 @@
             <Setter Property="Margin" Value="0,0,8,0" />
         </Style>
         <Style x:Key="TileValue" TargetType="TextBlock">
-            <Setter Property="FontSize" Value="18" />
+            <Setter Property="FontSize" Value="16" />
             <Setter Property="FontWeight" Value="SemiBold" />
             <Setter Property="HorizontalAlignment" Value="Center" />
         </Style>
@@ -45,7 +45,7 @@
     <ScrollViewer VerticalScrollBarVisibility="Auto">
         <StackPanel Margin="{StaticResource PagePadding}">
             <TextBlock Margin="0,0,0,12"
-                       FontSize="18"
+                       FontSize="16"
                        FontWeight="SemiBold"
                        Text="{i18n:T 运行状态}" />
 
@@ -109,24 +109,11 @@
                                       IsEnabled="{Binding HasChannel}"
                                       ItemsSource="{Binding Channels, Mode=OneWay}"
                                       SelectedItem="{Binding SelectedChannel, Mode=TwoWay}" />
-                            <Border Margin="10,0,0,0"
-                                    Padding="8,2"
-                                    VerticalAlignment="Center"
-                                    Background="{Binding StateBackground}"
-                                    CornerRadius="20"
-                                    Visibility="{Binding HasChannel, Converter={StaticResource BooleanToVisibilityConverter}}">
-                                <StackPanel Orientation="Horizontal">
-                                    <Ellipse Width="6"
-                                             Height="6"
-                                             Margin="0,0,4,0"
-                                             VerticalAlignment="Center"
-                                             Fill="{Binding StateBrush}" />
-                                    <TextBlock VerticalAlignment="Center"
-                                               FontSize="11"
-                                               Foreground="{Binding StateBrush}"
-                                               Text="{Binding StateLabel}" />
-                                </StackPanel>
-                            </Border>
+                            <ui:InfoBadge Margin="10,0,0,0"
+                                          VerticalAlignment="Center"
+                                          Severity="{Binding StateSeverity}"
+                                          Value="{Binding StateLabel}"
+                                          Visibility="{Binding HasChannel, Converter={StaticResource BooleanToVisibilityConverter}}" />
                             <ui:Button Margin="10,0,0,0"
                                        Appearance="Primary"
                                        Command="{Binding StartRouteCommand}"
@@ -143,90 +130,146 @@
                 </ui:CardControl.Header>
             </ui:CardControl>
 
-            <!--  保活与统计  -->
+            <!--  保活设置：与首页折叠卡一致的“标题 + 说明 | 控件”分行样式  -->
+            <ui:Card Margin="0,0,0,12"
+                     Padding="0"
+                     IsEnabled="{Binding HasChannel}">
+                <StackPanel>
+                    <Grid Margin="14,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0"
+                                    Margin="0,0,16,0"
+                                    VerticalAlignment="Center">
+                            <ui:TextBlock FontTypography="Body" Text="{i18n:T 本通道保活}" />
+                            <ui:TextBlock FontSize="11"
+                                          Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
+                                          Text="{i18n:T 空闲超过设定分钟数后自动发送保活请求，避免上游会话过期}"
+                                          TextWrapping="Wrap" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="1"
+                                    VerticalAlignment="Center"
+                                    Orientation="Horizontal">
+                            <ui:ToggleSwitch AutomationProperties.Name="{i18n:T 本通道保活}"
+                                             IsChecked="{Binding KeepAliveEnabled, Mode=TwoWay}"
+                                             ToolTip="{Binding Hint}" />
+                            <ui:TextBox Width="56"
+                                        Margin="10,0,4,0"
+                                        AutomationProperties.Name="{i18n:T 保活间隔分钟}"
+                                        IsEnabled="{Binding KeepAliveEnabled}"
+                                        Text="{Binding KeepAliveMinutes, Mode=TwoWay}"
+                                        ToolTip="{Binding Hint}" />
+                            <TextBlock VerticalAlignment="Center" Text="{i18n:T 分钟}" />
+                        </StackPanel>
+                    </Grid>
+                    <Separator BorderThickness="0,1,0,0" />
+                    <Grid Margin="14,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0"
+                                    Margin="0,0,16,0"
+                                    VerticalAlignment="Center">
+                            <ui:TextBlock FontTypography="Body" Text="{i18n:T 会话上限}" />
+                            <ui:TextBlock FontSize="11"
+                                          Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
+                                          Text="{i18n:T 超过该用量后清理后台会话并重新创建，不影响您的聊天记录}"
+                                          TextWrapping="Wrap" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="1"
+                                    VerticalAlignment="Center"
+                                    Orientation="Horizontal">
+                            <ui:NumberBox Width="120"
+                                          LargeChange="10000"
+                                          MaxDecimalPlaces="0"
+                                          Minimum="1"
+                                          SmallChange="1000"
+                                          SpinButtonPlacementMode="Compact"
+                                          ToolTip="{i18n:T 仅作用于当前通道；超过该用量后清理后台会话，下轮重新创建，不会清理您的聊天记录。}"
+                                          Value="{Binding ContextLimit, Mode=TwoWay}" />
+                            <TextBlock Margin="6,0,0,0"
+                                       VerticalAlignment="Center"
+                                       Text="token" />
+                        </StackPanel>
+                    </Grid>
+                    <Separator BorderThickness="0,1,0,0" />
+                    <Grid Margin="14,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0"
+                                    Margin="0,0,16,0"
+                                    VerticalAlignment="Center">
+                            <ui:TextBlock FontTypography="Body" Text="{i18n:T 一键准备}" />
+                            <ui:TextBlock FontSize="11"
+                                          Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
+                                          Text="{i18n:T 仅当前通道 · 后台 Java 问答 · 250 题随机抽取}"
+                                          TextWrapping="Wrap" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="1"
+                                    VerticalAlignment="Center"
+                                    Orientation="Horizontal"
+                                    Visibility="{Binding IsPreparing, Converter={StaticResource BooleanToVisibilityRevertConverter}}">
+                            <ui:Button Height="28"
+                                       Appearance="Primary"
+                                       Command="{Binding PrepareCommand}"
+                                       Content="{i18n:T 一键准备}"
+                                       CornerRadius="4,0,0,4"
+                                       ToolTip="{Binding PrepareToolTip}" />
+                            <ui:Button Height="28"
+                                       Margin="-1,0,0,0"
+                                       Padding="7,0,8,0"
+                                       Appearance="Primary"
+                                       Command="{Binding ChoosePrepareCommand}"
+                                       CornerRadius="0,4,4,0"
+                                       Icon="{ui:SymbolIcon ChevronDown16}"
+                                       ToolTip="{i18n:T 选择准备方式：本通道沿用本机默认配置，或选定另一个供应商、输入其 Key，开一条新通道单独准备，不影响本通道。该选择同时决定之后自动保活使用的配置。}" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="1"
+                                    VerticalAlignment="Center"
+                                    Orientation="Horizontal"
+                                    Visibility="{Binding IsPreparing, Converter={StaticResource BooleanToVisibilityConverter}}">
+                            <ui:Button Appearance="Danger"
+                                       Command="{Binding CancelPreparationCommand}"
+                                       Content="{i18n:T 终止准备}"
+                                       ToolTip="{i18n:T 终止当前通道的本次准备和后续重试。}" />
+                            <ui:ProgressRing Width="18"
+                                             Height="18"
+                                             Margin="8,0,0,0"
+                                             IsIndeterminate="True" />
+                        </StackPanel>
+                    </Grid>
+                    <Separator BorderThickness="0,1,0,0" />
+                    <Grid Margin="14,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <ui:TextBlock Grid.Column="0"
+                                      Margin="0,0,16,0"
+                                      VerticalAlignment="Top"
+                                      FontTypography="Body"
+                                      Text="{i18n:T 保活状态}" />
+                        <ui:TextBlock Grid.Column="1"
+                                      VerticalAlignment="Center"
+                                      FontSize="11"
+                                      Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
+                                      Text="{Binding Hint}"
+                                      TextWrapping="Wrap"
+                                      ToolTip="{Binding HintToolTip}" />
+                    </Grid>
+                </StackPanel>
+            </ui:Card>
+
+            <!--  今日统计  -->
             <ui:Card Margin="0,0,0,12"
                      Padding="16"
                      IsEnabled="{Binding HasChannel}">
                 <StackPanel>
-                    <!--  保活行  -->
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <StackPanel Grid.Column="0" Margin="0,0,16,0">
-                            <TextBlock Style="{StaticResource FieldLabel}" Text="{i18n:T 本通道保活}" />
-                            <StackPanel Orientation="Horizontal">
-                                <ui:ToggleSwitch AutomationProperties.Name="{i18n:T 本通道保活}"
-                                                 IsChecked="{Binding KeepAliveEnabled, Mode=TwoWay}"
-                                                 ToolTip="{Binding Hint}" />
-                                <ui:TextBox Width="64"
-                                            Margin="6,0,4,0"
-                                            AutomationProperties.Name="{i18n:T 保活间隔分钟}"
-                                            IsEnabled="{Binding KeepAliveEnabled}"
-                                            Text="{Binding KeepAliveMinutes, Mode=TwoWay}"
-                                            ToolTip="{Binding Hint}" />
-                                <TextBlock VerticalAlignment="Center" Text="{i18n:T 分钟}" />
-                            </StackPanel>
-                        </StackPanel>
-                        <StackPanel Grid.Column="1" Margin="0,0,16,0">
-                            <TextBlock Style="{StaticResource FieldLabel}" Text="{i18n:T 会话上限}" />
-                            <StackPanel Orientation="Horizontal">
-                                <ui:NumberBox Width="140"
-                                              LargeChange="10000"
-                                              MaxDecimalPlaces="0"
-                                              Minimum="1"
-                                              SmallChange="1000"
-                                              SpinButtonPlacementMode="Compact"
-                                              ToolTip="{i18n:T 仅作用于当前通道；超过该用量后清理后台会话，下轮重新创建，不会清理您的聊天记录。}"
-                                              Value="{Binding ContextLimit, Mode=TwoWay}" />
-                                <TextBlock Margin="4,0,0,0"
-                                           VerticalAlignment="Center"
-                                           Text="token" />
-                            </StackPanel>
-                        </StackPanel>
-                        <StackPanel Grid.Column="2" Margin="0,0,16,0">
-                            <TextBlock Style="{StaticResource FieldLabel}" Text=" " />
-                            <StackPanel Orientation="Horizontal" Visibility="{Binding IsPreparing, Converter={StaticResource BooleanToVisibilityRevertConverter}}">
-                                <ui:Button Appearance="Primary"
-                                           Command="{Binding PrepareCommand}"
-                                           Content="{i18n:T 一键准备}"
-                                           CornerRadius="6,0,0,6"
-                                           ToolTip="{Binding PrepareToolTip}" />
-                                <ui:Button Margin="1,0,0,0"
-                                           Padding="6,0"
-                                           Appearance="Primary"
-                                           Command="{Binding ChoosePrepareCommand}"
-                                           CornerRadius="0,6,6,0"
-                                           Icon="{ui:SymbolIcon ChevronDown24}"
-                                           ToolTip="{i18n:T 选择准备方式：本通道沿用本机默认配置，或选定另一个供应商、输入其 Key，开一条新通道单独准备，不影响本通道。该选择同时决定之后自动保活使用的配置。}" />
-                            </StackPanel>
-                            <StackPanel Orientation="Horizontal" Visibility="{Binding IsPreparing, Converter={StaticResource BooleanToVisibilityConverter}}">
-                                <ui:Button Appearance="Danger"
-                                           Command="{Binding CancelPreparationCommand}"
-                                           Content="{i18n:T 终止准备}"
-                                           ToolTip="{i18n:T 终止当前通道的本次准备和后续重试。}" />
-                                <ui:ProgressRing Width="18"
-                                                 Height="18"
-                                                 Margin="8,0,0,0"
-                                                 IsIndeterminate="True" />
-                            </StackPanel>
-                        </StackPanel>
-                    </Grid>
-                    <StackPanel Margin="0,10,0,0">
-                        <TextBlock FontSize="11"
-                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"
-                                   Text="{i18n:T 仅当前通道 · 后台 Java 问答 · 250 题随机抽取}" />
-                        <TextBlock FontSize="11"
-                                   Foreground="{DynamicResource TextFillColorTertiaryBrush}"
-                                   Text="{Binding Hint}"
-                                   TextWrapping="Wrap"
-                                   ToolTip="{Binding HintToolTip}" />
-                    </StackPanel>
-
-                    <Separator Margin="0,12" />
-
                     <!--  本地监听 + 日期说明  -->
                     <Grid>
                         <Grid.ColumnDefinitions>
@@ -319,7 +362,7 @@
                                                Foreground="{DynamicResource TextFillColorTertiaryBrush}"
                                                Text="{i18n:T 今日缓存命中}" />
                                     <TextBlock Margin="6,0,0,0"
-                                               FontSize="14"
+                                               FontSize="13"
                                                FontWeight="SemiBold"
                                                Foreground="{Binding HitRateBrush}"
                                                Text="{Binding HitRateText}" />
@@ -343,7 +386,7 @@
                                                Foreground="{DynamicResource TextFillColorTertiaryBrush}"
                                                Text="{i18n:T 最近一次成功}" />
                                     <TextBlock Margin="6,0,0,0"
-                                               FontSize="14"
+                                               FontSize="13"
                                                FontWeight="SemiBold"
                                                Foreground="{Binding LatestBrush}"
                                                Text="{Binding LatestText}" />
@@ -361,30 +404,18 @@
                                                Foreground="{DynamicResource TextFillColorTertiaryBrush}"
                                                Text="{i18n:T 完全未命中}" />
                                     <TextBlock Margin="6,0,0,0"
-                                               FontSize="14"
+                                               FontSize="13"
                                                FontWeight="SemiBold"
                                                Foreground="{Binding ZeroHitBrush}"
                                                Text="{Binding ZeroHitText}" />
                                 </StackPanel>
-                                <Grid Margin="0,4,0,0">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*" />
-                                        <ColumnDefinition Width="Auto" />
-                                    </Grid.ColumnDefinitions>
-                                    <TextBlock Grid.Column="0"
-                                               VerticalAlignment="Center"
-                                               FontSize="11"
-                                               Foreground="{DynamicResource TextFillColorSecondaryBrush}"
-                                               Text="{Binding MeasuredText}"
-                                               TextTrimming="CharacterEllipsis"
-                                               ToolTip="{Binding RateHelp}" />
-                                    <ui:Button Grid.Column="1"
-                                               Margin="6,0,0,0"
-                                               Padding="8,2"
-                                               Command="{Binding OpenCacheDetailsCommand}"
-                                               Content="{i18n:T 明细}"
-                                               ToolTip="{i18n:T 在缓存明细页查看}" />
-                                </Grid>
+                                <TextBlock Margin="0,4,0,0"
+                                           VerticalAlignment="Center"
+                                           FontSize="11"
+                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                           Text="{Binding MeasuredText}"
+                                           TextTrimming="CharacterEllipsis"
+                                           ToolTip="{Binding RateHelp}" />
                             </StackPanel>
                         </Grid>
                     </Border>

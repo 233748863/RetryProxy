@@ -34,6 +34,47 @@ public class RequestLoggingTests
         return proxy.DrainLogs();
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task IndependentPreparationLogsOneDetailedWarningPerFailedRequest(bool streamError)
+    {
+        await using var fixture = await LifecycleProxy.StartAsync(
+            context => streamError
+                ? Upstream.Text(context, 500, "data: {\"type\":\"error\",\"error\":{\"code\":\"get_channel_failed\"}}\n\n", "text/event-stream")
+                : Upstream.Text(context, 500, "upstream unavailable", "text/plain"),
+            LoggingConfig(5.0, 0),
+            proxy => proxy.WithRouteLogger(proxy.Logger.Base.Route("保活", () => "准备"))
+                .WithUpstreamApiKey("sk-upstream", "sk-local"));
+        var marker = Guid.NewGuid().ToString("N");
+        using var cancellation = new CancellationTokenSource();
+        InternalSessions.Register(marker, cancellation);
+        try
+        {
+            using var client = TestClient.Create();
+            using var response = await TestClient.Send(client, HttpMethod.Post, $"{fixture.Address}/v1/responses",
+                "{\"model\":\"gpt-test\",\"input\":\"hello\"}", headers: new Dictionary<string, string>
+                {
+                    ["authorization"] = "Bearer sk-local",
+                    ["x-retry-keepalive"] = marker,
+                });
+            Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
+            Assert.NotNull(await TestClient.TryReadAll(response));
+            var line = Assert.Single(await CompletedLogs(fixture));
+            Assert.Contains("WARNING [准备][保活-", line);
+            Assert.Contains("POST /v1/responses -> 上游 HTTP 500", line);
+            Assert.Contains("首字", line);
+            if (streamError)
+            {
+                Assert.Contains("get_channel_failed", line);
+            }
+        }
+        finally
+        {
+            InternalSessions.Unregister(marker);
+        }
+    }
+
     [Fact]
     public async Task NonStreamingCompletionLogsUsageWithoutChangingTraffic()
     {

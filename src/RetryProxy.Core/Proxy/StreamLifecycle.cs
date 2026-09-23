@@ -29,6 +29,7 @@ internal sealed class StreamLifecycle : IDisposable
     private readonly KeepAliveWatchdog _keepAlive;
     private KeepAliveTemplate? _keepAliveTemplate;
     private readonly bool _logCompletion;
+    private readonly bool _warnOnHttpFailure;
     private readonly Deadline _deadline;
     private readonly double _totalTimeoutSeconds;
     private readonly CancellationToken _cancel;
@@ -49,6 +50,7 @@ internal sealed class StreamLifecycle : IDisposable
         KeepAliveWatchdog keepAlive,
         KeepAliveTemplate? keepAliveTemplate,
         bool logCompletion,
+        bool warnOnHttpFailure,
         Deadline deadline,
         double totalTimeoutSeconds,
         CancellationToken cancel)
@@ -68,6 +70,7 @@ internal sealed class StreamLifecycle : IDisposable
         _keepAlive = keepAlive;
         _keepAliveTemplate = keepAliveTemplate;
         _logCompletion = logCompletion;
+        _warnOnHttpFailure = warnOnHttpFailure;
         _deadline = deadline;
         _totalTimeoutSeconds = totalTimeoutSeconds;
         _cancel = cancel;
@@ -129,7 +132,7 @@ internal sealed class StreamLifecycle : IDisposable
         var elapsed = _startedAt.ElapsedSeconds;
         if (_logCompletion)
         {
-            _logger.Info(LogText.FormatCompletedAttempt(
+            var message = LogText.FormatCompletedAttempt(
                 _requestId,
                 _attemptNumber,
                 _totalAttempts,
@@ -138,7 +141,15 @@ internal sealed class StreamLifecycle : IDisposable
                 _status,
                 Stats.FirstContentSeconds(),
                 elapsed,
-                Stats.LogFields()));
+                Stats.LogFields());
+            if (_warnOnHttpFailure)
+            {
+                _logger.Warn(message);
+            }
+            else
+            {
+                _logger.Info(message);
+            }
         }
 
         if (_status == 200)

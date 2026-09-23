@@ -748,11 +748,10 @@ public sealed class RetryProxy
                 }
                 else if (retryable)
                 {
-                    Logger.Warn(_localAccessKey is not null && requestId.StartsWith(ProxyMetrics.KeepAlivePrefix, StringComparison.Ordinal)
-                        ? KeepAlive.Snapshot().Preparing
-                            ? $"[{requestId}] 本轮上游 HTTP {status}，后台准备将在间隔后继续"
-                            : $"[{requestId}] 本轮上游 HTTP {status}，下次按保活间隔继续"
-                        : $"[{requestId}] 重试耗尽，向客户端返回最后一次上游响应 HTTP {status}");
+                    if (_localAccessKey is null || !requestId.StartsWith(ProxyMetrics.KeepAlivePrefix, StringComparison.Ordinal))
+                    {
+                        Logger.Warn($"[{requestId}] 重试耗尽，向客户端返回最后一次上游响应 HTTP {status}");
+                    }
                 }
 
                 try
@@ -1126,6 +1125,7 @@ public sealed class RetryProxy
             KeepAlive,
             keepAliveTemplate,
             logCompletion,
+            _localAccessKey is not null && requestId.StartsWith(ProxyMetrics.KeepAlivePrefix, StringComparison.Ordinal) && IsRetryableStatus(status),
             ctx.Deadline,
             Config.TotalTimeoutSeconds,
             ctx.Cancel);

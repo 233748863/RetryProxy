@@ -64,7 +64,7 @@ public sealed class ResponsiveTitleBarBehavior : Behavior<Panel>
     {
         AssociatedObject.Loaded -= OnAssociatedObjectLoaded;
         AssociatedObject.Unloaded -= OnAssociatedObjectUnloaded;
-        Detach();
+        DetachWindow();
         base.OnDetaching();
     }
 
@@ -75,7 +75,7 @@ public sealed class ResponsiveTitleBarBehavior : Behavior<Panel>
 
     private void OnAssociatedObjectUnloaded(object sender, RoutedEventArgs e)
     {
-        Detach();
+        DetachWindow();
     }
 
     private void Attach()
@@ -100,7 +100,7 @@ public sealed class ResponsiveTitleBarBehavior : Behavior<Panel>
         ScheduleUpdate();
     }
 
-    private void Detach()
+    private void DetachWindow()
     {
         if (_window is not null)
         {
@@ -122,7 +122,7 @@ public sealed class ResponsiveTitleBarBehavior : Behavior<Panel>
 
     private void OnWindowClosed(object? sender, EventArgs e)
     {
-        Detach();
+        DetachWindow();
     }
 
     private void ScheduleUpdate()

@@ -48,9 +48,9 @@ public static class RightClickSelectBehavior
         }
     }
 
-    private static T VisualUpwardSearch<T>(DependencyObject source) where T : DependencyObject
+    private static T? VisualUpwardSearch<T>(DependencyObject? source) where T : DependencyObject
     {
-        while (source != null && !(source is T))
+        while (source is not null && source is not T)
         {
             source = VisualTreeHelper.GetParent(source);
         }

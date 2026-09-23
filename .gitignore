@@ -18,6 +18,9 @@ x86/
 dist/
 build/release-stage/
 build/rollback/
+build/instance-backups/
+build/publish-staging-*/
+build/*.png
 *.zip
 
 # Runtime data

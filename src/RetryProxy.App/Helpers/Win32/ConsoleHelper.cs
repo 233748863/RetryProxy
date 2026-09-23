@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using Microsoft.Win32.SafeHandles;
 using System.Runtime.InteropServices;
 using System.Text;
 
@@ -88,19 +89,19 @@ public static class ConsoleHelper
     {
         // 重定向标准输出流
         var stdOutHandle = GetStdHandle(STD_OUTPUT_HANDLE);
-        var stdOutStream = new FileStream(stdOutHandle, FileAccess.Write);
+        var stdOutStream = new FileStream(new SafeFileHandle(stdOutHandle, ownsHandle: false), FileAccess.Write);
         var stdOutWriter = new StreamWriter(stdOutStream, new UTF8Encoding(false)) { AutoFlush = true };
         Console.SetOut(stdOutWriter);
 
         // 重定向标准错误流
         var stdErrHandle = GetStdHandle(STD_ERROR_HANDLE);
-        var stdErrStream = new FileStream(stdErrHandle, FileAccess.Write);
+        var stdErrStream = new FileStream(new SafeFileHandle(stdErrHandle, ownsHandle: false), FileAccess.Write);
         var stdErrWriter = new StreamWriter(stdErrStream, new UTF8Encoding(false)) { AutoFlush = true };
         Console.SetError(stdErrWriter);
 
         // 重定向标准输入流
         var stdInHandle = GetStdHandle(STD_INPUT_HANDLE);
-        var stdInStream = new FileStream(stdInHandle, FileAccess.Read);
+        var stdInStream = new FileStream(new SafeFileHandle(stdInHandle, ownsHandle: false), FileAccess.Read);
         var stdInReader = new StreamReader(stdInStream, Console.InputEncoding);
         Console.SetIn(stdInReader);
     }

@@ -895,7 +895,7 @@ public sealed class ProxyWorkspace
         var snapshot = preparation.Watchdog.Snapshot();
         if (preparation.Pending)
         {
-            return "后台保活服务启动中";
+            return "后台准备服务启动中";
         }
         if (snapshot.Preparing)
         {
@@ -921,12 +921,13 @@ public sealed class ProxyWorkspace
         {
             return CopyPreparationOptions(saved);
         }
-        return new PreparationDialogState { RouteId = route.Id };
+        return new PreparationDialogState { RouteId = route.Id, NewProviderClientType = route.ClientType };
     }
     private static PreparationDialogState CopyPreparationOptions(PreparationDialogState source) => new()
     {
         RouteId = source.RouteId,
         Mode = source.Mode,
+        NewProviderClientType = source.NewProviderClientType,
         NewProviderUrl = source.NewProviderUrl,
         ApiKey = source.ApiKey,
         SelectedModel = source.SelectedModel,
@@ -986,14 +987,15 @@ public sealed class ProxyWorkspace
         return provider;
     }
     public string PlanText(PreparationDialogState dialog) => dialog.Mode == PrepareMode.CurrentProvider
-        ? "从本机 CLI 配置读取 CCC Switch 当前供应商地址与密钥；只用于此次后台准备，不修改现有通道。"
-        : "新供应商地址、API Key 和模型仅存内存；不新增服务商或通道。";
-    internal ProxyConfig TemporaryRuntimeConfigFor(ProxyRoute origin, ProviderEndpoint provider, int port, double idleMinutes)
+        ? $"使用本通道的 {Config.Routes.First(route => route.Id == dialog.RouteId).ClientType.Label()} 配置，从本机 CLI 读取当前供应商地址与密钥；不修改现有通道。"
+        : $"按 {dialog.NewProviderClientType.Label()} 准备；新供应商地址、API Key 和模型仅存内存，不新增服务商或通道。";
+    internal ProxyConfig TemporaryRuntimeConfigFor(ProxyRoute origin, ProviderEndpoint provider, int port, double idleMinutes, ClientType clientType)
     {
         var runtime = Config.RuntimeConfigFor(origin.Id);
+        runtime.ClientType = clientType;
         runtime.ListenPort = port;
         runtime.MaxRetries = 0;
-        runtime.KeepaliveEnabled = true;
+        runtime.KeepaliveEnabled = false;
         runtime.KeepaliveIdleMinutes = idleMinutes;
         runtime.KeepaliveContextLimit = (long)KeepAliveWatchdog.DefaultContextLimit;
         runtime.UpstreamBaseUrl = provider.BaseUrl.EndsWith("/v1", StringComparison.OrdinalIgnoreCase)
@@ -1013,6 +1015,7 @@ public sealed class ProxyWorkspace
         {
             return "请输入模型名称，或获取模型后选择一个用于准备";
         }
+        var clientType = settings.Mode == PrepareMode.CurrentProvider ? origin.ClientType : settings.NewProviderClientType;
         ProviderEndpoint provider;
         CliCredential upstream;
         try
@@ -1037,7 +1040,7 @@ public sealed class ProxyWorkspace
             return error.Message;
         }
         var port = FirstBindableFreePort();
-        var runtime = TemporaryRuntimeConfigFor(origin, provider, port, idleMinutes.Value);
+        var runtime = TemporaryRuntimeConfigFor(origin, provider, port, idleMinutes.Value, clientType);
         var upstreamAddress = new Uri(provider.BaseUrl);
         if (upstreamAddress.GetLeftPart(UriPartial.Authority) == origin.LocalUrl ||
             upstreamAddress.GetLeftPart(UriPartial.Authority) == runtime.LocalUrl)
@@ -1060,12 +1063,16 @@ public sealed class ProxyWorkspace
         }
         var idle = TimeSpan.FromMinutes(idleMinutes.Value);
         var watchdog = TestCliCommand is { } command
-            ? KeepAliveWatchdog.WithCliCommand(true, idle, command.Clone())
-            : new KeepAliveWatchdog(true, idle);
+            ? KeepAliveWatchdog.WithCliCommand(false, idle, command.Clone())
+            : new KeepAliveWatchdog(false, idle);
         watchdog.SetContextLimit(KeepAliveWatchdog.DefaultContextLimit);
-        watchdog.ConfigureFlavor(KeepAliveFlavorExtensions.FromClientType(origin.ClientType));
+        watchdog.ConfigureFlavor(KeepAliveFlavorExtensions.FromClientType(clientType));
         watchdog.RequireContextForPreparation();
-        var service = new ProxyService(Logger, "保活").WithKeepAliveWatchdog(watchdog).WithUpstreamApiKey(upstream.ApiKey, credential.ApiKey);
+        watchdog.EnableAfterPreparation();
+        var service = new ProxyService(Logger, "保活")
+            .WithKeepAliveWatchdog(watchdog)
+            .WithLogLabel(() => watchdog.Snapshot().Preparing || !watchdog.Enabled ? "准备" : "保活")
+            .WithUpstreamApiKey(upstream.ApiKey, credential.ApiKey);
         service.SetUiNotifier(_uiNotifier);
         try
         {
@@ -1086,7 +1093,7 @@ public sealed class ProxyWorkspace
             Credential = credential,
             Port = port,
         };
-        Logger.Info($"[保活] 已为“{origin.Name}”提交后台准备；临时地址、密钥和模型仅保留在本次运行，重启后清空");
+        Logger.Info($"[准备] 已为“{origin.Name}”提交后台准备；临时地址、密钥和模型仅保留在本次运行，重启后清空");
         PollPendingPreparation();
         _uiNotifier?.Invoke();
         return null;
@@ -1109,18 +1116,18 @@ public sealed class ProxyWorkspace
                     {
                         if (preparation.Service.RequestPreparationWith(preparation.Credential))
                         {
-                            Logger.Info($"[保活] 后台问答已开始，配置仅保留在内存中");
+                            Logger.Info($"[准备] 后台问答已开始，配置仅保留在内存中");
                         }
                     }
                     catch (InvalidOperationException error)
                     {
-                        Logger.Warn($"[保活] 后台准备启动失败：{error.Message}");
+                        Logger.Warn($"[准备] 后台准备启动失败：{error.Message}");
                         Notice = $"后台准备启动失败：{error.Message}";
                     }
                     break;
                 default:
                     _preparations.Remove(routeId);
-                    Logger.Warn($"[保活] 后台服务未启动：{preparation.Service.StartupError ?? "服务已停止"}");
+                    Logger.Warn($"[准备] 后台服务未启动：{preparation.Service.StartupError ?? "服务已停止"}");
                     Notice = $"后台准备未启动：{preparation.Service.StartupError ?? "服务已停止"}";
                     break;
             }
@@ -1132,7 +1139,7 @@ public sealed class ProxyWorkspace
         {
             preparation.Watchdog.CancelPreparation();
             preparation.Service.RequestStop();
-            Logger.Info("[保活] 本次后台准备已终止，临时通道已停止");
+            Logger.Info("[准备] 本次后台准备已终止，临时通道已停止");
             _uiNotifier?.Invoke();
         }
     }
@@ -1160,11 +1167,11 @@ public sealed class ProxyWorkspace
             };
             if (temporaryResult is PreparationResult.Failed)
             {
-                Logger.Warn($"[保活] {message}");
+                Logger.Warn($"[准备] {message}");
             }
             else
             {
-                Logger.Info($"[保活] {message}");
+                Logger.Info($"[准备] {message}");
             }
 
             Notice = message;

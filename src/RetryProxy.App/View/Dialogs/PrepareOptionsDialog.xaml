@@ -29,6 +29,18 @@
                      GroupName="prepare-mode" />
         <StackPanel Margin="28,2,0,0">
             <StackPanel x:Name="NewProviderPanel">
+                <ui:TextBlock Margin="0,8,0,4" Text="{i18n:T 准备客户端}" />
+                <StackPanel Orientation="Horizontal">
+                    <RadioButton x:Name="NewCodexRadio"
+                                 Checked="OnClientChanged"
+                                 Content="Codex"
+                                 GroupName="prepare-client" />
+                    <RadioButton x:Name="NewClaudeRadio"
+                                 Margin="16,0,0,0"
+                                 Checked="OnClientChanged"
+                                 Content="Claude Code"
+                                 GroupName="prepare-client" />
+                </StackPanel>
                 <ui:TextBlock Margin="0,8,0,4" Text="{i18n:T 新供应商地址}" />
                 <ui:TextBox x:Name="NewProviderUrlBox"
                             behavior:ClipboardInterceptor.EnableUrlPaste="True"

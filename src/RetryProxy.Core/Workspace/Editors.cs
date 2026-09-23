@@ -60,6 +60,8 @@ public sealed class PreparationDialogState
 
     public PrepareMode Mode { get; set; } = PrepareMode.CurrentProvider;
 
+    public ClientType NewProviderClientType { get; set; } = ClientType.Codex;
+
     public string NewProviderUrl { get; set; } = string.Empty;
 
     public string ApiKey { get; set; } = string.Empty;

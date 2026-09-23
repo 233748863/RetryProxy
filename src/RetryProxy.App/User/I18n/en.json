@@ -71,6 +71,7 @@
   "开始准备": "Prepare",
   "使用本通道供应商准备": "Prepare with this channel's provider",
   "配置新供应商准备": "Prepare with a new provider",
+  "准备客户端": "Client to prepare",
   "新供应商地址": "New provider URL",
   "开始后台准备": "Start background preparation",
   "独立保活间隔": "Independent keep-alive interval",

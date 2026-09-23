@@ -36,6 +36,8 @@ public partial class PrepareOptionsDialog : ContentDialog
         ApiKeyBox.Password = state.ApiKey;
         CurrentRadio.IsChecked = state.Mode == PrepareMode.CurrentProvider;
         NewRadio.IsChecked = state.Mode == PrepareMode.NewProvider;
+        NewCodexRadio.IsChecked = state.NewProviderClientType == ClientType.Codex;
+        NewClaudeRadio.IsChecked = state.NewProviderClientType == ClientType.Claude;
         _initialized = true;
         Unloaded += (_, _) => ResetModels();
         UpdateMode();
@@ -50,6 +52,9 @@ public partial class PrepareOptionsDialog : ContentDialog
 
     private void UpdateProvider()
     {
+        SubtitleText.Text = _state.Mode == PrepareMode.CurrentProvider
+            ? $"使用本通道的 {_route.ClientType.Label()} 在后台准备；不修改现有配置。"
+            : $"使用 {_state.NewProviderClientType.Label()} 为新供应商独立准备；不修改现有通道。";
         NewProviderPanel.Visibility = _state.Mode == PrepareMode.NewProvider ? Visibility.Visible : Visibility.Collapsed;
         NewProviderKeyPanel.Visibility = _state.Mode == PrepareMode.NewProvider ? Visibility.Visible : Visibility.Collapsed;
         FetchModelsButton.Visibility = Visibility.Visible;
@@ -124,7 +129,8 @@ public partial class PrepareOptionsDialog : ContentDialog
         ModelsLoadingText.Visibility = Visibility.Visible;
         try
         {
-            var models = await ProviderModelFetcher.FetchAsync(provider, apiKey, _route.ClientType, cancellation.Token);
+            var clientType = _state.Mode == PrepareMode.CurrentProvider ? _route.ClientType : _state.NewProviderClientType;
+            var models = await ProviderModelFetcher.FetchAsync(provider, apiKey, clientType, cancellation.Token);
             if (!ReferenceEquals(_modelFetch, cancellation))
             {
                 return;
@@ -186,7 +192,20 @@ public partial class PrepareOptionsDialog : ContentDialog
 
         UpdateMode();
         UpdateProvider();
-        ResetModels();
+        ResetModels(clearModel: true);
+        ClearError();
+    }
+
+    private void OnClientChanged(object sender, RoutedEventArgs e)
+    {
+        if (!_initialized)
+        {
+            return;
+        }
+
+        _state.NewProviderClientType = NewClaudeRadio.IsChecked == true ? ClientType.Claude : ClientType.Codex;
+        UpdateProvider();
+        ResetModels(clearModel: true);
         ClearError();
     }
 

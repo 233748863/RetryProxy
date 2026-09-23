@@ -681,18 +681,49 @@ public class WorkspaceTests
         }
 
         var provider = app.PreparationTargetProvider(dialog);
-        var runtime = app.TemporaryRuntimeConfigFor(route, provider, 18999, 7.5);
+        var runtime = app.TemporaryRuntimeConfigFor(route, provider, 18999, 7.5, route.ClientType);
         Assert.Equal(0, runtime.MaxRetries);
-        Assert.True(runtime.KeepaliveEnabled);
+        Assert.False(runtime.KeepaliveEnabled);
+        Assert.Equal(route.ClientType, runtime.ClientType);
         Assert.Equal(7.5, runtime.KeepaliveIdleMinutes);
         Assert.Equal(50_000, runtime.KeepaliveContextLimit);
         Assert.True(app.SubmitPrepareDialog(dialog));
         WaitForPendingPreparation(app, route.Id);
+        Assert.False(app.PreparationSnapshot(route.Id)!.Enabled);
         Assert.Equal(50_000UL, app.PreparationSnapshot(route.Id)!.ContextLimit);
         Assert.Equal(TimeSpan.FromMinutes(7.5), app.PreparationSnapshot(route.Id)!.Idle);
         Assert.Equal("7.5", app.OpenPrepareDialog()!.IdleMinutes);
         Assert.Equal(original, ProxyConfigJson.ToCanonicalJson(app.Config));
         Assert.Equal(100_000, route.MaxRetries);
+        app.Shutdown();
+    }
+
+    [Theory]
+    [InlineData("alpha-one", ClientType.Claude)]
+    [InlineData("alpha-two", ClientType.Codex)]
+    public void NewProviderPreparationUsesChosenClientInsteadOfSelectedRoute(string routeId, ClientType clientType)
+    {
+        using var fixture = new Fixture();
+        var app = fixture.App;
+        app.TestCliCommand = new CliCommand(Path.Combine(fixture.Directory, "missing-client.exe"));
+        app.SelectRoute(routeId);
+        var route = app.SelectedRouteRef()!;
+        Assert.NotEqual(route.ClientType, clientType);
+        var original = ProxyConfigJson.ToCanonicalJson(app.Config);
+        var dialog = app.OpenPrepareDialog()!;
+        Assert.Equal(route.ClientType, dialog.NewProviderClientType);
+        dialog.Mode = PrepareMode.NewProvider;
+        dialog.NewProviderClientType = clientType;
+        dialog.NewProviderUrl = "https://temporary.example/v1";
+        dialog.ApiKey = "sk-ephemeral";
+        dialog.SelectedModel = "chosen-model";
+        var runtime = app.TemporaryRuntimeConfigFor(route, app.PreparationTargetProvider(dialog), 18999, 5, clientType);
+        Assert.Equal(clientType, runtime.ClientType);
+        Assert.True(app.SubmitPrepareDialog(dialog));
+        WaitForPendingPreparation(app, routeId);
+        Assert.Equal(KeepAliveFlavorExtensions.FromClientType(clientType), app.PreparationSnapshot(routeId)!.Flavor);
+        Assert.Equal(clientType, app.OpenPrepareDialog()!.NewProviderClientType);
+        Assert.Equal(original, ProxyConfigJson.ToCanonicalJson(app.Config));
         app.Shutdown();
     }
 
@@ -830,13 +861,51 @@ public class WorkspaceTests
     [Fact]
     public void KeepAliveLogFilterIncludesTemporaryAndOrdinaryKeepAliveMessages()
     {
-        const string temporary = "2026-09-05 09:50:00 INFO [保活] 后台准备已开始";
+        const string temporary = "2026-09-05 09:50:00 INFO [保活] 自动保活已开始";
         const string ordinary = "2026-09-05 09:50:00 WARNING [alpha-one][保活] 后台问答未完成";
+        const string preparing = "2026-09-05 09:50:00 INFO [准备][保活-ffffffff] 上游 HTTP 500";
+        const string legacy = "2026-09-05 09:50:00 INFO [alpha-one][保活-ffffffff] 历史保活请求";
         const string request = "2026-09-05 09:50:00 INFO [alpha-one] 正常请求";
         Assert.True(LogLine.Matches(temporary, LogLevelFilter.All, string.Empty, null, true));
         Assert.True(LogLine.Matches(ordinary, LogLevelFilter.Warning, string.Empty, null, true));
+        Assert.True(LogLine.Matches(legacy, LogLevelFilter.All, string.Empty, null, true));
+        Assert.False(LogLine.Matches(preparing, LogLevelFilter.All, string.Empty, null, true));
+        Assert.True(LogLine.Matches(preparing, LogLevelFilter.All, string.Empty, null, preparationOnly: true));
+        Assert.False(LogLine.Matches(temporary, LogLevelFilter.All, string.Empty, null, preparationOnly: true));
         Assert.False(LogLine.Matches(ordinary, LogLevelFilter.Info, string.Empty, null, true));
         Assert.False(LogLine.Matches(request, LogLevelFilter.All, string.Empty, null, true));
+    }
+
+    [Fact]
+    public void TemporaryProxyLogsArePreparationUntilContextReturns()
+    {
+        using var fixture = new Fixture();
+        var watchdog = new KeepAliveWatchdog(false, TimeSpan.FromMinutes(5));
+        watchdog.RequireContextForPreparation();
+        watchdog.EnableAfterPreparation();
+        var logger = fixture.Logger.Route("保活", () => watchdog.Snapshot().Preparing || !watchdog.Enabled ? "准备" : "保活");
+        using var service = watchdog.RegisterService(KeepAliveFlavor.Codex);
+        Assert.True(watchdog.RequestPreparation());
+        using (var failure = watchdog.BeginDueProbe()!)
+        {
+            logger.Warn("[保活-ffffffff] 上游 HTTP 500");
+            Assert.Null(failure.Complete("test-model", null));
+        }
+
+        Assert.False(watchdog.Enabled);
+        watchdog.SetPreparationRetryNowForTest();
+        using (var success = watchdog.BeginDueProbe()!)
+        {
+            Assert.NotNull(success.Complete("test-model", 120));
+            logger.Info("[保活-eeeeeeee] 首次完整回复");
+        }
+
+        Assert.True(watchdog.Enabled);
+        logger.Info("[保活-dddddddd] 后续自动保活");
+        var logs = fixture.DrainLogs();
+        Assert.Contains(logs, line => line.Contains("[准备][保活-ffffffff]"));
+        Assert.Contains(logs, line => line.Contains("[准备][保活-eeeeeeee]"));
+        Assert.Contains(logs, line => line.Contains("[保活][保活-dddddddd]"));
     }
 
     [Fact]
@@ -906,7 +975,7 @@ public class WorkspaceTests
         app.CancelSelectedPreparation();
         Assert.Null(app.PreparationSnapshot("alpha-one"));
         Assert.False(app.RouteKeepAlives["alpha-one"].Snapshot().Preparing);
-        Assert.Contains(fixture.DrainLogs(), line => LogLine.Matches(line, LogLevelFilter.All, string.Empty, null, true));
+        Assert.Contains(fixture.DrainLogs(), line => LogLine.Matches(line, LogLevelFilter.All, string.Empty, null, preparationOnly: true));
     }
 
     [Fact]

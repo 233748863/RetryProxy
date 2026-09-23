@@ -1042,7 +1042,7 @@ public class RequestLifecycleMoreTests
             Assert.Equal(1, hits);
             if (!complete)
             {
-                foreach (var expectedText in new[] { "读取上游响应失败", "最后事件 content_block_delta", "上游请求 ID claude-local-stream", "不再重试（已进入响应转发阶段）" })
+                foreach (var expectedText in new[] { "上游回复到一半，连接就断了", "最后事件 content_block_delta", "上游请求 ID claude-local-stream", "不再重试（已进入响应转发阶段）" })
                 {
                     Assert.Contains(expectedText, logs);
                 }

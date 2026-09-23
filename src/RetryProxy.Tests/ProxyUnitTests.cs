@@ -1,9 +1,11 @@
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.IO;
 using System.Net;
 using System.Net.Http;
 using System.Net.Sockets;
+using System.Security.Authentication;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
@@ -67,10 +69,10 @@ public class ProxyUnitTests
     {
         foreach (var (code, expected) in new[]
                  {
-                     (SocketError.ConnectionRefused, "连接被拒绝"),
-                     (SocketError.ConnectionReset, "连接被重置"),
-                     (SocketError.AccessDenied, "系统拒绝网络访问"),
-                     (SocketError.TimedOut, "网络操作超时"),
+                     (SocketError.ConnectionRefused, "对方拒绝了连接"),
+                     (SocketError.ConnectionReset, "连接被对方强行掐断"),
+                     (SocketError.AccessDenied, "系统不允许本程序联网"),
+                     (SocketError.TimedOut, "网络长时间没有响应"),
                  })
         {
             var error = new InvalidOperationException("private-outer-error", new SocketException((int)code));
@@ -84,17 +86,153 @@ public class ProxyUnitTests
 
         var eof = new HttpRequestException("private-query Bearer private-key https://user:password@example.test", new HttpIOException(HttpRequestError.ResponseEnded, "private"));
         var eofFields = NetworkErrorLabel.CauseFields(eof);
-        Assert.Contains("连接提前结束", eofFields);
+        Assert.Contains("，对方主动关闭了连接（技术细节：", eofFields);
+        Assert.Contains("类别 ResponseEnded", eofFields);
+        Assert.Contains("异常链 HttpRequestException > HttpIOException", eofFields);
         Assert.DoesNotContain("private", eofFields);
-        Assert.Equal("，底层原因：未提供可识别的系统错误", NetworkErrorLabel.CauseFields(new InvalidOperationException("plain")));
+
+        var plain = NetworkErrorLabel.CauseFields(new InvalidOperationException("plain"));
+        Assert.Equal("，原因程序认不出来（技术细节：异常链 InvalidOperationException）", plain);
+        Assert.Equal("，没有更具体的原因", NetworkErrorLabel.CauseFields(UpstreamException.Timeout(false)));
+    }
+
+    [Fact]
+    public void NetworkDiagnosticsDistinguishTlsProxyTunnelAndCancellation()
+    {
+        var tls = new HttpRequestException(HttpRequestError.SecureConnectionError, "private https://example.test", new AuthenticationException("private cert"));
+        var tlsFields = NetworkErrorLabel.CauseFields(UpstreamException.From(tls));
+        Assert.Contains("，加密连接（HTTPS）没建立起来（技术细节：", tlsFields);
+        Assert.Contains("类别 SecureConnectionError", tlsFields);
+        Assert.Contains("异常链 HttpRequestException > AuthenticationException", tlsFields);
+        Assert.DoesNotContain("private", tlsFields);
+
+        var tunnel = new HttpRequestException(HttpRequestError.ProxyTunnelError, "private proxy");
+        var tunnelFields = NetworkErrorLabel.CauseFields(UpstreamException.From(tunnel));
+        Assert.Contains("，系统代理没能帮忙连到上游（技术细节：", tunnelFields);
+        Assert.Contains("类别 ProxyTunnelError", tunnelFields);
+        Assert.True(UpstreamException.From(tunnel).IsConnect);
+
+        var win32 = new HttpRequestException(HttpRequestError.SecureConnectionError, "private", new AuthenticationException("private", new Win32Exception(unchecked((int)0x80090326))));
+        Assert.Contains("错误码 -2146893018", NetworkErrorLabel.CauseFields(win32));
+
+        var cancelled = NetworkErrorLabel.CauseFields(new UpstreamException("disposed", false, false, new OperationCanceledException("private")));
+        Assert.Equal("，这次操作被取消了（技术细节：异常链 OperationCanceledException）", cancelled);
+    }
+
+    [Fact]
+    public void ResetsWhileAwaitingTheResponseStayClientErrorsWithTheSocketCode()
+    {
+        var reset = new HttpRequestException("private", new IOException("private", new SocketException(10054)));
+        var upstream = UpstreamException.From(reset);
+        Assert.False(upstream.IsConnect);
+        Assert.False(upstream.IsTimeout);
+        var label = NetworkErrorLabel.Describe(upstream, true, NetworkPhase.AwaitingResponse);
+        Assert.Contains("请求已发出，但没等到上游回复连接就断了，连接被对方强行掐断，链路：系统代理（技术细节：ClientError；", label);
+        Assert.Contains("错误码 10054", label);
+        Assert.Contains("异常链 HttpRequestException > IOException > SocketException", label);
+        Assert.DoesNotContain("private", label);
+
+        var refused = new HttpRequestException("private", new IOException("private", new SocketException(10061)));
+        Assert.True(UpstreamException.From(refused).IsConnect);
+    }
+
+    [Fact]
+    public async Task PeerClosingBeforeHeadersIsLabelledAsPrematureEndNotAsConnectFailure()
+    {
+        // 模拟节点/代理在响应头到达前关闭隧道：FIN 正常关闭与 RST 重置两种；请求用与管线一致的 POST + ReadOnlyMemoryContent。
+        foreach (var reset in new[] { false, true })
+        {
+            using var listener = new TcpListener(IPAddress.Loopback, 0);
+            listener.Start();
+            var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+            var connections = 0;
+            var server = Task.Run(async () =>
+            {
+                while (true)
+                {
+                    Socket socket;
+                    try
+                    {
+                        socket = await listener.AcceptSocketAsync();
+                    }
+                    catch (Exception error) when (error is ObjectDisposedException or SocketException or OperationCanceledException)
+                    {
+                        return;
+                    }
+
+                    Interlocked.Increment(ref connections);
+                    using (socket)
+                    {
+                        var buffer = new byte[8192];
+                        var total = 0;
+                        while (total < buffer.Length)
+                        {
+                            var received = await socket.ReceiveAsync(buffer.AsMemory(total));
+                            if (received == 0)
+                            {
+                                break;
+                            }
+
+                            total += received;
+                            if (Encoding.ASCII.GetString(buffer, 0, total).Contains("\r\n\r\n"))
+                            {
+                                break;
+                            }
+                        }
+
+                        await Task.Delay(200);
+                        if (reset)
+                        {
+                            socket.LingerState = new LingerOption(true, 0);
+                        }
+                        else
+                        {
+                            socket.Shutdown(SocketShutdown.Both);
+                        }
+                    }
+                }
+            });
+            using var client = new HttpClient(new SocketsHttpHandler { UseProxy = false }) { Timeout = TimeSpan.FromSeconds(5) };
+            Exception? failure = null;
+            try
+            {
+                using var request = new HttpRequestMessage(HttpMethod.Post, $"http://127.0.0.1:{port}/private-path?key=private-key")
+                {
+                    Content = new ReadOnlyMemoryContent(Encoding.UTF8.GetBytes("{\"private\":\"body\"}")),
+                    Version = HttpVersion.Version11,
+                    VersionPolicy = HttpVersionPolicy.RequestVersionOrLower,
+                };
+                await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
+            }
+            catch (Exception error)
+            {
+                failure = error;
+            }
+
+            listener.Stop();
+            await server;
+            Assert.NotNull(failure);
+            var upstream = UpstreamException.From(failure);
+            var label = NetworkErrorLabel.Describe(upstream, false, NetworkPhase.AwaitingResponse);
+            var detail = $"connections={connections}\n{label}\n{failure}";
+            Assert.False(upstream.IsTimeout, detail);
+            Assert.False(upstream.IsConnect, detail);
+            Assert.True(label.Contains("请求已发出，但没等到上游回复连接就断了，"), detail);
+            Assert.True(label.Contains(reset ? "连接被对方强行掐断，链路：直连（技术细节：ClientError；" : "对方主动关闭了连接，链路：直连（技术细节：ClientError；"), detail);
+            Assert.True(label.Contains(reset ? "错误码 10054" : "类别 ResponseEnded"), detail);
+            Assert.True(label.Contains("异常链 HttpRequestException"), detail);
+            Assert.False(label.Contains("private"), detail);
+            // 记录 .NET 对“响应前断开”的自动重连次数：有请求体的 POST 不应被 HttpClient 悄悄重发。
+            Assert.True(connections == 1, detail);
+        }
     }
 
     [Fact]
     public void NetworkDiagnosticsPreserveWindowsSocketErrorCodes()
     {
         var fields = NetworkErrorLabel.CauseFields(new SocketException(10061));
-        Assert.True(fields.Contains("连接被拒绝"), fields);
-        Assert.True(fields.Contains("系统错误码 10061"), fields);
+        Assert.True(fields.Contains("对方拒绝了连接"), fields);
+        Assert.True(fields.Contains("错误码 10061"), fields);
     }
 
     [Fact]
@@ -152,7 +290,8 @@ public class ProxyUnitTests
         var upstream = UpstreamException.From(failure);
         Assert.True(upstream.IsConnect, failure.ToString());
         var label = NetworkErrorLabel.Describe(upstream, true, NetworkPhase.AwaitingResponse);
-        Assert.True(label.Contains("建立上游连接失败（ConnectError）"), label);
+        Assert.True(label.Contains("连不上上游，"), label);
+        Assert.True(label.Contains("（技术细节：ConnectError；"), label);
         Assert.True(label.Contains("链路：系统代理"), label);
         Assert.False(label.Contains("private"), label);
         Assert.False(label.Contains("https://"), label);

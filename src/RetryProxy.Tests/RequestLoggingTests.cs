@@ -297,7 +297,7 @@ public class RequestLoggingTests
     [Fact]
     public async Task InterruptedStreamsKeepProgressAndRequestIdsWithoutClaimingRateLimits()
     {
-        foreach (var (breakConnection, expected) in new[] { (true, "读取上游响应失败（ClientError）"), (false, "读取上游响应超时（Timeout）") })
+        foreach (var (breakConnection, expected) in new[] { (true, "上游回复到一半，连接就断了"), (false, "上游回复到一半就没了动静，已等到超时") })
         {
             await using var fixture = await LifecycleProxy.StartAsync(async context =>
             {
@@ -372,9 +372,9 @@ public class RequestLoggingTests
         foreach (var line in failures)
         {
             Assert.Contains("上游状态码：无", line);
-            Assert.Contains("收到上游响应前超时（Timeout）", line);
+            Assert.Contains("上游一直没回复，已等到超时", line);
             Assert.Contains("链路：直连", line);
-            Assert.Contains("底层原因：", line);
+            Assert.Contains("（技术细节：Timeout", line);
         }
 
         Assert.Equal(1UL, fixture.Metrics.Snapshot().RetryCount);

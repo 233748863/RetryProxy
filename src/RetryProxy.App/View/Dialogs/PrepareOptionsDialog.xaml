@@ -16,53 +16,33 @@
                       Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
                       TextWrapping="Wrap" />
 
-        <RadioButton x:Name="DefaultRadio"
+        <RadioButton x:Name="CurrentRadio"
                      Margin="0,14,0,0"
                      Checked="OnModeChanged"
-                     Content="{i18n:T 当前通道，沿用本机默认配置}"
+                     Content="{i18n:T 使用本通道供应商准备}"
                      GroupName="prepare-mode"
                      IsChecked="True" />
-        <ui:TextBlock x:Name="DefaultHint"
-                      Margin="28,2,0,0"
-                      Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
-                      TextWrapping="Wrap" />
-
-        <RadioButton x:Name="CurrentRadio"
+        <RadioButton x:Name="NewRadio"
                      Margin="0,10,0,0"
                      Checked="OnModeChanged"
-                     Content="{i18n:T 在当前通道独立准备，修改地址、密钥和模型}"
+                     Content="{i18n:T 配置新供应商准备}"
                      GroupName="prepare-mode" />
-        <RadioButton x:Name="SeparateRadio"
-                     Margin="0,10,0,0"
-                     Checked="OnModeChanged"
-                     Content="{i18n:T 新建独立通道，单独准备供应商}"
-                     GroupName="prepare-mode" />
-        <StackPanel x:Name="SeparatePanel" Margin="28,2,0,0">
-            <ui:TextBlock x:Name="SeparateHint"
-                          Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
-                          TextWrapping="Wrap" />
-            <ui:TextBlock x:Name="ProviderLabel" Margin="0,8,0,4" Text="{i18n:T 目标服务商}" />
-            <ComboBox x:Name="ProviderBox"
-                      HorizontalAlignment="Stretch"
-                      DisplayMemberPath="Text"
-                      SelectionChanged="OnProviderChanged" />
+        <StackPanel Margin="28,2,0,0">
             <StackPanel x:Name="NewProviderPanel">
-                <ui:TextBlock Margin="0,8,0,4" Text="{i18n:T 服务商名称}" />
-                <ui:TextBox x:Name="NewProviderNameBox"
-                            PlaceholderText="{i18n:T 例如 备用供应商}"
-                            TextChanged="OnFieldChanged" />
-                <ui:TextBlock Margin="0,8,0,4" Text="{i18n:T 服务商地址}" />
+                <ui:TextBlock Margin="0,8,0,4" Text="{i18n:T 新供应商地址}" />
                 <ui:TextBox x:Name="NewProviderUrlBox"
                             behavior:ClipboardInterceptor.EnableUrlPaste="True"
                             PlaceholderText="https://api.example.com"
                             TextChanged="OnFieldChanged" />
             </StackPanel>
-            <ui:TextBlock Margin="0,8,0,4" Text="API Key" />
-            <ui:PasswordBox x:Name="ApiKeyBox"
-                            PasswordChanged="OnFieldChanged"
-                            PlaceholderText="sk-…"
-                            RevealButtonEnabled="True"
-                            ToolTip="{i18n:T 密钥将加密保存于当前 Windows 用户配置，供本通道重启后继续使用。}" />
+            <StackPanel x:Name="NewProviderKeyPanel">
+                <ui:TextBlock Margin="0,8,0,4" Text="API Key" />
+                <ui:PasswordBox x:Name="ApiKeyBox"
+                                PasswordChanged="OnFieldChanged"
+                                PlaceholderText="sk-…"
+                                RevealButtonEnabled="True"
+                                ToolTip="{i18n:T 密钥只保留在本次运行的内存中，重启后清空。}" />
+            </StackPanel>
             <ui:TextBlock Margin="0,8,0,4" Text="{i18n:T 准备模型}" />
             <Grid>
                 <Grid.ColumnDefinitions>
@@ -86,6 +66,17 @@
                           Margin="0,6,0,0"
                           Text="{i18n:T 正在获取模型…}"
                           Visibility="Collapsed" />
+            <StackPanel Margin="0,10,0,0" Orientation="Horizontal">
+                <ui:TextBlock VerticalAlignment="Center" Text="{i18n:T 独立保活间隔}" />
+                <ui:TextBox x:Name="IdleMinutesBox"
+                            Width="72"
+                            Margin="12,0,6,0"
+                            ToolTip="{i18n:T 允许输入 0.5～1440 分钟}" />
+                <ui:TextBlock VerticalAlignment="Center" Text="{i18n:T 分钟}" />
+            </StackPanel>
+            <ui:TextBlock Margin="0,4,0,0"
+                          Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
+                          Text="{i18n:T 准备成功后按此间隔保活；仅在本次运行有效}" />
             <ui:TextBlock x:Name="PlanText"
                           Margin="0,8,0,0"
                           Foreground="{ui:ThemeResource TextFillColorSecondaryBrush}"

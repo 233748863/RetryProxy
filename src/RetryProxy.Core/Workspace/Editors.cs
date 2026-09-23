@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using RetryProxy.Core.Cli;
 using RetryProxy.Core.Config;
 
 namespace RetryProxy.Core.Workspace;
@@ -50,9 +49,8 @@ public sealed class RouteEditor
 
 public enum PrepareMode
 {
-    Default,
-    SeparateProvider,
-    CurrentRoute,
+    CurrentProvider,
+    NewProvider,
 }
 
 /// <summary>“一键准备”选项窗的状态。</summary>
@@ -60,12 +58,7 @@ public sealed class PreparationDialogState
 {
     public string RouteId { get; init; } = string.Empty;
 
-    public PrepareMode Mode { get; set; } = PrepareMode.Default;
-
-    /// <summary>目标服务商名称；null 表示“新增服务商…”。</summary>
-    public string? Provider { get; set; }
-
-    public string NewProviderName { get; set; } = string.Empty;
+    public PrepareMode Mode { get; set; } = PrepareMode.CurrentProvider;
 
     public string NewProviderUrl { get; set; } = string.Empty;
 
@@ -74,6 +67,8 @@ public sealed class PreparationDialogState
     public IReadOnlyList<string> Models { get; set; } = Array.Empty<string>();
 
     public string? SelectedModel { get; set; }
+
+    public string IdleMinutes { get; set; } = "5";
 
     public void ClearModels()
     {
@@ -84,26 +79,6 @@ public sealed class PreparationDialogState
     public bool ShowKey { get; set; }
 
     public string? Error { get; set; }
-}
-
-/// <summary>单独准备用哪条通道。</summary>
-public abstract record SeparateChannelPlan
-{
-    public sealed record Reuse(ProxyRoute Route) : SeparateChannelPlan;
-
-    public sealed record Create(string Name, int Port) : SeparateChannelPlan;
-}
-
-/// <summary>新通道监听成功后才把 Key 交给它准备。</summary>
-public sealed class PendingPreparation
-{
-    public required string RouteId { get; init; }
-
-    public required CliCredential Credential { get; init; }
-
-    public required string ProviderName { get; init; }
-
-    public required string OriginRouteName { get; init; }
 }
 
 /// <summary>编辑器字段解析失败时抛出，消息即界面文案。</summary>

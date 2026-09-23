@@ -109,7 +109,7 @@
             <ui:NavigationView.ContentOverlay>
                 <Grid>
                     <ui:SnackbarPresenter x:Name="SnackbarPresenter" />
-                    <ContentPresenter x:Name="RootContentDialogPresenter" />
+                    <ui:ContentDialogHost x:Name="RootContentDialogHost" />
                 </Grid>
             </ui:NavigationView.ContentOverlay>
         </ui:NavigationView>

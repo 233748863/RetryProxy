@@ -25,7 +25,7 @@ public sealed class Dialogs
     /// <summary>删除确认：`确认删除`（红）/ `取消`。</summary>
     public async Task<bool> ConfirmDeleteAsync(string title, string body)
     {
-        var dialog = new ContentDialog(_dialogs.GetDialogHost())
+        var dialog = new ContentDialog(_dialogs.GetDialogHostEx())
         {
             Title = I18nService.Instance.Translate(title),
             Content = new TextBlock { Text = body, TextWrapping = TextWrapping.Wrap, MaxWidth = 400 },
@@ -41,21 +41,21 @@ public sealed class Dialogs
 
     public async Task ShowProviderEditorAsync(ProviderEditor editor)
     {
-        var dialog = new ProviderEditorDialog(_dialogs.GetDialogHost(), Workspace, editor);
+        var dialog = new ProviderEditorDialog(_dialogs.GetDialogHostEx(), Workspace, editor);
         await dialog.ShowAsync();
         _workspaceService.Flush();
     }
 
     public async Task ShowRouteEditorAsync(RouteEditor editor)
     {
-        var dialog = new RouteEditorDialog(_dialogs.GetDialogHost(), Workspace, editor);
+        var dialog = new RouteEditorDialog(_dialogs.GetDialogHostEx(), Workspace, editor);
         await dialog.ShowAsync();
         _workspaceService.Flush();
     }
 
     public async Task ShowPrepareOptionsAsync(PreparationDialogState state)
     {
-        var dialog = new PrepareOptionsDialog(_dialogs.GetDialogHost(), Workspace, state);
+        var dialog = new PrepareOptionsDialog(_dialogs.GetDialogHostEx(), Workspace, state);
         await dialog.ShowAsync();
         _workspaceService.Flush();
     }

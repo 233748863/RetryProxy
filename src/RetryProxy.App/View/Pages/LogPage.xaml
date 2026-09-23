@@ -105,6 +105,11 @@
                                CommandParameter="error"
                                Content="{i18n:T 错误}"
                                Style="{StaticResource ChipButton}" />
+                    <ui:Button Margin="8,0,0,0"
+                               Appearance="{Binding OnlyKeepAlive, Converter={StaticResource BooleanToChipAppearanceConverter}}"
+                               Command="{Binding ToggleKeepAliveCommand}"
+                               Content="{i18n:T 保活}"
+                               Style="{StaticResource ChipButton}" />
                     <Border Width="1"
                             Height="16"
                             Margin="10,0,6,0"

@@ -56,6 +56,8 @@ public sealed class KeepAliveSnapshot
 
     public ulong ContextLimit { get; init; }
 
+    public TimeSpan Idle { get; init; }
+
     public KeepAliveTotals Totals { get; init; }
 
     public KeepAliveSuccess? LastSuccess { get; init; }
@@ -202,6 +204,7 @@ public sealed class KeepAliveWatchdog
 
     private readonly object _lock = new();
     private bool _enabled;
+    private bool _preparationRequiresContext;
     private TimeSpan _idle;
     private ulong _contextLimit = DefaultContextLimit;
     private long _lastActivityMs;
@@ -388,6 +391,14 @@ public sealed class KeepAliveWatchdog
         }
 
         NotifyUi();
+    }
+
+    public void RequireContextForPreparation()
+    {
+        lock (_lock)
+        {
+            _preparationRequiresContext = true;
+        }
     }
 
     public void SetContextLimit(ulong limit)
@@ -764,12 +775,13 @@ public sealed class KeepAliveWatchdog
                 Turns = _session?.Turns ?? 0,
                 ContextTokens = _session?.ContextTokens,
                 ContextLimit = _contextLimit,
+                Idle = _idle,
                 Totals = _totals,
                 LastSuccess = _lastSuccess,
                 ActiveRequests = _activeRequests,
                 Probing = _flight is { Result: null },
                 Preparing = _preparation is not null,
-                WithKey = _credential is not null,
+                WithKey = _credential is { ApiKey.Length: > 0 },
                 PreparationAttempts = _preparationAttempts,
                 PreparationRetryAfter = _preparationRetryAtMs is { } retryAt ? TimeSpan.FromMilliseconds(Math.Max(0, retryAt - NowMs)) : null,
                 PreparationLastError = _preparationLastError,
@@ -829,6 +841,15 @@ public sealed class KeepAliveWatchdog
         session.Turns++;
         session.Model = model;
         session.ContextTokens = contextTokens;
+        var preparing = _preparation is { } preparation && preparation == PreparationState.Running(probe.FlightId);
+        if (preparing && _preparationRequiresContext && contextTokens is null)
+        {
+            flight.Result = new PreparationResult.Failed("CLI 未返回上下文用量");
+            _totals.Failed = Saturating(_totals.Failed);
+            ClearSessionLocked();
+            return null;
+        }
+
         _totals.Completed = Saturating(_totals.Completed);
         _lastSuccess = new KeepAliveSuccess { Model = model, ContextTokens = contextTokens };
         var contextLimit = _contextLimit;
@@ -975,7 +996,7 @@ public sealed class KeepAliveProbe : IDisposable
     internal CliCredential? Credential { get; }
 
     /// <summary>本轮是否使用用户临时输入的 Key。</summary>
-    public bool UsesSuppliedKey => Credential is not null;
+    public bool UsesSuppliedKey => Credential is { ApiKey.Length: > 0 };
 
     /// <summary>拉起（或复用）CLI 会话并问一道题。失败抛 <see cref="CliException"/>；取消抛 <see cref="OperationCanceledException"/>。</summary>
     internal async Task<CliReply> ExecuteAsync(CancellationToken cancellationToken)

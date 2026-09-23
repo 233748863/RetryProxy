@@ -29,6 +29,28 @@ public class ProxyConfigTests
     }
 
     [Fact]
+    public void LegacyPreparationFieldsAreDroppedWithoutRemovingTheRoute()
+    {
+        var parsed = Parse("""
+            {
+              "providers": [{"name":"existing","base_url":"https://example.test"}],
+              "routes": [{
+                "id":"old-route","name":"Existing route","provider_name":"existing","listen_port":18080,
+                "dedicated_preparation":true,"protected_api_key":"legacy-encrypted-key","preparation_model":"old-model"
+              }],
+              "selected_route_id":"old-route"
+            }
+            """);
+        Assert.Single(parsed.Config.Providers);
+        Assert.Single(parsed.Config.Routes);
+        Assert.Equal("old-route", parsed.Config.Routes[0].Id);
+        var canonical = ProxyConfigJson.ToCanonicalJson(parsed.Config);
+        Assert.DoesNotContain("dedicated_preparation", canonical);
+        Assert.DoesNotContain("protected_api_key", canonical);
+        Assert.DoesNotContain("preparation_model", canonical);
+    }
+
+    [Fact]
     public void TotalTimeoutMigratesPreservesLongAttemptsAndRoundTrips()
     {
         var (config, migrated) = Parse("""

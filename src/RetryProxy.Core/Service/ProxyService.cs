@@ -36,6 +36,8 @@ public sealed class ProxyService
     private TaskCompletionSource<bool>? _stopSignal;
     private Task? _task;
     private Action? _notifier;
+    private string? _upstreamApiKey;
+    private string? _localAccessKey;
 
     public ProxyService(ProxyLogger logger, string routeName)
         : this(logger, routeName, new ProxyMetrics())
@@ -120,6 +122,13 @@ public sealed class ProxyService
     public ProxyService WithKeepAliveWatchdog(KeepAliveWatchdog watchdog)
     {
         KeepAlive = watchdog;
+        return this;
+    }
+
+    public ProxyService WithUpstreamApiKey(string apiKey, string localAccessKey)
+    {
+        _upstreamApiKey = apiKey;
+        _localAccessKey = localAccessKey;
         return this;
     }
 
@@ -271,7 +280,8 @@ public sealed class ProxyService
         {
             proxy = new RetryProxyPipeline(config, _logger, Metrics, cancel.Token)
                 .WithRouteLogger(logger)
-                .WithKeepAliveWatchdog(KeepAlive);
+                .WithKeepAliveWatchdog(KeepAlive)
+                .WithUpstreamApiKey(_upstreamApiKey, _localAccessKey);
         }
         catch (ConfigException error)
         {

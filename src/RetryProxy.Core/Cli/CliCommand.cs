@@ -145,6 +145,17 @@ public sealed class CliCredential : IEquatable<CliCredential>
         return new CliCredential(apiKey, baseUrl, model);
     }
 
+    public static CliCredential CreateLocal(string baseUrl, string? model = null)
+    {
+        baseUrl = baseUrl.Trim().TrimEnd('/');
+        if (baseUrl.Length == 0)
+        {
+            throw new CliException("准备入口地址不能为空");
+        }
+
+        return new CliCredential(string.Empty, baseUrl, model);
+    }
+
     public bool Equals(CliCredential? other) => other is not null && ApiKey == other.ApiKey && BaseUrl == other.BaseUrl && Model == other.Model;
 
     public override bool Equals(object? obj) => Equals(obj as CliCredential);

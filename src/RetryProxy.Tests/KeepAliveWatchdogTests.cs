@@ -238,6 +238,62 @@ public class KeepAliveWatchdogTests
     }
 
     [Fact]
+    public void IndependentPreparationKeepsRetryingUntilContextUsageIsReturned()
+    {
+        var (watchdog, service) = Running(true);
+        using var _ = service;
+        watchdog.RequireContextForPreparation();
+        watchdog.RequestPreparation();
+        var first = watchdog.BeginDueProbe()!;
+        Assert.Null(first.Complete("test-model", null));
+        first.Dispose();
+        Assert.Null(watchdog.TakePreparationResult());
+        Assert.True(watchdog.Snapshot().Preparing);
+        Assert.Contains("未返回上下文", watchdog.Snapshot().PreparationLastError);
+
+        watchdog.SetPreparationRetryNowForTest();
+        var second = watchdog.BeginDueProbe()!;
+        Assert.NotNull(second.Complete("test-model", 120));
+        second.Dispose();
+        Assert.IsType<PreparationResult.Ready>(watchdog.TakePreparationResult());
+        Assert.False(watchdog.Snapshot().Preparing);
+        Assert.Equal(1UL, watchdog.Snapshot().Totals.Completed);
+    }
+
+    [Fact]
+    public void PreparationKeepsTryingAfterRepeatedFailuresUntilContextReturns()
+    {
+        var watchdog = new KeepAliveWatchdog(true, TimeSpan.FromMinutes(5));
+        using var service = watchdog.RegisterService(KeepAliveFlavor.Codex);
+        watchdog.RequireContextForPreparation();
+        Assert.True(watchdog.RequestPreparation());
+        for (var attempt = 0; attempt < 20; attempt++)
+        {
+            if (attempt > 0)
+            {
+                watchdog.SetPreparationRetryNowForTest();
+            }
+
+            using var probe = watchdog.BeginDueProbe()!;
+            probe.Fail("上游 HTTP 500");
+        }
+
+        Assert.True(watchdog.Snapshot().Preparing);
+        Assert.Equal(20UL, watchdog.Snapshot().PreparationAttempts);
+        Assert.Null(watchdog.TakePreparationResult());
+        watchdog.SetPreparationRetryNowForTest();
+        using (var success = watchdog.BeginDueProbe()!)
+        {
+            Assert.NotNull(success.Complete("test-model", 120));
+        }
+
+        Assert.IsType<PreparationResult.Ready>(watchdog.TakePreparationResult());
+        Assert.False(watchdog.Snapshot().Preparing);
+        Assert.Equal(TimeSpan.FromMinutes(5), watchdog.Idle);
+        Assert.True(watchdog.Enabled);
+    }
+
+    [Fact]
     public void LoweringTheLimitClearsAnOversizedIdleSession()
     {
         var (watchdog, service) = Running(true);

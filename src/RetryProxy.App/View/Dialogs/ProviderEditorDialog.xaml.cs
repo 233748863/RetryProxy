@@ -12,7 +12,7 @@ public partial class ProviderEditorDialog : ContentDialog
     private readonly ProviderEditor _editor;
     private readonly ProxyWorkspace _workspace;
 
-    public ProviderEditorDialog(ContentPresenter? host, ProxyWorkspace workspace, ProviderEditor editor)
+    public ProviderEditorDialog(ContentDialogHost? host, ProxyWorkspace workspace, ProviderEditor editor)
         : base(host)
     {
         _workspace = workspace;

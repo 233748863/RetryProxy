@@ -47,7 +47,7 @@ public partial class MainWindow : FluentWindow, INavigationWindow
         _windowRecovery = new WindowRecovery(this, proxyLogger);
 
         snackbarService.SetSnackbarPresenter(SnackbarPresenter);
-        contentDialogService.SetDialogHost(RootContentDialogPresenter);
+        contentDialogService.SetDialogHost(RootContentDialogHost);
         navigationService.SetNavigationControl(RootNavigation);
 
         Application.Current.MainWindow = this;

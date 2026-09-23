@@ -5,6 +5,8 @@ using System.IO;
 using System.Net;
 using System.Net.Http;
 using System.Runtime.CompilerServices;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -46,6 +48,8 @@ public sealed class RetryProxy
 
     private readonly HttpClient _client;
     private readonly PromptCache _promptCache;
+    private string? _upstreamApiKey;
+    private string? _localAccessKey;
     private Func<double> _randomValue = () => Random.Shared.NextDouble();
 
     public RetryProxy(ProxyConfig config, ProxyLogger logger, ProxyMetrics metrics, CancellationToken cancel, IProxyResolver? proxyResolver = null)
@@ -115,6 +119,13 @@ public sealed class RetryProxy
         return this;
     }
 
+    public RetryProxy WithUpstreamApiKey(string? apiKey, string? localAccessKey)
+    {
+        _upstreamApiKey = apiKey;
+        _localAccessKey = localAccessKey;
+        return this;
+    }
+
     /// <summary>到点就发一轮保活探测（对应 send_due_keepalive_probe）。</summary>
     public async Task SendDueKeepAliveProbeAsync()
     {
@@ -141,7 +152,7 @@ public sealed class RetryProxy
         var startedAt = MonotonicInstant.Now;
         var timeoutSeconds = Math.Min(Config.TimeoutSeconds, Config.TotalTimeoutSeconds);
         var sessionLabel = probe.SessionId.Length > 8 ? probe.SessionId[..8] : probe.SessionId;
-        var configuration = probe.UsesSuppliedKey ? "使用本次输入的 Key 经本通道转发" : "沿用本机客户端配置";
+        var configuration = _localAccessKey is not null ? "经后台临时代理转发" : probe.UsesSuppliedKey ? "使用本次输入的 Key 经本通道转发" : "沿用本机客户端配置";
         Logger.Info($"供应商保活 [会话 {sessionLabel}] 第 {probe.Turn} 轮，随机题号 {probe.QuestionIndex + 1}/250，{probe.Flavor.Label()} CLI，{configuration}，问题：{probe.Question}");
 
         Cli.CliReply? reply = null;
@@ -306,6 +317,24 @@ public sealed class RetryProxy
     /// <summary>转发入口（对应 proxy_handler + handle_request）。</summary>
     public async Task HandleAsync(HttpContext context)
     {
+        if (_localAccessKey is { } localAccessKey)
+        {
+            if (HttpMethods.IsHead(context.Request.Method) && context.Request.Path == "/api/hello")
+            {
+                await WriteSimpleResponseAsync(context, 200, "application/json; charset=utf-8", Array.Empty<byte>()).ConfigureAwait(false);
+                return;
+            }
+
+            var authorization = context.Request.Headers.Authorization.ToString();
+            var apiKey = context.Request.Headers["x-api-key"].ToString();
+            if (!AccessKeyMatches(authorization, $"Bearer {localAccessKey}") && !AccessKeyMatches(apiKey, localAccessKey))
+            {
+                await WriteSimpleResponseAsync(context, 401, "application/json; charset=utf-8",
+                    JsonBody.Error("unauthorized", "后台临时代理拒绝未授权请求")).ConfigureAwait(false);
+                return;
+            }
+        }
+
         var deadline = Deadline.AfterSeconds(Config.TotalTimeoutSeconds);
         var startedAt = MonotonicInstant.Now;
         // 当日统计日志跨进程存活，保留完整 UUID，重启后不同请求不会被旧的 32 位显示 ID 合并。
@@ -439,6 +468,13 @@ public sealed class RetryProxy
         {
             guard.Dispose();
         }
+    }
+
+    private static bool AccessKeyMatches(string supplied, string expected)
+    {
+        var suppliedBytes = Encoding.UTF8.GetBytes(supplied);
+        var expectedBytes = Encoding.UTF8.GetBytes(expected);
+        return suppliedBytes.Length == expectedBytes.Length && CryptographicOperations.FixedTimeEquals(suppliedBytes, expectedBytes);
     }
 
     private static async Task DeliverAsync(HttpContext context, ProxyResponse response, CancellationToken token)
@@ -603,6 +639,14 @@ public sealed class RetryProxy
         var method = ctx.Method;
         var safePath = ctx.SafePath;
         var headers = HeaderRules.CopyRequestHeaders(requestHeaders);
+        if (_upstreamApiKey is { } apiKey)
+        {
+            headers.Remove("authorization");
+            headers.Remove("x-api-key");
+            headers.Remove("api-key");
+            headers.Set(Config.ClientType == ClientType.Claude ? "x-api-key" : "authorization",
+                Config.ClientType == ClientType.Claude ? apiKey : $"Bearer {apiKey}");
+        }
         var metadata = RequestMetadata.Parse(body);
         var pathAndQuery = rawQuery.Length > 0 ? $"{safePath}?{rawQuery}" : safePath;
         var keepAliveTemplate = HttpMethods.IsPost(method) ? new KeepAliveTemplate(method, pathAndQuery, headers, body) : null;
@@ -698,7 +742,9 @@ public sealed class RetryProxy
                 }
                 else if (retryable)
                 {
-                    Logger.Warn($"[{requestId}] 重试耗尽，向客户端返回最后一次上游响应 HTTP {status}");
+                    Logger.Warn(_localAccessKey is not null && requestId.StartsWith(ProxyMetrics.KeepAlivePrefix, StringComparison.Ordinal)
+                        ? $"[{requestId}] 本轮上游 HTTP {status}，后台准备将在间隔后继续"
+                        : $"[{requestId}] 重试耗尽，向客户端返回最后一次上游响应 HTTP {status}");
                 }
 
                 try
@@ -1204,8 +1250,10 @@ public sealed class RetryProxy
         };
         var statusText = status is { } value ? $"上游 HTTP {value}" : "上游状态码：无";
         double? delay = attemptNumber < totalAttempts ? RetryDelay(attemptNumber - 1, null, null) : null;
-        var retryText = delay is { } seconds ? $"将在 {seconds:F3} 秒后重试" : "已达到重试上限";
-        Logger.Warn($"[{ctx.RequestId}] 第 {attemptNumber}/{totalAttempts} 次 {ctx.Method} {ctx.SafePath} -> {statusText}，{label}，{retryText}，{LogText.TimingText(firstByteSeconds, elapsed)}");
+        var isTemporaryKeepAlive = _localAccessKey is not null && ctx.RequestId.StartsWith(ProxyMetrics.KeepAlivePrefix, StringComparison.Ordinal);
+        var retryText = delay is { } seconds ? $"将在 {seconds:F3} 秒后重试" : isTemporaryKeepAlive ? "本轮结束，后台准备将在间隔后继续" : "已达到重试上限";
+        var attemptText = isTemporaryKeepAlive ? "本轮" : $"第 {attemptNumber}/{totalAttempts} 次";
+        Logger.Warn($"[{ctx.RequestId}] {attemptText} {ctx.Method} {ctx.SafePath} -> {statusText}，{label}，{retryText}，{LogText.TimingText(firstByteSeconds, elapsed)}");
         if (delay is not { } wait)
         {
             ctx.Metrics.Failure(ctx.RequestId);

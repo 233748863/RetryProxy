@@ -21,7 +21,7 @@ public partial class RouteEditorDialog : ContentDialog
     private readonly RouteEditor _editor;
     private readonly ProxyWorkspace _workspace;
 
-    public RouteEditorDialog(ContentPresenter? host, ProxyWorkspace workspace, RouteEditor editor)
+    public RouteEditorDialog(ContentDialogHost? host, ProxyWorkspace workspace, RouteEditor editor)
         : base(host)
     {
         _workspace = workspace;

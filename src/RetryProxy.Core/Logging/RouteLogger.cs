@@ -26,6 +26,13 @@ public sealed class RouteLogger
 
     private string Prefix(string message)
     {
+        if (_routeName != "保活"
+            && (message.StartsWith("[保活-", System.StringComparison.Ordinal)
+                || message.StartsWith("供应商保活", System.StringComparison.Ordinal)))
+        {
+            message = $"[保活]{message}";
+        }
+
         if (_routeName.Length == 0)
         {
             return message;

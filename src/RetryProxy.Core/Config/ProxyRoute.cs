@@ -37,12 +37,6 @@ public sealed class ProxyRoute : IEquatable<ProxyRoute>
 
     public long KeepaliveContextLimit { get; set; } = ConfigDefaults.KeepaliveContextLimit;
 
-    public bool DedicatedPreparation { get; set; }
-
-    public string? ProtectedApiKey { get; set; }
-
-    public string? PreparationModel { get; set; }
-
     public string LocalUrl => $"http://{ConfigDefaults.ListenHost}:{ListenPort}";
 
     internal void NormalizeInPlace()
@@ -111,10 +105,7 @@ public sealed class ProxyRoute : IEquatable<ProxyRoute>
             && DesiredRunning == other.DesiredRunning
             && KeepaliveEnabled == other.KeepaliveEnabled
             && KeepaliveIdleMinutes == other.KeepaliveIdleMinutes
-            && KeepaliveContextLimit == other.KeepaliveContextLimit
-            && DedicatedPreparation == other.DedicatedPreparation
-            && ProtectedApiKey == other.ProtectedApiKey
-            && PreparationModel == other.PreparationModel;
+            && KeepaliveContextLimit == other.KeepaliveContextLimit;
     }
 
     public override bool Equals(object? obj) => Equals(obj as ProxyRoute);

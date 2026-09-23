@@ -39,6 +39,59 @@ public class ProxyIntegrationTests
         return config;
     }
 
+    [Theory]
+    [InlineData(ClientType.Codex, "Authorization", "Bearer sk-upstream")]
+    [InlineData(ClientType.Claude, "x-api-key", "sk-upstream")]
+    public async Task TemporaryServiceOverridesOnlyItsOwnUpstreamAuthentication(ClientType clientType, string expectedHeader, string expectedValue)
+    {
+        var seen = new System.Collections.Concurrent.ConcurrentQueue<(string Authorization, string ApiKey, string Path)>();
+        await using var upstream = await FakeUpstream.StartAsync(async context =>
+        {
+            seen.Enqueue((context.Request.Headers.Authorization.ToString(), context.Request.Headers["x-api-key"].ToString(), context.Request.Path));
+            await Upstream.Text(context, 200, "ok");
+        });
+        var directory = TempLogDirectory();
+        using var logger = ProxyLogger.Silent(directory);
+        var normalPort = FreePort();
+        var temporaryPort = FreePort();
+        var normal = new ProxyService(logger, "normal");
+        var temporary = new ProxyService(logger, "prepare").WithUpstreamApiKey("sk-upstream", "local-key");
+        var normalConfig = ServiceConfig(upstream.BaseUrl, normalPort, 0);
+        normalConfig.ClientType = clientType;
+        var temporaryConfig = ServiceConfig(upstream.BaseUrl, temporaryPort, 0);
+        temporaryConfig.ClientType = clientType;
+        normal.Start(normalConfig, TimeSpan.FromSeconds(5));
+        temporary.Start(temporaryConfig, TimeSpan.FromSeconds(5));
+        try
+        {
+            using var client = TestClient.Create();
+            using var probe = await TestClient.Send(client, HttpMethod.Head, $"http://127.0.0.1:{temporaryPort}/api/hello");
+            Assert.Equal(HttpStatusCode.OK, probe.StatusCode);
+            Assert.Empty(seen);
+            using var rejected = await TestClient.Send(client, HttpMethod.Get, $"http://127.0.0.1:{temporaryPort}/v1/models");
+            Assert.Equal(HttpStatusCode.Unauthorized, rejected.StatusCode);
+            Assert.Empty(seen);
+            using var prepared = await TestClient.Send(client, HttpMethod.Get, $"http://127.0.0.1:{temporaryPort}/v1/models",
+                headers: new System.Collections.Generic.Dictionary<string, string> { ["authorization"] = "Bearer local-key", ["x-api-key"] = "local-only" });
+            Assert.Equal(HttpStatusCode.OK, prepared.StatusCode);
+            using var ordinary = await TestClient.Send(client, HttpMethod.Get, $"http://127.0.0.1:{normalPort}/v1/models",
+                headers: new System.Collections.Generic.Dictionary<string, string> { ["authorization"] = "Bearer client-key" });
+            Assert.Equal(HttpStatusCode.OK, ordinary.StatusCode);
+            var requests = seen.ToArray();
+            Assert.Equal(2, requests.Length);
+            Assert.Equal("/v1/models", requests[0].Path);
+            Assert.Equal(expectedValue, expectedHeader == "Authorization" ? requests[0].Authorization : requests[0].ApiKey);
+            Assert.Equal(string.Empty, expectedHeader == "Authorization" ? requests[0].ApiKey : requests[0].Authorization);
+            Assert.Equal("Bearer client-key", requests[1].Authorization);
+            Assert.DoesNotContain("sk-upstream", LogFiles.ReadAll(directory));
+        }
+        finally
+        {
+            temporary.Stop(TimeSpan.FromSeconds(5));
+            normal.Stop(TimeSpan.FromSeconds(5));
+        }
+    }
+
     [Fact]
     public async Task ServiceForwardsAndRetries()
     {

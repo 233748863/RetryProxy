@@ -81,10 +81,19 @@ public partial class HomePageViewModel : ViewModel
     private bool _isPreparing;
 
     [ObservableProperty]
+    private bool _hasPreparation;
+
+    [ObservableProperty]
+    private string _preparationActionText = "终止准备";
+
+    [ObservableProperty]
     private string _prepareToolTip = string.Empty;
 
     [ObservableProperty]
     private string _keepAliveHint = string.Empty;
+
+    [ObservableProperty]
+    private string _autoKeepAliveHint = string.Empty;
 
     [ObservableProperty]
     private string? _keepAliveHintToolTip;
@@ -148,12 +157,13 @@ public partial class HomePageViewModel : ViewModel
             KeepAliveEnabled = route?.KeepaliveEnabled ?? false;
             KeepAliveMinutes = route is null ? string.Empty : Workspace.KeepAliveMinutes;
             ContextLimit = route?.KeepaliveContextLimit ?? ConfigDefaults.KeepaliveContextLimit;
-            var snapshot = route is not null && Workspace.RouteKeepAlives.TryGetValue(route.Id, out var watchdog)
-                ? watchdog.Snapshot()
-                : null;
-            IsPreparing = snapshot?.Preparing ?? false;
-            PrepareToolTip = route is null ? string.Empty : $"按当前配置为 {route.Name} 发起后台问答；需要修改地址、密钥或模型，请点击配置准备。";
-            KeepAliveHint = route is null ? string.Empty : Workspace.KeepAliveHint(route);
+            var snapshot = route is null ? null : Workspace.PreparationSnapshot(route.Id);
+            IsPreparing = snapshot?.Preparing == true || route is not null && Workspace.PreparationIsPending(route.Id);
+            HasPreparation = route is not null && Workspace.HasPreparation(route.Id);
+            PreparationActionText = IsPreparing ? "终止准备" : "停止保活";
+            PrepareToolTip = route is null ? string.Empty : "选择本通道供应商或临时配置新供应商；后台独立准备，不修改服务商和通道。";
+            AutoKeepAliveHint = route is null ? string.Empty : Workspace.KeepAliveHint(route);
+            KeepAliveHint = route is null ? string.Empty : Workspace.PreparationHint(route.Id);
             KeepAliveHintToolTip = snapshot?.PreparationLastError is { } reason
                 ? $"最近一次准备未完成：{reason}\n将持续重试，可点击“终止准备”取消。"
                 : null;
@@ -318,14 +328,7 @@ public partial class HomePageViewModel : ViewModel
     }
 
     [RelayCommand]
-    private void OnPrepareKeepAlive()
-    {
-        Workspace.PrepareSelectedRoute();
-        _workspaceService.Flush();
-    }
-
-    [RelayCommand]
-    private async Task OnConfigureKeepAlive()
+    private async Task OnPrepareKeepAlive()
     {
         if (Workspace.OpenPrepareDialog() is { } state)
         {

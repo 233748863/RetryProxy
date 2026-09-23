@@ -107,6 +107,16 @@ internal sealed class CliSession : IDisposable
         "project_doc_max_bytes=0",
     };
 
+    internal static List<string> CodexModelOverrides(string? model) => model is null
+        ? new List<string>()
+        : new List<string> { $"model={JsonText.Serialize(JsonValue.Create(model))}" };
+
+    internal static string ClaudeModelSettings(string? model) => JsonText.Serialize(new JsonObject
+    {
+        ["disableAllHooks"] = true,
+        ["model"] = model,
+    });
+
     private readonly KeepAliveFlavor _flavor;
     private readonly Process _child;
     private readonly Stream _stdin;
@@ -218,7 +228,9 @@ internal sealed class CliSession : IDisposable
 
         if (flavor == KeepAliveFlavor.Claude)
         {
-            var settings = credential is null ? "{\"disableAllHooks\":true}" : ClaudeCredentialSettings(credential);
+            var settings = credential is null ? "{\"disableAllHooks\":true}" : credential.ApiKey.Length == 0
+                ? ClaudeModelSettings(credential.Model)
+                : ClaudeCredentialSettings(credential);
             foreach (var argument in new[]
                      {
                          "--print", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
@@ -230,7 +242,7 @@ internal sealed class CliSession : IDisposable
                 start.ArgumentList.Add(argument);
             }
 
-            if (credential is not null)
+            if (credential is { ApiKey.Length: > 0 })
             {
                 if (credential.Model is { } model)
                 {
@@ -272,7 +284,7 @@ internal sealed class CliSession : IDisposable
                 start.ArgumentList.Add(setting);
             }
 
-            if (credential is not null)
+            if (credential is { ApiKey.Length: > 0 })
             {
                 foreach (var setting in CodexCredentialOverrides(credential))
                 {
@@ -281,6 +293,14 @@ internal sealed class CliSession : IDisposable
                 }
 
                 start.Environment[CodexCredentialEnv] = credential.ApiKey;
+            }
+            else if (credential?.Model is { } model)
+            {
+                foreach (var setting in CodexModelOverrides(model))
+                {
+                    start.ArgumentList.Add("-c");
+                    start.ArgumentList.Add(setting);
+                }
             }
         }
 
@@ -536,6 +556,10 @@ internal sealed class CliSession : IDisposable
         }, cancellationToken).ConfigureAwait(false);
         await WriteAsync(new JsonObject { ["method"] = "initialized" }, cancellationToken).ConfigureAwait(false);
         var configuration = await RpcAsync("config/read", new JsonObject { ["includeLayers"] = false }, cancellationToken).ConfigureAwait(false);
+        if (_model is null && configuration is JsonObject configObject && configObject["config"] is JsonObject config)
+        {
+            _model = config["model"]?.GetValue<string>();
+        }
         var overrides = CodexBackgroundOverrides(configuration);
         var reply = await RpcAsync("thread/start", new JsonObject
         {

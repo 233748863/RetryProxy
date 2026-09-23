@@ -35,6 +35,9 @@ public partial class LogPageViewModel : ViewModel
     private bool _onlySelected;
 
     [ObservableProperty]
+    private bool _onlyKeepAlive;
+
+    [ObservableProperty]
     private bool _autoScroll = true;
 
     [ObservableProperty]
@@ -115,7 +118,7 @@ public partial class LogPageViewModel : ViewModel
         for (var index = (int)(_nextGlobal - Buffer.Dropped); index < Buffer.Count; index++)
         {
             var line = Buffer[index];
-            if (LogLine.Matches(line, Filter, LowercaseQuery, RouteMarker))
+            if (LogLine.Matches(line, Filter, LowercaseQuery, RouteMarker, OnlyKeepAlive))
             {
                 Rows.Add(line);
                 _rowGlobals.Add(Buffer.Dropped + index);
@@ -140,7 +143,7 @@ public partial class LogPageViewModel : ViewModel
         for (var index = 0; index < Buffer.Count; index++)
         {
             var line = Buffer[index];
-            if (LogLine.Matches(line, Filter, query, route))
+            if (LogLine.Matches(line, Filter, query, route, OnlyKeepAlive))
             {
                 Rows.Add(line);
                 _rowGlobals.Add(Buffer.Dropped + index);
@@ -172,7 +175,25 @@ public partial class LogPageViewModel : ViewModel
 
     partial void OnQueryChanged(string value) => Rebuild();
 
-    partial void OnOnlySelectedChanged(bool value) => Rebuild();
+    partial void OnOnlySelectedChanged(bool value)
+    {
+        if (value && OnlyKeepAlive)
+        {
+            OnlyKeepAlive = false;
+        }
+
+        Rebuild();
+    }
+
+    partial void OnOnlyKeepAliveChanged(bool value)
+    {
+        if (value && OnlySelected)
+        {
+            OnlySelected = false;
+        }
+
+        Rebuild();
+    }
 
     public bool IsAll => Filter == LogLevelFilter.All;
 
@@ -198,6 +219,12 @@ public partial class LogPageViewModel : ViewModel
     private void OnToggleOnlySelected()
     {
         OnlySelected = !OnlySelected;
+    }
+
+    [RelayCommand]
+    private void OnToggleKeepAlive()
+    {
+        OnlyKeepAlive = !OnlyKeepAlive;
     }
 
     [RelayCommand]

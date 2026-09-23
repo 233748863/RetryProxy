@@ -275,18 +275,12 @@
                         <ui:Button Command="{Binding PrepareKeepAliveCommand}"
                                    Content="{i18n:T 一键准备}"
                                    IsEnabled="{Binding HasChannel}"
-                                   ToolTip="{Binding PrepareToolTip}"
-                                   Visibility="{Binding IsPreparing, Converter={StaticResource BooleanToVisibilityRevertConverter}}" />
-                        <ui:Button Margin="6,0,0,0"
-                                   Command="{Binding ConfigureKeepAliveCommand}"
-                                   Content="{i18n:T 配置准备}"
-                                   IsEnabled="{Binding HasChannel}"
-                                   ToolTip="{i18n:T 修改当前通道独立保存的地址、密钥和模型，或新建独立通道}" />
+                                   ToolTip="{Binding PrepareToolTip}" />
                         <ui:Button Margin="6,0,0,0"
                                    Appearance="Danger"
                                    Command="{Binding CancelPreparationCommand}"
-                                   Content="{i18n:T 终止准备}"
-                                   Visibility="{Binding IsPreparing, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                                   Content="{Binding PreparationActionText}"
+                                   Visibility="{Binding HasPreparation, Converter={StaticResource BooleanToVisibilityConverter}}" />
                         <ui:ProgressRing Width="18"
                                          Height="18"
                                          Margin="8,0,0,0"
@@ -345,7 +339,20 @@
                         <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="*" />
                     </Grid.ColumnDefinitions>
-                    <ui:TextBlock Grid.Column="0" Margin="0,0,16,0" FontTypography="Body" Text="{i18n:T 保活状态}" />
+                    <ui:TextBlock Grid.Column="0" Margin="0,0,16,0" FontTypography="Body" Text="{i18n:T 自动保活状态}" />
+                    <ui:TextBlock Grid.Column="1"
+                                  FontSize="11"
+                                  Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
+                                  Text="{Binding AutoKeepAliveHint}"
+                                  TextWrapping="Wrap" />
+                </Grid>
+                <Separator Margin="-18,0" BorderThickness="0,1,0,0" />
+                <Grid Margin="16">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <ui:TextBlock Grid.Column="0" Margin="0,0,16,0" FontTypography="Body" Text="{i18n:T 后台准备状态}" />
                     <ui:TextBlock Grid.Column="1"
                                   FontSize="11"
                                   Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"

@@ -149,9 +149,15 @@ public static class LogLine
     public static LogLevelFilter Level(string line) => Split(line).Level;
 
     /// <summary>日志行是否通过当前的级别、关键字与通道筛选。</summary>
-    public static bool Matches(string line, LogLevelFilter filter, string lowercaseQuery, string? route)
+    public static bool Matches(string line, LogLevelFilter filter, string lowercaseQuery, string? route, bool keepAliveOnly = false)
     {
         if (!filter.Accepts(line))
+        {
+            return false;
+        }
+
+        if (keepAliveOnly && !line.Contains("[保活]", StringComparison.Ordinal)
+            && !line.Contains("[保活-", StringComparison.Ordinal))
         {
             return false;
         }

@@ -10,6 +10,8 @@ using Microsoft.AspNetCore.Http;
 using RetryProxy.Core.Config;
 using RetryProxy.Core.Internal;
 using RetryProxy.Core.KeepAlive;
+using RetryProxy.Core.Logging;
+using RetryProxy.Core.Workspace;
 using RetryProxy.Tests.Support;
 using Xunit;
 
@@ -39,12 +41,16 @@ public class RequestLoggingTests
     [InlineData(true)]
     public async Task IndependentPreparationLogsOneDetailedWarningPerFailedRequest(bool streamError)
     {
+        var watchdog = new KeepAliveWatchdog(false, TimeSpan.FromMinutes(5));
+        using var registration = watchdog.RegisterService(KeepAliveFlavor.Codex);
+        Assert.True(watchdog.RequestPreparation());
         await using var fixture = await LifecycleProxy.StartAsync(
             context => streamError
                 ? Upstream.Text(context, 500, "data: {\"type\":\"error\",\"error\":{\"code\":\"get_channel_failed\"}}\n\n", "text/event-stream")
                 : Upstream.Text(context, 500, "upstream unavailable", "text/plain"),
             LoggingConfig(5.0, 0),
-            proxy => proxy.WithRouteLogger(proxy.Logger.Base.Route("保活", () => "准备"))
+            proxy => proxy.WithRouteLogger(proxy.Logger.Base.Preparation("准备 1 · Codex"))
+                .WithKeepAliveWatchdog(watchdog)
                 .WithUpstreamApiKey("sk-upstream", "sk-local"));
         var marker = Guid.NewGuid().ToString("N");
         using var cancellation = new CancellationTokenSource();
@@ -61,13 +67,112 @@ public class RequestLoggingTests
             Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
             Assert.NotNull(await TestClient.TryReadAll(response));
             var line = Assert.Single(await CompletedLogs(fixture));
-            Assert.Contains("WARNING [准备][保活-", line);
+            Assert.Contains("WARNING [一键准备][准备 1 · Codex][准备][请求 ", line);
             Assert.Contains("POST /v1/responses -> 上游 HTTP 500", line);
             Assert.Contains("首字", line);
             if (streamError)
             {
                 Assert.Contains("get_channel_failed", line);
             }
+        }
+        finally
+        {
+            InternalSessions.Unregister(marker);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task PreparationRequestKeepsItsActivityWhenTheTaskChangesBeforeTheResponse(bool markerInBody)
+    {
+        var watchdog = new KeepAliveWatchdog(false, TimeSpan.FromMinutes(5));
+        using var registration = watchdog.RegisterService(KeepAliveFlavor.Codex);
+        Assert.True(watchdog.RequestPreparation());
+        var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var fixture = await LifecycleProxy.StartAsync(async context =>
+        {
+            reached.TrySetResult();
+            await release.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await Upstream.Text(context, 500, "upstream unavailable");
+        }, LoggingConfig(5.0, 0), proxy => proxy
+            .WithRouteLogger(proxy.Logger.Base.Preparation("准备 2 · Codex"))
+            .WithKeepAliveWatchdog(watchdog)
+            .WithUpstreamApiKey("sk-upstream", "sk-local"));
+        var marker = Guid.NewGuid().ToString("N");
+        using var cancellation = new CancellationTokenSource();
+        InternalSessions.Register(marker, cancellation);
+        try
+        {
+            using var client = TestClient.Create();
+            var headers = new Dictionary<string, string> { ["authorization"] = "Bearer sk-local" };
+            var body = "{\"model\":\"gpt-test\",\"input\":\"hello\"}";
+            if (markerInBody)
+            {
+                body = System.Text.Json.JsonSerializer.Serialize(new
+                {
+                    model = "gpt-test",
+                    input = "hello",
+                    client_metadata = new Dictionary<string, string>
+                    {
+                        ["x-codex-turn-metadata"] = System.Text.Json.JsonSerializer.Serialize(new { retry_proxy_keepalive = marker }),
+                    },
+                });
+            }
+            else
+            {
+                headers["x-retry-keepalive"] = marker;
+            }
+            var pending = TestClient.Send(client, HttpMethod.Post, $"{fixture.Address}/v1/responses", body, headers: headers);
+            await reached.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            watchdog.CancelPreparation();
+            watchdog.Configure(true, TimeSpan.FromMinutes(5));
+            release.TrySetResult();
+            using var response = await pending;
+            await response.Content.ReadAsStringAsync();
+            var first = Assert.Single(await CompletedLogs(fixture));
+            Assert.Contains("[一键准备][准备 2 · Codex][准备][请求 ", first);
+            Assert.DoesNotContain("[独立保活]", first);
+
+            using var next = await TestClient.Send(client, HttpMethod.Post, $"{fixture.Address}/v1/responses", body, headers: headers);
+            await next.Content.ReadAsStringAsync();
+            var second = Assert.Single(await CompletedLogs(fixture));
+            Assert.Contains("[一键准备][准备 2 · Codex][独立保活][请求 ", second);
+            Assert.Equal(0UL, fixture.Metrics.Snapshot().TotalRequests);
+        }
+        finally
+        {
+            release.TrySetResult();
+            InternalSessions.Unregister(marker);
+        }
+    }
+
+    [Fact]
+    public async Task ConcurrentChannelRequestsAndKeepAliveHaveSeparateSources()
+    {
+        await using var fixture = await LifecycleProxy.StartAsync(
+            context => Upstream.Text(context, 200, "{}"), LoggingConfig(5.0, 0),
+            proxy => proxy.WithRouteLogger(proxy.Logger.Base.Route("alpha")));
+        var marker = Guid.NewGuid().ToString("N");
+        using var cancellation = new CancellationTokenSource();
+        InternalSessions.Register(marker, cancellation);
+        try
+        {
+            using var client = TestClient.Create();
+            var ordinary = TestClient.Send(client, HttpMethod.Post, $"{fixture.Address}/v1/responses", "{}");
+            var background = TestClient.Send(client, HttpMethod.Post, $"{fixture.Address}/v1/responses", "{}",
+                headers: new Dictionary<string, string> { ["x-retry-keepalive"] = marker });
+            using var first = await ordinary;
+            using var second = await background;
+            await first.Content.ReadAsStringAsync();
+            await second.Content.ReadAsStringAsync();
+            var logs = await CompletedLogs(fixture);
+            Assert.Equal(2, logs.Count);
+            Assert.Single(logs, line => LogLine.Matches(line, LogLevelFilter.All, string.Empty, "alpha", LogSource.ChannelProxy));
+            Assert.Single(logs, line => LogLine.Matches(line, LogLevelFilter.All, string.Empty, "alpha", LogSource.ChannelKeepAlive));
+            Assert.All(logs, line => Assert.DoesNotContain("[保活-", line));
+            Assert.Equal(1UL, fixture.Metrics.Snapshot().TotalRequests);
         }
         finally
         {

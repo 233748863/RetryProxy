@@ -88,6 +88,36 @@ public class LegacyLogRestoreTests : IDisposable
     }
 
     [Fact]
+    public void SourceTaggedLogsRestoreOnlyChannelRequestsAlongsideLegacyLines()
+    {
+        WriteLog("retry-proxy.log",
+            "2026-09-19 01:00:00 INFO [通道][11111111] POST /v1/responses -> 上游 HTTP 200，耗时 1.00 秒",
+            "2026-09-19 01:00:01 INFO [通道代理][通道][请求 22222222] POST /v1/responses -> 上游 HTTP 200，耗时 1.00 秒",
+            "2026-09-19 01:00:02 INFO [通道保活][通道][自动保活][请求 33333333] POST /v1/responses -> 上游 HTTP 200",
+            "2026-09-19 01:00:03 INFO [一键准备][通道][准备][请求 44444444] POST /v1/responses -> 上游 HTTP 200",
+            "2026-09-19 01:00:04 INFO [一键准备][通道][独立保活][请求 55555555] POST /v1/responses -> 上游 HTTP 200",
+            "2026-09-19 01:00:05 INFO [通道代理][其他通道][请求 66666666] POST /v1/responses -> 上游 HTTP 200");
+
+        var records = LegacyLogRestore.Restore(_directory, "通道", Date);
+        Assert.Equal(new[] { "11111111", "22222222" }, records.Keys);
+        Assert.All(records.Values, record => Assert.Equal(RequestOutcome.Success, record.Outcome));
+    }
+
+    [Fact]
+    public void SourceNamesDoNotHideLegacyChannelsOrTurnTaskNamesIntoRequestIds()
+    {
+        WriteLog("retry-proxy.log",
+            "2026-09-19 01:00:00 INFO [通道代理][11111111] POST /v1/responses -> 上游 HTTP 200，耗时 1.00 秒",
+            "2026-09-19 01:00:01 INFO [通道代理][通道代理][请求 22222222] POST /v1/responses -> 上游 HTTP 200，耗时 1.00 秒",
+            "2026-09-19 01:00:02 INFO [一键准备][aaaaaaaa][准备][请求 33333333] POST /v1/responses -> 上游 HTTP 200",
+            "2026-09-19 01:00:03 INFO [通道保活][bbbbbbbb][自动保活][请求 44444444] POST /v1/responses -> 上游 HTTP 200");
+
+        Assert.Equal(new[] { "11111111", "22222222" }, LegacyLogRestore.Restore(_directory, "通道代理", Date).Keys);
+        Assert.Empty(LegacyLogRestore.Restore(_directory, "一键准备", Date));
+        Assert.Empty(LegacyLogRestore.Restore(_directory, "通道保活", Date));
+    }
+
+    [Fact]
     public void ClaudeUsageIsCombinedOnlyWhenAllThreeFieldsWereLogged()
     {
         WriteLog(

@@ -655,36 +655,60 @@ public class WorkspaceTests
     }
 
     [Fact]
-    public void KeepAliveLogFilterIncludesTemporaryAndOrdinaryKeepAliveMessages()
+    public void SourceFiltersRecognizeLegacyPreparationAfterItStartsKeepingAlive()
     {
         const string temporary = "2026-09-05 09:50:00 INFO [保活] 自动保活已开始";
         const string ordinary = "2026-09-05 09:50:00 WARNING [alpha-one][保活] 后台问答未完成";
         const string preparing = "2026-09-05 09:50:00 INFO [准备][保活-ffffffff] 上游 HTTP 500";
+        const string independent = "2026-09-05 09:50:00 INFO [保活][准备 1][保活-ffffffff] 上游 HTTP 200";
         const string legacy = "2026-09-05 09:50:00 INFO [alpha-one][保活-ffffffff] 历史保活请求";
         const string request = "2026-09-05 09:50:00 INFO [alpha-one] 正常请求";
-        Assert.True(LogLine.Matches(temporary, LogLevelFilter.All, string.Empty, null, true));
-        Assert.True(LogLine.Matches(ordinary, LogLevelFilter.Warning, string.Empty, null, true));
-        Assert.True(LogLine.Matches(legacy, LogLevelFilter.All, string.Empty, null, true));
-        Assert.False(LogLine.Matches(preparing, LogLevelFilter.All, string.Empty, null, true));
-        Assert.True(LogLine.Matches(preparing, LogLevelFilter.All, string.Empty, null, preparationOnly: true));
-        Assert.False(LogLine.Matches(temporary, LogLevelFilter.All, string.Empty, null, preparationOnly: true));
-        Assert.False(LogLine.Matches(ordinary, LogLevelFilter.Info, string.Empty, null, true));
-        Assert.False(LogLine.Matches(request, LogLevelFilter.All, string.Empty, null, true));
+        Assert.True(LogLine.Matches(temporary, LogLevelFilter.All, string.Empty, null, LogSource.ChannelKeepAlive));
+        Assert.True(LogLine.Matches(ordinary, LogLevelFilter.Warning, string.Empty, null, LogSource.ChannelKeepAlive));
+        Assert.True(LogLine.Matches(legacy, LogLevelFilter.All, string.Empty, null, LogSource.ChannelKeepAlive));
+        Assert.False(LogLine.Matches(preparing, LogLevelFilter.All, string.Empty, null, LogSource.ChannelKeepAlive));
+        Assert.True(LogLine.Matches(preparing, LogLevelFilter.All, string.Empty, null, LogSource.Preparation));
+        Assert.True(LogLine.Matches(independent, LogLevelFilter.All, string.Empty, null, LogSource.Preparation));
+        Assert.False(LogLine.Matches(independent, LogLevelFilter.All, string.Empty, null, LogSource.ChannelKeepAlive));
+        Assert.False(LogLine.Matches(temporary, LogLevelFilter.All, string.Empty, null, LogSource.Preparation));
+        Assert.False(LogLine.Matches(ordinary, LogLevelFilter.Info, string.Empty, null, LogSource.ChannelKeepAlive));
+        Assert.False(LogLine.Matches(request, LogLevelFilter.All, string.Empty, null, LogSource.ChannelKeepAlive));
     }
 
     [Fact]
-    public void TemporaryProxyLogsArePreparationUntilContextReturns()
+    public void SourceAndRouteFiltersUsePrefixFieldsInsteadOfWordsInTheBody()
+    {
+        const string line = "2026-09-05 09:50:00 WARNING [一键准备][准备 2 · Claude Code][独立保活][请求 abcd1234] 上游 HTTP 500，正文含 [alpha] [通道保活]";
+        var parts = LogLine.Split(line);
+        Assert.Equal(LogSource.Preparation, parts.Source);
+        Assert.Null(parts.RouteName);
+        Assert.True(LogLine.Matches(line, LogLevelFilter.Warning, "准备 2", null, LogSource.Preparation));
+        Assert.True(LogLine.Matches(line, LogLevelFilter.All, "abcd1234", null, LogSource.Preparation));
+        Assert.False(LogLine.Matches(line, LogLevelFilter.Info, string.Empty, null, LogSource.Preparation));
+        Assert.False(LogLine.Matches(line, LogLevelFilter.All, "准备 1", null, LogSource.Preparation));
+        Assert.False(LogLine.Matches(line, LogLevelFilter.All, string.Empty, "alpha"));
+        Assert.False(LogLine.Matches(line, LogLevelFilter.All, string.Empty, null, LogSource.ChannelKeepAlive));
+
+        const string channel = "INFO [通道保活][alpha][自动保活][请求 12345678] 正文含 [beta] [一键准备]";
+        Assert.True(LogLine.Matches(channel, LogLevelFilter.All, string.Empty, "alpha", LogSource.ChannelKeepAlive));
+        Assert.False(LogLine.Matches(channel, LogLevelFilter.All, string.Empty, "beta", LogSource.ChannelKeepAlive));
+        Assert.True(LogLine.Matches("INFO [通道代理][一键准备][请求 12345678] 上游 HTTP 200", LogLevelFilter.All, string.Empty, "一键准备", LogSource.ChannelProxy));
+        Assert.True(LogLine.Matches("INFO [系统] 窗口已恢复 [alpha]", LogLevelFilter.All, string.Empty, null, LogSource.System));
+        Assert.False(LogLine.Matches("INFO [系统] 窗口已恢复 [alpha]", LogLevelFilter.All, string.Empty, "alpha"));
+    }
+
+    [Fact]
+    public void PreparationProbeKeepsItsActivityAfterCompletionAndCancellation()
     {
         using var fixture = new Fixture();
         var watchdog = new KeepAliveWatchdog(false, TimeSpan.FromMinutes(5));
         watchdog.RequireContextForPreparation();
         watchdog.EnableAfterPreparation();
-        var logger = fixture.Logger.Route("保活", () => watchdog.Snapshot().Preparing || !watchdog.Enabled ? "准备" : "保活");
         using var service = watchdog.RegisterService(KeepAliveFlavor.Codex);
         Assert.True(watchdog.RequestPreparation());
         using (var failure = watchdog.BeginDueProbe()!)
         {
-            logger.Warn("[保活-ffffffff] 上游 HTTP 500");
+            Assert.True(failure.IsPreparation);
             Assert.Null(failure.Complete("test-model", null));
         }
 
@@ -693,15 +717,20 @@ public class WorkspaceTests
         using (var success = watchdog.BeginDueProbe()!)
         {
             Assert.NotNull(success.Complete("test-model", 120));
-            logger.Info("[保活-eeeeeeee] 首次完整回复");
+            Assert.True(success.IsPreparation);
         }
 
         Assert.True(watchdog.Enabled);
-        logger.Info("[保活-dddddddd] 后续自动保活");
-        var logs = fixture.DrainLogs();
-        Assert.Contains(logs, line => line.Contains("[准备][保活-ffffffff]"));
-        Assert.Contains(logs, line => line.Contains("[准备][保活-eeeeeeee]"));
-        Assert.Contains(logs, line => line.Contains("[保活][保活-dddddddd]"));
+        watchdog.MakeDueForTest();
+        using (var keepingAlive = watchdog.BeginDueProbe()!)
+        {
+            Assert.False(keepingAlive.IsPreparation);
+            Assert.NotNull(keepingAlive.Complete("test-model", 140));
+        }
+        Assert.True(watchdog.RequestPreparation());
+        using var cancelled = watchdog.BeginDueProbe()!;
+        watchdog.CancelPreparation();
+        Assert.True(cancelled.IsPreparation);
     }
 
     [Fact]

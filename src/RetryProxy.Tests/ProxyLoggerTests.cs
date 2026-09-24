@@ -51,7 +51,7 @@ public class ProxyLoggerTests : IDisposable
         while (reader.TryRead(out var line))
         {
             lines++;
-            Assert.Matches(@"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} (INFO first|WARNING \[alpha\] second)$", line);
+            Assert.Matches(@"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} (INFO \[系统\] first|WARNING \[通道代理\]\[alpha\] second)$", line);
         }
 
         Assert.Equal(2, lines);
@@ -74,25 +74,37 @@ public class ProxyLoggerTests : IDisposable
 
         var reader = logger.UiLines!;
         Assert.True(reader.TryRead(out var first));
-        Assert.EndsWith(" INFO [beta][req-1] 开始", first);
+        Assert.EndsWith(" INFO [通道代理][beta][req-1] 开始", first);
         Assert.True(reader.TryRead(out var second));
-        Assert.EndsWith(" INFO [beta] 普通消息", second);
+        Assert.EndsWith(" INFO [通道代理][beta] 普通消息", second);
         Assert.True(reader.TryRead(out var third));
-        Assert.EndsWith(" INFO 无前缀", third);
+        Assert.EndsWith(" INFO [通道代理] 无前缀", third);
     }
 
     [Fact]
-    public void RouteLogsMarkPreparationAndAutomaticKeepAliveForFiltering()
+    public void ActivityLoggersKeepIndependentPreparationSeparateFromChannelKeepAlive()
     {
         using var logger = ProxyLogger.Create(_directory);
         var route = logger.Route("alpha");
-        route.Info("后台准备 [会话 12345678] 第 1 轮");
-        route.Info("自动保活 [会话 12345678] 第 2 轮");
+        route.WithActivity(LogActivity.Preparation).Info("[会话 12345678] 第 1 轮");
+        route.WithActivity(LogActivity.KeepAlive).Info("[会话 12345678] 第 2 轮");
+        var preparation = logger.Preparation("准备 1 · Codex");
+        var preparing = preparation.ForRequest("保活-ffffffff", internalRequest: true, preparing: true);
+        var keepingAlive = preparation.ForRequest("保活-eeeeeeee", internalRequest: true, preparing: false);
+        preparing.Warn("[保活-ffffffff] 上游 HTTP 500");
+        keepingAlive.Info("[保活-eeeeeeee] 上游 HTTP 200");
+        route.Info("供应商保活只是正文里的描述");
 
         var reader = logger.UiLines!;
-        Assert.True(reader.TryRead(out var preparing));
-        Assert.Contains("[alpha][保活]后台准备 [会话", preparing);
-        Assert.True(reader.TryRead(out var keepingAlive));
-        Assert.Contains("[alpha][保活]自动保活 [会话", keepingAlive);
+        Assert.True(reader.TryRead(out var line));
+        Assert.Contains("[通道保活][alpha][准备][会话 12345678]", line);
+        Assert.True(reader.TryRead(out line));
+        Assert.Contains("[通道保活][alpha][自动保活][会话 12345678]", line);
+        Assert.True(reader.TryRead(out line));
+        Assert.Contains("[一键准备][准备 1 · Codex][准备][请求 ffffffff]", line);
+        Assert.True(reader.TryRead(out line));
+        Assert.Contains("[一键准备][准备 1 · Codex][独立保活][请求 eeeeeeee]", line);
+        Assert.True(reader.TryRead(out line));
+        Assert.Contains("[通道代理][alpha] 供应商保活只是正文里的描述", line);
     }
 }

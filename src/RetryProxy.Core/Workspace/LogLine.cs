@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using RetryProxy.Core.Logging;
 
 namespace RetryProxy.Core.Workspace;
 
@@ -66,6 +67,12 @@ public sealed class LogLineParts
     public LogLevelFilter Level { get; init; } = LogLevelFilter.Info;
 
     public IReadOnlyList<string> Tags { get; init; } = Array.Empty<string>();
+
+    public LogSource Source { get; init; } = LogSource.System;
+
+    public string? RouteName { get; init; }
+
+    public bool HasSourceTag => Tags.Count > 0 && Tags[0] == Source.Label();
 
     public string Body { get; init; } = string.Empty;
 
@@ -137,11 +144,22 @@ public static class LogLine
             body = body.Substring(end + 1).TrimStart();
         }
 
+        var explicitSource = tags.Count > 0 ? LogSourceExtensions.FromLabel(tags[0]) : null;
+        var source = explicitSource ?? LegacySource(tags);
+        string? routeName = null;
+        if (source is LogSource.ChannelProxy or LogSource.ChannelKeepAlive)
+        {
+            routeName = explicitSource is not null ? tags.ElementAtOrDefault(1)
+                : tags.FirstOrDefault() is { } first && first != "保活" ? first : null;
+        }
+
         return new LogLineParts
         {
             Timestamp = timestamp,
             Level = level,
             Tags = tags,
+            Source = source,
+            RouteName = routeName,
             Body = body,
         };
     }
@@ -149,30 +167,35 @@ public static class LogLine
     /// <summary>解析日志行的级别，用于着色与筛选。</summary>
     public static LogLevelFilter Level(string line) => Split(line).Level;
 
-    /// <summary>日志行是否通过当前的级别、关键字与通道筛选。</summary>
-    public static bool Matches(string line, LogLevelFilter filter, string lowercaseQuery, string? route, bool keepAliveOnly = false, bool preparationOnly = false)
+    private static LogSource LegacySource(IReadOnlyList<string> tags)
     {
-        if (!filter.Accepts(line))
+        if (tags.Count == 0)
+        {
+            return LogSource.System;
+        }
+
+        // 兼容独立准备旧日志：[准备][准备 1] 和进入保活后的 [保活][准备 1]。
+        if (tags[0] == "准备"
+            || tags[0] == "保活" && tags.Skip(1).Any(tag => tag.StartsWith("准备 ", StringComparison.Ordinal)))
+        {
+            return LogSource.Preparation;
+        }
+
+        return tags.Contains("保活") || tags.Any(tag => tag.StartsWith("保活-", StringComparison.Ordinal))
+            ? LogSource.ChannelKeepAlive : LogSource.ChannelProxy;
+    }
+
+    /// <summary>日志行是否通过当前的级别、来源、关键字与通道筛选。</summary>
+    public static bool Matches(string line, LogLevelFilter filter, string lowercaseQuery, string? route, LogSource? source = null)
+    {
+        var parts = Split(line);
+        if (filter != LogLevelFilter.All && filter != parts.Level
+            || source is not null && source != parts.Source)
         {
             return false;
         }
 
-        if (keepAliveOnly || preparationOnly)
-        {
-            var tags = Split(line).Tags;
-            if (keepAliveOnly && !tags.Contains("保活")
-                && (tags.Contains("准备") || !tags.Any(tag => tag.StartsWith("保活-", StringComparison.Ordinal))))
-            {
-                return false;
-            }
-
-            if (preparationOnly && !tags.Contains("准备"))
-            {
-                return false;
-            }
-        }
-
-        if (route is not null && !line.Contains($"[{route}]", StringComparison.Ordinal))
+        if (route is not null && !string.Equals(route, parts.RouteName, StringComparison.Ordinal))
         {
             return false;
         }

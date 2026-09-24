@@ -1,4 +1,5 @@
 using RetryProxy.Core.Workspace;
+using RetryProxy.Core.Logging;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Documents;
@@ -54,8 +55,10 @@ public class LogLineTextBlock : TextBlock
         }
 
         Append(parts.Level.Badge() + " ", LevelBrushKey(parts.Level));
-        foreach (var tag in parts.Tags)
+        Append($"[{parts.Source.Label()}] ", "AccentTextFillColorPrimaryBrush", emphasis: true);
+        for (var index = parts.HasSourceTag ? 1 : 0; index < parts.Tags.Count; index++)
         {
+            var tag = parts.Tags[index];
             Append($"[{tag}]", "AccentTextFillColorPrimaryBrush");
         }
 
@@ -84,7 +87,7 @@ public class LogLineTextBlock : TextBlock
         }
     }
 
-    private void Append(string text, string brushKey)
+    private void Append(string text, string brushKey, bool emphasis = false)
     {
         if (text.Length == 0)
         {
@@ -92,6 +95,10 @@ public class LogLineTextBlock : TextBlock
         }
 
         var run = new Run(text);
+        if (emphasis)
+        {
+            run.FontWeight = FontWeights.SemiBold;
+        }
         run.SetResourceReference(TextElement.ForegroundProperty, brushKey);
         Inlines.Add(run);
     }

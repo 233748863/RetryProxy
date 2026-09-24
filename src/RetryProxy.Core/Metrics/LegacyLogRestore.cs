@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using RetryProxy.Core.Cache;
+using RetryProxy.Core.Logging;
 
 namespace RetryProxy.Core.Metrics;
 
@@ -46,6 +47,7 @@ internal static class LegacyLogRestore
     public static SortedDictionary<string, DailyRequest> Restore(string directory, string routeName, DateOnly date)
     {
         var prefix = $"[{routeName}][";
+        var labeledPrefix = $"[{LogSource.ChannelProxy.Label()}]{prefix}";
         var datePrefix = date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         var entries = new List<LogEntry>();
         // 先读最旧的轮转文件；稳定排序同时保留同一秒内多次尝试的行序。
@@ -113,12 +115,21 @@ internal static class LegacyLogRestore
                     continue;
                 }
 
-                if (!body.StartsWith(prefix, StringComparison.Ordinal))
+                // 新日志显式标注来源，只导入通道代理；准备及保活即便对象同名也不进入用户统计。
+                var hasSource = body.StartsWith(labeledPrefix, StringComparison.Ordinal);
+                if (hasSource)
+                {
+                    body = body[labeledPrefix.Length..];
+                }
+                else if (body.StartsWith(prefix, StringComparison.Ordinal))
+                {
+                    body = body[prefix.Length..];
+                }
+                else
                 {
                     continue;
                 }
 
-                body = body[prefix.Length..];
                 var close = body.IndexOf(']');
                 if (close < 0)
                 {
@@ -127,6 +138,19 @@ internal static class LegacyLogRestore
 
                 var id = body[..close];
                 body = body[(close + 1)..];
+                if (hasSource)
+                {
+                    if (!id.StartsWith("请求 ", StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+                    id = id[3..];
+                }
+                else if (body.TrimStart().StartsWith('['))
+                {
+                    // 老格式只有通道和请求 ID 两个标签，避免把同名来源下的对象误当请求。
+                    continue;
+                }
                 // 老版本的用户请求 ID 是 8 位十六进制；保活 ID 与供应商会话消息绝不能进入用户统计。
                 if (id.Length is < 8 or > 32 || !id.All(Uri.IsHexDigit))
                 {

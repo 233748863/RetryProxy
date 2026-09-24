@@ -153,9 +153,9 @@ public sealed class RetryProxy
         var timeoutSeconds = Math.Min(Config.TimeoutSeconds, Config.TotalTimeoutSeconds);
         var sessionLabel = probe.SessionId.Length > 8 ? probe.SessionId[..8] : probe.SessionId;
         var configuration = _localAccessKey is not null ? "经后台临时代理转发" : probe.UsesSuppliedKey ? "使用本次输入的 Key 经本通道转发" : "沿用本机客户端配置";
-        var preparing = KeepAlive.Snapshot().Preparing;
-        var activity = preparing ? "后台准备" : "自动保活";
-        Logger.Info($"{activity} [会话 {sessionLabel}] 第 {probe.Turn} 轮，随机题号 {probe.QuestionIndex + 1}/250，{probe.Flavor.Label()} CLI，{configuration}，问题：{probe.Question}");
+        var preparing = probe.IsPreparation;
+        var logger = Logger.WithActivity(preparing ? LogActivity.Preparation : LogActivity.KeepAlive);
+        logger.Info($"[会话 {sessionLabel}] 第 {probe.Turn} 轮，随机题号 {probe.QuestionIndex + 1}/250，{probe.Flavor.Label()} CLI，{configuration}，问题：{probe.Question}");
 
         Cli.CliReply? reply = null;
         string? failure = null;
@@ -200,18 +200,18 @@ public sealed class RetryProxy
         var afterFailure = KeepAlive.Snapshot().Preparing && !Cancel.IsCancellationRequested
             ? $"准备未完成，随机等待 {KeepAliveWatchdog.PreparationRetryMinDelay.TotalSeconds:F3}～{KeepAliveWatchdog.PreparationRetryMaxDelay.TotalSeconds:F3} 秒后继续重试；可点击“终止准备”取消"
             : nextRound;
-        var prefix = $"{activity} [会话 {sessionLabel}] 第 {probe.Turn} 轮 {probe.Flavor.Label()} CLI";
+        var prefix = $"[会话 {sessionLabel}] 第 {probe.Turn} 轮 {probe.Flavor.Label()} CLI";
         if (interruption is not null)
         {
             probe.Interrupt(interruption);
-            Logger.Info($"{prefix}，本轮已中断：{interruption}，耗时 {elapsed:F2} 秒，{afterFailure}");
+            logger.Info($"{prefix}，本轮已中断：{interruption}，耗时 {elapsed:F2} 秒，{afterFailure}");
             return;
         }
 
         if (failure is not null)
         {
             probe.Fail(failure);
-            Logger.Warn($"{prefix}，响应未完成：{failure}，耗时 {elapsed:F2} 秒，{afterFailure}");
+            logger.Warn($"{prefix}，响应未完成：{failure}，耗时 {elapsed:F2} 秒，{afterFailure}");
             return;
         }
 
@@ -237,7 +237,7 @@ public sealed class RetryProxy
         {
             const string reason = "完整回复确认前本轮已取消，未计为成功";
             probe.Interrupt(reason);
-            Logger.Info($"{prefix}，本轮已中断：{reason}，耗时 {elapsed:F2} 秒，{afterFailure}");
+            logger.Info($"{prefix}，本轮已中断：{reason}，耗时 {elapsed:F2} 秒，{afterFailure}");
             return;
         }
 
@@ -247,7 +247,7 @@ public sealed class RetryProxy
         {
             nextRound = $"首次准备成功，已转为自动保活；空闲 {(long)KeepAlive.Idle.TotalSeconds} 秒后进行下一轮";
         }
-        Logger.Info($"{prefix} 完整回复{reply.Stats.LogFields()}，当前会话 {context}/{completion.ContextLimit} token，{LogText.TimingText(reply.FirstContentSeconds, elapsed)}，回答：{answerPreview}{reset}，{nextRound}");
+        logger.Info($"{prefix} 完整回复{reply.Stats.LogFields()}，当前会话 {context}/{completion.ContextLimit} token，{LogText.TimingText(reply.FirstContentSeconds, elapsed)}，回答：{answerPreview}{reset}，{nextRound}");
     }
 
     // ---------------------------------------------------------------------
@@ -258,9 +258,10 @@ public sealed class RetryProxy
     {
         private Task? _cancelled;
 
-        public RequestContext(ProxyMetrics metrics, CancellationToken cancel, CancellationToken token, string requestId, string method, string safePath, Deadline deadline, MonotonicInstant startedAt)
+        public RequestContext(ProxyMetrics metrics, RouteLogger logger, CancellationToken cancel, CancellationToken token, string requestId, string method, string safePath, Deadline deadline, MonotonicInstant startedAt)
         {
             Metrics = metrics;
+            Logger = logger;
             Cancel = cancel;
             Token = token;
             RequestId = requestId;
@@ -272,6 +273,8 @@ public sealed class RetryProxy
 
         /// <summary>本次请求的统计对象；内部请求换成一次性的空对象。</summary>
         public ProxyMetrics Metrics { get; }
+
+        public RouteLogger Logger { get; }
 
         /// <summary>通道取消或内部会话取消。</summary>
         public CancellationToken Cancel { get; }
@@ -361,11 +364,13 @@ public sealed class RetryProxy
             requestId = $"{ProxyMetrics.KeepAlivePrefix}{requestId}";
         }
 
+        var preparingAtStart = KeepAlive.Snapshot().Preparing;
+        var requestLogger = Logger.ForRequest(requestId, internalCancel is not null, preparingAtStart);
         var guard = new RequestFinishGuard(
             Metrics,
             countsAsRealRequest ? KeepAlive : null,
             KeepAliveFlavorExtensions.Detect(safePath),
-            Logger,
+            requestLogger,
             requestId,
             method,
             safePath,
@@ -386,6 +391,7 @@ public sealed class RetryProxy
                 metrics = new ProxyMetrics();
                 cancel = bodyCancel;
                 requestId = $"{ProxyMetrics.KeepAlivePrefix}{requestId}";
+                requestLogger = Logger.ForRequest(requestId, internalRequest: true, preparingAtStart);
                 guard.KeepAlive = null;
                 sessionCts = CancellationTokenSource.CreateLinkedTokenSource(requestCts.Token, bodyCancel);
                 token = sessionCts.Token;
@@ -397,7 +403,7 @@ public sealed class RetryProxy
                 body = HeaderRules.StripInternalRequestMetadata(body);
             }
 
-            ctx = new RequestContext(metrics, cancel, token, requestId, method, safePath, deadline, startedAt);
+            ctx = new RequestContext(metrics, requestLogger, cancel, token, requestId, method, safePath, deadline, startedAt);
             response = await HandleRequestInnerAsync(ctx, requestHeaders, rawQuery, body).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
@@ -430,11 +436,11 @@ public sealed class RetryProxy
         {
             case ProxyErrorKind.Cancelled:
                 metrics.Failure(requestId);
-                Logger.Info($"[{requestId}] 通道或后台任务已取消，已停止当前请求，不再重试，耗时 {startedAt.ElapsedSeconds:F2} 秒");
+                requestLogger.Info($"[{requestId}] 通道或后台任务已取消，已停止当前请求，不再重试，耗时 {startedAt.ElapsedSeconds:F2} 秒");
                 break;
             case ProxyErrorKind.DeadlineExceeded:
                 metrics.Failure(requestId);
-                Logger.Warn($"[{requestId}] {method} {safePath} -> 请求总等待达到 {StreamLifecycle.Format(Config.TotalTimeoutSeconds)} 秒，已取消当前请求，不再重试，向客户端返回 HTTP 504，耗时 {startedAt.ElapsedSeconds:F2} 秒");
+                requestLogger.Warn($"[{requestId}] {method} {safePath} -> 请求总等待达到 {StreamLifecycle.Format(Config.TotalTimeoutSeconds)} 秒，已取消当前请求，不再重试，向客户端返回 HTTP 504，耗时 {startedAt.ElapsedSeconds:F2} 秒");
                 break;
             case ProxyErrorKind.Body:
                 metrics.Failure(requestId);
@@ -728,13 +734,13 @@ public sealed class RetryProxy
                         {
                             reader.Dispose();
                             var response = new BufferedResponse(status, responseHeaders, buffered.Body);
-                            Logger.Info(LogText.FormatCompletedAttempt(
+                            ctx.Logger.Info(LogText.FormatCompletedAttempt(
                                 requestId, attemptNumber, totalAttempts, method, safePath, status, buffered.FirstByteSeconds, startedAt.ElapsedSeconds, string.Empty));
                             lastResponse = response;
                             var delay = RetryDelay(attempt, status, response.Headers);
                             ctx.Metrics.Retry(requestId, attemptNumber);
                             ctx.Metrics.RequestPhase(requestId, RequestPhase.WaitingRetry);
-                            Logger.Warn($"[{requestId}] 上游 HTTP {status} 可重试，{delay:F3} 秒后再次请求");
+                            ctx.Logger.Warn($"[{requestId}] 上游 HTTP {status} 可重试，{delay:F3} 秒后再次请求");
                             await WaitDelayAsync(delay, ctx.Token).ConfigureAwait(false);
                             continue;
                         }
@@ -744,13 +750,13 @@ public sealed class RetryProxy
                             upstream.Source));
                     }
 
-                    Logger.Warn($"[{requestId}] 上游 HTTP {status} 错误正文超过 {MaxRetryResponseBodyBytes} 字节暂存上限，改为完整流式转发，不再因本次状态码重试");
+                    ctx.Logger.Warn($"[{requestId}] 上游 HTTP {status} 错误正文超过 {MaxRetryResponseBodyBytes} 字节暂存上限，改为完整流式转发，不再因本次状态码重试");
                 }
                 else if (retryable)
                 {
                     if (_localAccessKey is null || !requestId.StartsWith(ProxyMetrics.KeepAlivePrefix, StringComparison.Ordinal))
                     {
-                        Logger.Warn($"[{requestId}] 重试耗尽，向客户端返回最后一次上游响应 HTTP {status}");
+                        ctx.Logger.Warn($"[{requestId}] 重试耗尽，向客户端返回最后一次上游响应 HTTP {status}");
                     }
                 }
 
@@ -889,7 +895,7 @@ public sealed class RetryProxy
                     response.Source.Dispose();
                     _promptCache.Reject(request);
                     ctx.Metrics.CacheFallback(ctx.RequestId);
-                    Logger.Info($"[{ctx.RequestId}] 上游不接受代理补充的缓存标识，使用原请求兼容重发一次；当前通道对同一接口、模型及鉴权暂停补充");
+                    ctx.Logger.Info($"[{ctx.RequestId}] 上游不接受代理补充的缓存标识，使用原请求兼容重发一次；当前通道对同一接口、模型及鉴权暂停补充");
                     // reject 之后不再有补充版本，这条路径每个请求最多走一次；总等待与取消仍覆盖两次发送。
                     continue;
                 }
@@ -1059,7 +1065,7 @@ public sealed class RetryProxy
             {
                 if (generationGate.Finish())
                 {
-                    Logger.Warn($"[{requestId}] 等待生成到期时存在未识别的消息，原样转发已收内容，不再重试");
+                    ctx.Logger.Warn($"[{requestId}] 等待生成到期时存在未识别的消息，原样转发已收内容，不再重试");
                     break;
                 }
 
@@ -1095,7 +1101,7 @@ public sealed class RetryProxy
             {
                 if (chunk.Value.Length > MaxGenerationPrefixBytes - prefix.Length)
                 {
-                    Logger.Warn($"[{requestId}] 生成前消息超过 {MaxGenerationPrefixBytes} 字节暂存上限，改为完整流式转发，不再重试");
+                    ctx.Logger.Warn($"[{requestId}] 生成前消息超过 {MaxGenerationPrefixBytes} 字节暂存上限，改为完整流式转发，不再重试");
                 }
                 else if (!generationGate.Observe(chunk.Value.Span))
                 {
@@ -1110,7 +1116,7 @@ public sealed class RetryProxy
 
         ctx.Metrics.RequestPhase(requestId, RequestPhase.ReceivingResponse);
         var lifecycle = new StreamLifecycle(
-            Logger,
+            ctx.Logger,
             ctx.Metrics,
             requestId,
             attemptNumber,
@@ -1265,7 +1271,7 @@ public sealed class RetryProxy
             retryText = KeepAlive.Snapshot().Preparing ? "本轮结束，后台准备将在间隔后继续" : "本轮结束，下次按保活间隔继续";
         }
         var attemptText = isTemporaryKeepAlive ? "本轮" : $"第 {attemptNumber}/{totalAttempts} 次";
-        Logger.Warn($"[{ctx.RequestId}] {attemptText} {ctx.Method} {ctx.SafePath} -> {statusText}，{label}，{retryText}，{LogText.TimingText(firstByteSeconds, elapsed)}");
+        ctx.Logger.Warn($"[{ctx.RequestId}] {attemptText} {ctx.Method} {ctx.SafePath} -> {statusText}，{label}，{retryText}，{LogText.TimingText(firstByteSeconds, elapsed)}");
         if (delay is not { } wait)
         {
             ctx.Metrics.Failure(ctx.RequestId);
@@ -1340,7 +1346,7 @@ public sealed class RetryProxy
     {
         if (lastResponse is { } response)
         {
-            Logger.Warn($"[{ctx.RequestId}] 重试耗尽，返回客户端最后一次完整上游响应 HTTP {response.Status}");
+            ctx.Logger.Warn($"[{ctx.RequestId}] 重试耗尽，返回客户端最后一次完整上游响应 HTTP {response.Status}");
             return ProxyResponse.Buffered(response.Status, response.Headers, response.Body);
         }
 

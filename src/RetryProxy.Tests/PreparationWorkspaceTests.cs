@@ -346,8 +346,18 @@ public sealed class PreparationWorkspaceTests
         WaitFor(fixture.Preparations, () => task.State == ServiceState.Stopped);
         Assert.False(task.Snapshot.Enabled);
         var logs = fixture.DrainLogs();
-        Assert.Contains("[准备]", logs);
-        Assert.Contains("[保活]", logs);
+        var lines = logs.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        Assert.All(lines, line =>
+        {
+            Assert.Contains($"[一键准备][{task.Title}]", line);
+            Assert.True(LogLine.Matches(line, LogLevelFilter.All, string.Empty, null, LogSource.Preparation));
+            Assert.False(LogLine.Matches(line, LogLevelFilter.All, string.Empty, null, LogSource.ChannelKeepAlive));
+        });
+        Assert.Contains(lines, line => line.Contains("[准备][会话 ") && line.Contains("完整回复"));
+        Assert.Contains(lines, line => line.Contains("[独立保活][会话 ") && line.Contains("完整回复"));
+        Assert.Contains(lines, line => line.Contains("[准备][请求 "));
+        Assert.Contains(lines, line => line.Contains("[独立保活][请求 "));
+        Assert.DoesNotContain("[保活-", logs);
         Assert.DoesNotContain("sk-custom-fixture", logs);
     }
 }

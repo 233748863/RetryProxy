@@ -71,15 +71,17 @@ public sealed class ProxyLogger : IDisposable
         }
     }
 
-    public void Info(string message) => Write("INFO", message);
+    public void Info(string message) => Write("INFO", $"[系统] {message}");
 
-    public void Warn(string message) => Write("WARNING", message);
+    public void Warn(string message) => Write("WARNING", $"[系统] {message}");
 
-    public void Error(string message) => Write("ERROR", message);
+    public void Error(string message) => Write("ERROR", $"[系统] {message}");
 
-    public RouteLogger Route(string routeName, Func<string>? logLabel = null) => new(this, routeName, logLabel);
+    public RouteLogger Route(string routeName) => new(this, routeName, LogSource.ChannelProxy);
 
-    private void Write(string level, string message)
+    public RouteLogger Preparation(string taskName) => new(this, taskName, LogSource.Preparation);
+
+    internal void Write(string level, string message)
     {
         var text = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} {level} {message}";
         var bytes = Encoding.UTF8.GetBytes(text + "\n");

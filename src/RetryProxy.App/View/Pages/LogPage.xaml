@@ -19,6 +19,9 @@
       mc:Ignorable="d">
 
     <Page.Resources>
+        <Style x:Key="LogFilterChip" BasedOn="{StaticResource ChipButton}" TargetType="ui:Button">
+            <Setter Property="Margin" Value="0,0,6,6" />
+        </Style>
         <Style x:Key="LogRowStyle" TargetType="ListBoxItem">
             <Setter Property="Focusable" Value="False" />
             <Setter Property="Padding" Value="0" />
@@ -40,7 +43,7 @@
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
-        <!--  头部：第一行 标题 + 操作，第二行 过滤 + 搜索  -->
+        <!--  来源和级别分行；窄窗口下筛选项自动换行。  -->
         <StackPanel Grid.Row="0" Margin="0,0,0,10">
             <Grid Margin="0,0,0,10">
                 <Grid.ColumnDefinitions>
@@ -55,6 +58,7 @@
                                FontWeight="SemiBold"
                                Text="{i18n:T 运行日志}" />
                     <TextBlock Margin="8,2,0,0"
+                               AutomationProperties.AutomationId="LogCounter"
                                VerticalAlignment="Center"
                                Foreground="{DynamicResource TextFillColorTertiaryBrush}"
                                Text="{Binding Counter}" />
@@ -76,61 +80,97 @@
                                Icon="{ui:SymbolIcon Broom24}" />
                 </StackPanel>
             </Grid>
+            <WrapPanel Margin="0,0,0,2">
+                <TextBlock Margin="0,0,8,6"
+                           VerticalAlignment="Center"
+                           FontSize="12"
+                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                           Text="{i18n:T 来源}" />
+                <ui:Button Appearance="{Binding IsAllSources, Converter={StaticResource BooleanToChipAppearanceConverter}}"
+                           AutomationProperties.AutomationId="LogSourceAll"
+                           Command="{Binding SetSourceCommand}"
+                           CommandParameter="all"
+                           Content="{i18n:T 全部}"
+                           Style="{StaticResource LogFilterChip}" />
+                <ui:Button Appearance="{Binding IsChannelProxy, Converter={StaticResource BooleanToChipAppearanceConverter}}"
+                           AutomationProperties.AutomationId="LogSourceProxy"
+                           Command="{Binding SetSourceCommand}"
+                           CommandParameter="proxy"
+                           Content="{i18n:T 通道代理}"
+                           Style="{StaticResource LogFilterChip}"
+                           ToolTip="{i18n:T 通道的请求转发、重试和服务启停}" />
+                <ui:Button Appearance="{Binding IsChannelKeepAlive, Converter={StaticResource BooleanToChipAppearanceConverter}}"
+                           AutomationProperties.AutomationId="LogSourceKeepAlive"
+                           Command="{Binding SetSourceCommand}"
+                           CommandParameter="keepalive"
+                           Content="{i18n:T 通道保活}"
+                           Style="{StaticResource LogFilterChip}"
+                           ToolTip="{i18n:T 首页通道的后台问答与自动保活}" />
+                <ui:Button Appearance="{Binding IsPreparation, Converter={StaticResource BooleanToChipAppearanceConverter}}"
+                           AutomationProperties.AutomationId="LogSourcePreparation"
+                           Command="{Binding SetSourceCommand}"
+                           CommandParameter="preparation"
+                           Content="{i18n:T 一键准备}"
+                           Style="{StaticResource LogFilterChip}"
+                           ToolTip="{i18n:T 独立任务的准备、重试、独立保活和启停全过程}" />
+                <ui:Button Appearance="{Binding IsSystem, Converter={StaticResource BooleanToChipAppearanceConverter}}"
+                           AutomationProperties.AutomationId="LogSourceSystem"
+                           Command="{Binding SetSourceCommand}"
+                           CommandParameter="system"
+                           Content="{i18n:T 系统}"
+                           Style="{StaticResource LogFilterChip}" />
+            </WrapPanel>
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
-                <StackPanel Grid.Column="0"
-                            VerticalAlignment="Center"
-                            Orientation="Horizontal">
-                    <ui:Button Margin="0"
+                <WrapPanel Grid.Column="0"
+                           Margin="0,0,8,0"
+                           VerticalAlignment="Center">
+                    <TextBlock Margin="0,0,8,6"
+                               VerticalAlignment="Center"
+                               FontSize="12"
+                               Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                               Text="{i18n:T 级别}" />
+                    <ui:Button
                                Appearance="{Binding IsAll, Converter={StaticResource BooleanToChipAppearanceConverter}}"
+                               AutomationProperties.AutomationId="LogLevelAll"
                                Command="{Binding SetFilterCommand}"
                                CommandParameter="all"
                                Content="{i18n:T 全部}"
-                               Style="{StaticResource ChipButton}" />
+                               Style="{StaticResource LogFilterChip}" />
                     <ui:Button Appearance="{Binding IsInfo, Converter={StaticResource BooleanToChipAppearanceConverter}}"
                                Command="{Binding SetFilterCommand}"
                                CommandParameter="info"
                                Content="{i18n:T 信息}"
-                               Style="{StaticResource ChipButton}" />
+                               Style="{StaticResource LogFilterChip}" />
                     <ui:Button Appearance="{Binding IsWarning, Converter={StaticResource BooleanToChipAppearanceConverter}}"
+                               AutomationProperties.AutomationId="LogLevelWarning"
                                Command="{Binding SetFilterCommand}"
                                CommandParameter="warning"
                                Content="{i18n:T 警告}"
-                               Style="{StaticResource ChipButton}" />
+                               Style="{StaticResource LogFilterChip}" />
                     <ui:Button Appearance="{Binding IsError, Converter={StaticResource BooleanToChipAppearanceConverter}}"
                                Command="{Binding SetFilterCommand}"
                                CommandParameter="error"
                                Content="{i18n:T 错误}"
-                               Style="{StaticResource ChipButton}" />
-                    <ui:Button Margin="8,0,0,0"
-                               Appearance="{Binding OnlyPreparation, Converter={StaticResource BooleanToChipAppearanceConverter}}"
-                               Command="{Binding TogglePreparationCommand}"
-                               Content="{i18n:T 准备}"
-                               Style="{StaticResource ChipButton}" />
-                    <ui:Button
-                               Appearance="{Binding OnlyKeepAlive, Converter={StaticResource BooleanToChipAppearanceConverter}}"
-                               Command="{Binding ToggleKeepAliveCommand}"
-                               Content="{i18n:T 保活}"
-                               Style="{StaticResource ChipButton}" />
-                    <Border Width="1"
-                            Height="16"
-                            Margin="10,0,6,0"
-                            VerticalAlignment="Center"
-                            Background="{DynamicResource ControlStrokeColorDefaultBrush}"
-                            Visibility="{Binding HasSelectedRoute, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                               Style="{StaticResource LogFilterChip}" />
                     <ui:Button Appearance="{Binding OnlySelected, Converter={StaticResource BooleanToChipAppearanceConverter}}"
+                               AutomationProperties.AutomationId="LogSelectedRoute"
                                Command="{Binding ToggleOnlySelectedCommand}"
-                               Content="{Binding OnlySelectedLabel}"
-                               Style="{StaticResource ChipButton}"
-                               Visibility="{Binding HasSelectedRoute, Converter={StaticResource BooleanToVisibilityConverter}}" />
-                </StackPanel>
+                               Style="{StaticResource LogFilterChip}"
+                               ToolTip="{Binding OnlySelectedLabel}"
+                               Visibility="{Binding ShowRouteFilter, Converter={StaticResource BooleanToVisibilityConverter}}">
+                        <TextBlock MaxWidth="180" Text="{Binding OnlySelectedLabel}" TextTrimming="CharacterEllipsis" />
+                    </ui:Button>
+                </WrapPanel>
                 <ui:TextBox Grid.Column="1"
-                            Width="220"
+                            Width="200"
+                            VerticalAlignment="Top"
+                            AutomationProperties.AutomationId="LogSearch"
                             Icon="{ui:SymbolIcon Search24}"
-                            PlaceholderText="{i18n:T 搜索关键字 / 请求 ID}"
+                            PlaceholderText="{i18n:T 搜索任务 / 通道 / 请求 ID}"
                             Text="{Binding Query, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged, Delay=200}" />
             </Grid>
         </StackPanel>
@@ -144,6 +184,7 @@
                 CornerRadius="7">
             <Grid ClipToBounds="True">
                 <ListBox x:Name="LogList"
+                         AutomationProperties.AutomationId="LogRows"
                          Background="Transparent"
                          BorderThickness="0"
                          ItemContainerStyle="{StaticResource LogRowStyle}"
@@ -162,7 +203,8 @@
                     </ListBox.ItemsPanel>
                     <ListBox.ItemTemplate>
                         <DataTemplate>
-                            <controls:LogLineTextBlock FontFamily="Consolas"
+                            <controls:LogLineTextBlock AutomationProperties.Name="{Binding}"
+                                                       FontFamily="Consolas"
                                                        FontSize="12"
                                                        Line="{Binding}"
                                                        LineHeight="17"

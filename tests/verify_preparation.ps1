@@ -97,6 +97,28 @@ function Assert-WindowStable([string]$Context) {
     }
 }
 
+function Get-LogCount {
+    $counter = @(Find-Elements 'LogCounter' -ById)[0]
+    if ($null -eq $counter) { return -1 }
+    return [int]($counter.Current.Name.Split('/')[0].Trim())
+}
+
+function Assert-LogControlsVisible {
+    $rectangles = @()
+    foreach ($id in @('LogSourceAll', 'LogSourceProxy', 'LogSourceKeepAlive', 'LogSourcePreparation', 'LogSourceSystem', 'LogLevelAll', 'LogLevelWarning', 'LogSearch')) {
+        $control = @(Find-Elements $id -ById)[0]
+        if ($null -eq $control) { throw "Missing log control: $id" }
+        $rect = $control.Current.BoundingRectangle
+        if ($control.Current.IsOffscreen -or $rect.Width -le 0 -or $rect.Height -le 0 -or $rect.Left -lt $initialBounds.Left -or $rect.Right -gt $initialBounds.Right -or $rect.Top -lt $initialBounds.Top -or $rect.Bottom -gt $initialBounds.Bottom) {
+            throw "Log control is outside the private window: $id"
+        }
+        foreach ($other in $rectangles) {
+            if ($rect.IntersectsWith($other)) { throw "Log filters overlap: $id" }
+        }
+        $rectangles += $rect
+    }
+}
+
 function Assert-DialogActionsVisible {
     $startButton = @(Find-Elements '开始后台准备' | Where-Object { $_.Current.ControlType -eq [Windows.Automation.ControlType]::Button })[0]
     if ($null -eq $startButton) { throw 'Preparation dialog action is missing' }
@@ -324,6 +346,40 @@ try {
     Invoke-Control '取消'
     Wait-For { @(Find-Elements 'PreparationCodex' -ById).Count -eq 0 } 'Preparation dialog was not cancelled'
     Assert-WindowStable 'cancelling the preparation dialog'
+    Invoke-Control '运行日志'
+    Wait-For { @(Find-Elements 'LogSourcePreparation' -ById).Count -gt 0 } 'Log source filters did not load'
+    Assert-LogControlsVisible
+    $logLines = @(Get-Content -LiteralPath (Join-Path $runtime 'logs\retry-proxy.log'))
+    $preparationLines = @($logLines | Where-Object { $_ -match '(INFO|WARNING|ERROR) \[一键准备\]' })
+    if ($preparationLines.Count -eq 0) { throw 'Preparation did not produce source-tagged logs' }
+    foreach ($line in $preparationLines) {
+        if ($line -notmatch '\[一键准备\]\[准备 [12] · Codex\]' -or $line.Contains('[保活-')) { throw "Preparation log lost its identity: $line" }
+    }
+    Invoke-Control 'LogSourcePreparation' -ById
+    Wait-For { (Get-LogCount) -eq $preparationLines.Count } 'Preparation source omitted task lifecycle logs'
+    if ($WithChannels -and @(Find-Elements 'LogSelectedRoute' -ById | Where-Object { -not $_.Current.IsOffscreen }).Count -gt 0) { throw 'Preparation log filtering still depends on the selected channel' }
+    Set-Field 'LogSearch' '准备 1'
+    $firstTaskCount = @($preparationLines | Where-Object { $_.Contains('[准备 1 · Codex]') }).Count
+    Wait-For { (Get-LogCount) -eq $firstTaskCount } 'Task search did not isolate the first preparation'
+    Set-Field 'LogSearch' ''
+    Wait-For { (Get-LogCount) -eq $preparationLines.Count } 'Clearing task search did not restore the preparation logs'
+    Invoke-Control 'LogLevelWarning' -ById
+    $warningCount = @($preparationLines | Where-Object { $_.Contains(' WARNING ') }).Count
+    Wait-For { (Get-LogCount) -eq $warningCount } 'Severity and source filters did not combine'
+    Invoke-Control 'LogLevelAll' -ById
+    Invoke-Control 'LogSourceKeepAlive' -ById
+    Wait-For { (Get-LogCount) -eq 0 } 'Independent preparation leaked into channel keepalive logs'
+    Invoke-Control 'LogSourceAll' -ById
+    if ($WithChannels) {
+        Invoke-Control 'LogSelectedRoute' -ById
+        Wait-For { (Get-LogCount) -eq 0 } 'Unstarted channel unexpectedly matched preparation logs'
+        Invoke-Control 'LogSourcePreparation' -ById
+        Wait-For { (Get-LogCount) -eq $preparationLines.Count } 'Selected channel hid independent preparation logs'
+        Invoke-Control 'LogSourceAll' -ById
+    }
+    Wait-For { (Get-LogCount) -eq $logLines.Count } 'All sources did not restore every log line'
+    Assert-LogControlsVisible
+    Assert-WindowStable 'filtering log sources, tasks and severity'
     $events = @(Get-Content -LiteralPath $eventPath | ForEach-Object { $_ | ConvertFrom-Json })
     $modelEvents = @($events | Where-Object path -eq '/v1/models')
     $preparationEvents = @($events | Where-Object path -ne '/v1/models')

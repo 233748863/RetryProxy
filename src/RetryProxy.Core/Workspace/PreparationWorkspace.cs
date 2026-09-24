@@ -150,9 +150,10 @@ public sealed class PreparationWorkspace
         watchdog.EnableAfterPreparation();
         var number = task?.Number ?? _nextNumber + 1;
         var marker = $"准备 {number}";
+        var logger = _logger.Preparation($"{marker} · {options.ClientType.Label()}");
         var service = new ProxyService(_logger, marker)
             .WithKeepAliveWatchdog(watchdog)
-            .WithLogLabel(() => $"{(watchdog.Snapshot().Preparing || !watchdog.Enabled ? "准备" : "保活")}][{marker}")
+            .WithRouteLogger(logger)
             .WithUpstreamApiKey(upstream.ApiKey, credential.ApiKey);
         service.SetUiNotifier(_uiNotifier);
         service.RequestStart(runtime);
@@ -169,7 +170,7 @@ public sealed class PreparationWorkspace
         task.Failure = null;
         task.Pending = true;
         dialog.Error = null;
-        _logger.Info($"[准备][{marker}] 已提交独立准备 · {options.ClientType.Label()} · 模型 {options.SelectedModel}");
+        logger.WithActivity(LogActivity.Preparation).Info($"已提交准备 · 模型 {options.SelectedModel} · 思考强度 {options.ReasoningEffort.Label()}");
         Poll();
         _uiNotifier?.Invoke();
         return true;
@@ -199,7 +200,7 @@ public sealed class PreparationWorkspace
         task.Service.ConfigureKeepAlive(false, task.Service.KeepAlive.Idle);
         task.Service.RequestStop();
         task.Credential = null;
-        _logger.Info($"[准备][准备 {task.Number}] 准备已终止，独立保活已停止");
+        _logger.Preparation(task.Title).WithActivity(LogActivity.Service).Info("准备已终止，独立保活已停止");
         _uiNotifier?.Invoke();
     }
 
@@ -256,7 +257,15 @@ public sealed class PreparationWorkspace
                 PreparationResult.Failed failed => $"{task.Title}：准备未完成，{failed.Reason}",
                 _ => $"{task.Title}：准备已终止",
             };
-            _logger.Info($"[准备] {message}");
+            var logger = _logger.Preparation(task.Title).WithActivity(LogActivity.Preparation);
+            if (result is PreparationResult.Failed)
+            {
+                logger.Warn(message);
+            }
+            else
+            {
+                logger.Info(message);
+            }
             NoticePosted?.Invoke(message);
         }
     }
@@ -268,7 +277,7 @@ public sealed class PreparationWorkspace
         task.Credential = null;
         task.Service?.RequestStop();
         var message = $"{task.Title}：{reason}";
-        _logger.Warn($"[准备] {message}");
+        _logger.Preparation(task.Title).WithActivity(LogActivity.Service).Warn(message);
         NoticePosted?.Invoke(message);
     }
 

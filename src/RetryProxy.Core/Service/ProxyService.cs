@@ -38,7 +38,7 @@ public sealed class ProxyService
     private Action? _notifier;
     private string? _upstreamApiKey;
     private string? _localAccessKey;
-    private Func<string>? _logLabel;
+    private RouteLogger? _routeLogger;
 
     public ProxyService(ProxyLogger logger, string routeName)
         : this(logger, routeName, new ProxyMetrics())
@@ -84,9 +84,9 @@ public sealed class ProxyService
 
     public KeepAliveWatchdog KeepAlive { get; private set; }
 
-    public ProxyService WithLogLabel(Func<string> logLabel)
+    public ProxyService WithRouteLogger(RouteLogger logger)
     {
-        _logLabel = logLabel;
+        _routeLogger = logger;
         return this;
     }
 
@@ -282,7 +282,8 @@ public sealed class ProxyService
             _cancel = cancel;
         }
 
-        var logger = _logger.Route(RouteName, _logLabel);
+        var logger = _routeLogger ?? _logger.Route(RouteName);
+        var serviceLogger = logger.WithActivity(LogActivity.Service);
         RetryProxyPipeline proxy;
         try
         {
@@ -312,7 +313,7 @@ public sealed class ProxyService
         using (KeepAlive.RegisterService(flavor))
         {
             SetState(ServiceState.Running);
-            logger.Info($"代理服务已启动：{config.LocalUrl}（上游请求跟随系统代理）");
+            serviceLogger.Info($"代理服务已启动：{config.LocalUrl}（上游请求跟随系统代理）");
             var keepAliveTask = KeepAlivePollLoopAsync(proxy, cancel.Token);
             // 停用通道要立刻放弃在处理中的请求：先读「处理中」，再取消，再硬停 Kestrel。
             await Task.WhenAny(stopSignal, Task.Delay(Timeout.Infinite, cancel.Token)).ConfigureAwait(false);
@@ -330,7 +331,7 @@ public sealed class ProxyService
         }
 
         SetStateIfNotError(ServiceState.Stopped);
-        logger.Info(discarded > 0 ? $"代理服务已停止，丢弃 {discarded} 个处理中的请求" : "代理服务已停止");
+        serviceLogger.Info(discarded > 0 ? $"代理服务已停止，丢弃 {discarded} 个处理中的请求" : "代理服务已停止");
         cancel.Dispose();
     }
 

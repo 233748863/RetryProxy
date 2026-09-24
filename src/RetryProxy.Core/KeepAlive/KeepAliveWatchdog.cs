@@ -797,7 +797,7 @@ public sealed class KeepAliveWatchdog
                 _preparationRetryAtMs = null;
             }
 
-            return new KeepAliveProbe(this, conversation.Retain(), flightId, _flavor, turn, questionIndex, question, credential, _reasoningEffort);
+            return new KeepAliveProbe(this, conversation.Retain(), flightId, _flavor, turn, questionIndex, question, credential, _reasoningEffort, preparing);
         }
     }
 
@@ -1010,7 +1010,7 @@ public sealed class KeepAliveProbe : IDisposable
     private readonly KeepAliveWatchdog _watchdog;
     private Conversation? _conversation;
 
-    internal KeepAliveProbe(KeepAliveWatchdog watchdog, Conversation conversation, ulong flightId, KeepAliveFlavor flavor, int turn, int questionIndex, string question, CliCredential? credential, ReasoningEffort reasoningEffort)
+    internal KeepAliveProbe(KeepAliveWatchdog watchdog, Conversation conversation, ulong flightId, KeepAliveFlavor flavor, int turn, int questionIndex, string question, CliCredential? credential, ReasoningEffort reasoningEffort, bool isPreparation)
     {
         _watchdog = watchdog;
         _conversation = conversation;
@@ -1023,6 +1023,7 @@ public sealed class KeepAliveProbe : IDisposable
         Cancel = conversation.Cancel;
         Credential = credential;
         ReasoningEffort = reasoningEffort;
+        IsPreparation = isPreparation;
     }
 
     internal ulong FlightId { get; }
@@ -1042,6 +1043,9 @@ public sealed class KeepAliveProbe : IDisposable
     internal CliCredential? Credential { get; }
 
     public ReasoningEffort ReasoningEffort { get; }
+
+    /// <summary>本轮启动时的行为；取消或准备完成后也不改变本轮日志的归属。</summary>
+    public bool IsPreparation { get; }
 
     /// <summary>本轮是否使用用户临时输入的 Key。</summary>
     public bool UsesSuppliedKey => Credential is { ApiKey.Length: > 0 };

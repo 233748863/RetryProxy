@@ -1,6 +1,7 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using RetryProxy.Core.Config;
+using RetryProxy.Core.Logging;
 using RetryProxy.Core.Workspace;
 using RetryProxy.Service;
 using System;
@@ -37,10 +38,7 @@ public partial class LogPageViewModel : ViewModel
     private bool _onlySelected;
 
     [ObservableProperty]
-    private bool _onlyKeepAlive;
-
-    [ObservableProperty]
-    private bool _onlyPreparation;
+    private LogSource? _sourceFilter;
 
     [ObservableProperty]
     private bool _autoScroll = true;
@@ -59,6 +57,8 @@ public partial class LogPageViewModel : ViewModel
 
     [ObservableProperty]
     private bool _hasSelectedRoute;
+
+    public bool ShowRouteFilter => HasSelectedRoute && SourceFilter is null or LogSource.ChannelProxy or LogSource.ChannelKeepAlive;
 
     [ObservableProperty]
     private string _onlySelectedLabel = string.Empty;
@@ -86,7 +86,7 @@ public partial class LogPageViewModel : ViewModel
 
     public bool IsFilter(LogLevelFilter filter) => Filter == filter;
 
-    private string? RouteMarker => OnlySelected ? SelectedRouteName : null;
+    private string? RouteMarker => OnlySelected && ShowRouteFilter ? SelectedRouteName : null;
 
     private string LowercaseQuery => Query.Trim().ToLowerInvariant();
 
@@ -95,7 +95,7 @@ public partial class LogPageViewModel : ViewModel
         var name = _workspaceService.Workspace.SelectedRouteRef()?.Name;
         SelectedRouteName = string.IsNullOrEmpty(name) ? null : name;
         HasSelectedRoute = SelectedRouteName is not null;
-        OnlySelectedLabel = SelectedRouteName is null ? string.Empty : $"仅 {SelectedRouteName}";
+        OnlySelectedLabel = SelectedRouteName is null ? string.Empty : $"仅通道：{SelectedRouteName}";
         if (OnlySelected && _lastRouteName != SelectedRouteName)
         {
             Rebuild();
@@ -130,7 +130,7 @@ public partial class LogPageViewModel : ViewModel
         for (var index = (int)(_nextGlobal - Buffer.Dropped); index < Buffer.Count; index++)
         {
             var line = Buffer[index];
-            if (LogLine.Matches(line, Filter, LowercaseQuery, RouteMarker, OnlyKeepAlive, OnlyPreparation))
+            if (LogLine.Matches(line, Filter, LowercaseQuery, RouteMarker, SourceFilter))
             {
                 appendedRows.Add(line);
                 appendedGlobals.Add(Buffer.Dropped + index);
@@ -160,7 +160,7 @@ public partial class LogPageViewModel : ViewModel
         for (var index = 0; index < Buffer.Count; index++)
         {
             var line = Buffer[index];
-            if (LogLine.Matches(line, Filter, query, route, OnlyKeepAlive, OnlyPreparation))
+            if (LogLine.Matches(line, Filter, query, route, SourceFilter))
             {
                 rows.Add(line);
                 globals.Add(Buffer.Dropped + index);
@@ -181,7 +181,7 @@ public partial class LogPageViewModel : ViewModel
         Total = Buffer.Count;
         Counter = $"{Shown} / {Total}";
         IsEmpty = Rows.Count == 0;
-        EmptyText = Total == 0 ? "暂无日志，启用通道后会在这里显示运行状态" : "没有匹配当前筛选条件的日志";
+        EmptyText = Total == 0 ? "暂无日志，启用通道或开始一键准备后会在这里显示运行状态" : "没有匹配当前筛选条件的日志";
     }
 
     partial void OnFilterChanged(LogLevelFilter value)
@@ -195,50 +195,35 @@ public partial class LogPageViewModel : ViewModel
 
     partial void OnQueryChanged(string value) => Rebuild();
 
-    partial void OnOnlySelectedChanged(bool value)
+    partial void OnOnlySelectedChanged(bool value) => Rebuild();
+
+    partial void OnHasSelectedRouteChanged(bool value) => OnPropertyChanged(nameof(ShowRouteFilter));
+
+    partial void OnSourceFilterChanged(LogSource? value)
     {
-        if (value && OnlyKeepAlive)
-        {
-            OnlyKeepAlive = false;
-        }
-
-        if (value && OnlyPreparation)
-        {
-            OnlyPreparation = false;
-        }
-
-        Rebuild();
-    }
-
-    partial void OnOnlyKeepAliveChanged(bool value)
-    {
-        if (value && OnlySelected)
+        OnPropertyChanged(nameof(IsAllSources));
+        OnPropertyChanged(nameof(IsChannelProxy));
+        OnPropertyChanged(nameof(IsChannelKeepAlive));
+        OnPropertyChanged(nameof(IsPreparation));
+        OnPropertyChanged(nameof(IsSystem));
+        OnPropertyChanged(nameof(ShowRouteFilter));
+        if (!ShowRouteFilter)
         {
             OnlySelected = false;
         }
 
-        if (value && OnlyPreparation)
-        {
-            OnlyPreparation = false;
-        }
-
         Rebuild();
     }
 
-    partial void OnOnlyPreparationChanged(bool value)
-    {
-        if (value && OnlySelected)
-        {
-            OnlySelected = false;
-        }
+    public bool IsAllSources => SourceFilter is null;
 
-        if (value && OnlyKeepAlive)
-        {
-            OnlyKeepAlive = false;
-        }
+    public bool IsChannelProxy => SourceFilter == LogSource.ChannelProxy;
 
-        Rebuild();
-    }
+    public bool IsChannelKeepAlive => SourceFilter == LogSource.ChannelKeepAlive;
+
+    public bool IsPreparation => SourceFilter == LogSource.Preparation;
+
+    public bool IsSystem => SourceFilter == LogSource.System;
 
     public bool IsAll => Filter == LogLevelFilter.All;
 
@@ -267,15 +252,16 @@ public partial class LogPageViewModel : ViewModel
     }
 
     [RelayCommand]
-    private void OnToggleKeepAlive()
+    private void OnSetSource(string name)
     {
-        OnlyKeepAlive = !OnlyKeepAlive;
-    }
-
-    [RelayCommand]
-    private void OnTogglePreparation()
-    {
-        OnlyPreparation = !OnlyPreparation;
+        SourceFilter = name switch
+        {
+            "proxy" => LogSource.ChannelProxy,
+            "keepalive" => LogSource.ChannelKeepAlive,
+            "preparation" => LogSource.Preparation,
+            "system" => LogSource.System,
+            _ => null,
+        };
     }
 
     [RelayCommand]

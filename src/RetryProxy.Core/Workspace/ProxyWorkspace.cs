@@ -855,19 +855,20 @@ public sealed class ProxyWorkspace
             }
 
             string notice;
+            var logger = Logger.Route(route.Name).WithActivity(LogActivity.Preparation);
             switch (result)
             {
                 case PreparationResult.Ready:
                     notice = $"通道“{route.Name}”：准备完成";
-                    Logger.Info($"[保活] {notice}");
+                    logger.Info(notice);
                     break;
                 case PreparationResult.Failed failed:
                     notice = $"通道“{route.Name}”：准备未完成，{failed.Reason}";
-                    Logger.Warn($"[保活] {notice}");
+                    logger.Warn(notice);
                     break;
                 default:
                     notice = $"通道“{route.Name}”：准备已终止";
-                    Logger.Info($"[保活] {notice}");
+                    logger.Info(notice);
                     break;
             }
 

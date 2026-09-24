@@ -6,6 +6,8 @@ using RetryProxy.Service;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Collections.Specialized;
+using System.ComponentModel;
 using System.Diagnostics;
 
 namespace RetryProxy.ViewModel.Pages;
@@ -23,7 +25,7 @@ public partial class LogPageViewModel : ViewModel
     private LogBuffer Buffer => _workspaceService.Logs;
 
     [ObservableProperty]
-    private ObservableCollection<string> _rows = [];
+    private BatchObservableCollection<string> _rows = [];
 
     [ObservableProperty]
     private LogLevelFilter _filter = LogLevelFilter.All;
@@ -111,27 +113,39 @@ public partial class LogPageViewModel : ViewModel
         }
 
         // 缓冲整批裁剪后，列表里落在被丢弃区间的行也要移除。
-        while (_rowGlobals.Count > 0 && _rowGlobals[0] < Buffer.Dropped)
+        var removed = 0;
+        while (_rowGlobals.Count > removed && _rowGlobals[removed] < Buffer.Dropped)
         {
-            _rowGlobals.RemoveAt(0);
-            Rows.RemoveAt(0);
+            removed++;
         }
 
-        var appended = false;
+        if (removed > 0)
+        {
+            _rowGlobals.RemoveRange(0, removed);
+            Rows.RemoveFirst(removed);
+        }
+
+        var appendedRows = new List<string>();
+        var appendedGlobals = new List<long>();
         for (var index = (int)(_nextGlobal - Buffer.Dropped); index < Buffer.Count; index++)
         {
             var line = Buffer[index];
             if (LogLine.Matches(line, Filter, LowercaseQuery, RouteMarker, OnlyKeepAlive, OnlyPreparation))
             {
-                Rows.Add(line);
-                _rowGlobals.Add(Buffer.Dropped + index);
-                appended = true;
+                appendedRows.Add(line);
+                appendedGlobals.Add(Buffer.Dropped + index);
             }
+        }
+
+        if (appendedRows.Count > 0)
+        {
+            Rows.AddRange(appendedRows);
+            _rowGlobals.AddRange(appendedGlobals);
         }
 
         _nextGlobal = Buffer.Dropped + Buffer.Count;
         UpdateCounters();
-        if (appended)
+        if (appendedRows.Count > 0)
         {
             RowsAppended?.Invoke();
         }
@@ -139,8 +153,8 @@ public partial class LogPageViewModel : ViewModel
 
     private void Rebuild()
     {
-        Rows.Clear();
-        _rowGlobals.Clear();
+        var rows = new List<string>();
+        var globals = new List<long>();
         var query = LowercaseQuery;
         var route = RouteMarker;
         for (var index = 0; index < Buffer.Count; index++)
@@ -148,11 +162,14 @@ public partial class LogPageViewModel : ViewModel
             var line = Buffer[index];
             if (LogLine.Matches(line, Filter, query, route, OnlyKeepAlive, OnlyPreparation))
             {
-                Rows.Add(line);
-                _rowGlobals.Add(Buffer.Dropped + index);
+                rows.Add(line);
+                globals.Add(Buffer.Dropped + index);
             }
         }
 
+        Rows.ReplaceAll(rows);
+        _rowGlobals.Clear();
+        _rowGlobals.AddRange(globals);
         _nextGlobal = Buffer.Dropped + Buffer.Count;
         UpdateCounters();
         RowsAppended?.Invoke();
@@ -278,6 +295,73 @@ public partial class LogPageViewModel : ViewModel
         catch (Exception)
         {
             _workspaceService.Workspace.Notice = $"日志目录：{directory}";
+        }
+    }
+
+    public sealed class BatchObservableCollection<T> : ObservableCollection<T>
+    {
+        public void AddRange(IEnumerable<T> items)
+        {
+            if (items is IReadOnlyList<T> { Count: 1 } single)
+            {
+                Add(single[0]);
+                return;
+            }
+
+            CheckReentrancy();
+            var changed = false;
+            foreach (var item in items)
+            {
+                Items.Add(item);
+                changed = true;
+            }
+
+            if (changed)
+            {
+                RaiseReset();
+            }
+        }
+
+        public void RemoveFirst(int count)
+        {
+            if (count <= 0)
+            {
+                return;
+            }
+
+            CheckReentrancy();
+            if (Items is List<T> list)
+            {
+                list.RemoveRange(0, Math.Min(count, list.Count));
+            }
+            else
+            {
+                for (var index = 0; index < count && Items.Count > 0; index++)
+                {
+                    Items.RemoveAt(0);
+                }
+            }
+
+            RaiseReset();
+        }
+
+        public void ReplaceAll(IEnumerable<T> items)
+        {
+            CheckReentrancy();
+            Items.Clear();
+            foreach (var item in items)
+            {
+                Items.Add(item);
+            }
+
+            RaiseReset();
+        }
+
+        private void RaiseReset()
+        {
+            OnPropertyChanged(new PropertyChangedEventArgs(nameof(Count)));
+            OnPropertyChanged(new PropertyChangedEventArgs("Item[]"));
+            OnCollectionChanged(new NotifyCollectionChangedEventArgs(NotifyCollectionChangedAction.Reset));
         }
     }
 }

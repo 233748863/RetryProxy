@@ -142,7 +142,7 @@
                 BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
                 BorderThickness="1"
                 CornerRadius="7">
-            <Grid>
+            <Grid ClipToBounds="True">
                 <ListBox x:Name="LogList"
                          Background="Transparent"
                          BorderThickness="0"

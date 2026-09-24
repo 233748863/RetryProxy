@@ -18,6 +18,7 @@ public partial class LogPage : Page
     private ScrollViewer? _scroll;
     private DateTime? _resumeAt;
     private bool _programmaticScroll;
+    private bool _scrollQueued;
 
     public LogPageViewModel ViewModel { get; }
 
@@ -36,7 +37,7 @@ public partial class LogPage : Page
             }
         };
         Loaded += OnLoaded;
-        LogList.PreviewMouseWheel += (_, _) => OnManualScroll();
+        LogList.PreviewMouseWheel += OnLogPreviewMouseWheel;
         LogList.PreviewMouseDown += (_, _) => OnActivity();
         LogList.PreviewKeyDown += (_, _) => OnActivity();
     }
@@ -45,21 +46,8 @@ public partial class LogPage : Page
 
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
-        if (_scroll is null)
-        {
-            _scroll = FindScrollViewer(LogList);
-            if (_scroll is not null)
-            {
-                // 标记后主窗口的平滑滚动不再接管它，保持像素级虚拟化。
-                _scroll.Tag = "NoSmoothScroll";
-                _scroll.ScrollChanged += OnScrollChanged;
-            }
-        }
-
-        if (Follow)
-        {
-            ScrollToEnd();
-        }
+        LogList.ApplyTemplate();
+        AttachScrollViewer();
     }
 
     private static ScrollViewer? FindScrollViewer(DependencyObject parent)
@@ -85,17 +73,69 @@ public partial class LogPage : Page
 
     private void ScrollToEnd()
     {
+        if (_scroll is null || _scrollQueued)
+        {
+            return;
+        }
+
+        _scrollQueued = true;
+        Dispatcher.BeginInvoke(DispatcherPriority.Loaded, () =>
+        {
+            _scrollQueued = false;
+            if (_scroll is null || !IsLoaded || !Follow)
+            {
+                return;
+            }
+
+            _programmaticScroll = true;
+            try
+            {
+                _scroll.ScrollToEnd();
+            }
+            finally
+            {
+                _programmaticScroll = false;
+            }
+        });
+    }
+
+    private void AttachScrollViewer(bool retry = true)
+    {
+        if (_scroll is not null || !IsLoaded)
+        {
+            return;
+        }
+
+        _scroll = FindScrollViewer(LogList);
+        if (_scroll is null)
+        {
+            if (retry)
+            {
+                Dispatcher.BeginInvoke(DispatcherPriority.ContextIdle, () => AttachScrollViewer(false));
+            }
+
+            return;
+        }
+
+        _scroll.Tag = "NoSmoothScroll";
+        _scroll.ScrollChanged += OnScrollChanged;
+        if (Follow)
+        {
+            ScrollToEnd();
+        }
+    }
+
+    private void OnLogPreviewMouseWheel(object sender, MouseWheelEventArgs e)
+    {
         if (_scroll is null)
         {
             return;
         }
 
-        _programmaticScroll = true;
-        Dispatcher.BeginInvoke(DispatcherPriority.Loaded, () =>
-        {
-            _scroll.ScrollToEnd();
-            _programmaticScroll = false;
-        });
+        e.Handled = true;
+        var offset = _scroll.VerticalOffset - e.Delta / 120.0 * SystemParameters.WheelScrollLines * 17.0;
+        _scroll.ScrollToVerticalOffset(Math.Max(0, Math.Min(offset, _scroll.ScrollableHeight)));
+        OnManualScroll();
     }
 
     private void OnRowsAppended()
@@ -113,14 +153,10 @@ public partial class LogPage : Page
             return;
         }
 
-        // 滚轮事件先于位置变化到达，等布局后再判断是否离开了底部。
-        Dispatcher.BeginInvoke(DispatcherPriority.Background, () =>
+        if (!AtBottom)
         {
-            if (!AtBottom)
-            {
-                Pause();
-            }
-        });
+            Pause();
+        }
     }
 
     private void OnScrollChanged(object sender, ScrollChangedEventArgs e)
@@ -135,7 +171,7 @@ public partial class LogPage : Page
             _resumeAt = null;
             _resumeTimer.Stop();
         }
-        else if (e.VerticalChange < 0)
+        else if (e.VerticalChange < 0 && e.ExtentHeightChange == 0 && e.ViewportHeightChange == 0)
         {
             Pause();
         }

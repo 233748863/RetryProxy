@@ -5,6 +5,7 @@ using RetryProxy.Core.Config;
 using RetryProxy.Helpers;
 using RetryProxy.Helpers.Ui;
 using RetryProxy.Service.Interface;
+using RetryProxy.View;
 using System.ComponentModel;
 using System.Windows;
 using Wpf.Ui.Appearance;
@@ -105,6 +106,10 @@ public partial class MainWindowViewModel : ObservableObject, IViewModel
         if (Application.Current.MainWindow is { } mainWindow)
         {
             WindowHelper.ApplyThemeToWindow(mainWindow, themeType);
+            if (mainWindow is MainWindow retryProxyWindow)
+            {
+                retryProxyWindow.QueueNavigationRefresh();
+            }
         }
     }
 

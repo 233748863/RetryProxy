@@ -3,12 +3,15 @@ using RetryProxy.Core.Logging;
 using RetryProxy.Helpers.DpiAwareness;
 using RetryProxy.Helpers.Ui;
 using RetryProxy.Helpers.Win32;
+using RetryProxy.Service.I18n;
+using RetryProxy.View.Pages;
 using RetryProxy.ViewModel;
 using System;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Threading;
 using Wpf.Ui;
 using Wpf.Ui.Abstractions;
 using Wpf.Ui.Controls;
@@ -19,6 +22,7 @@ namespace RetryProxy.View;
 public partial class MainWindow : FluentWindow, INavigationWindow
 {
     private readonly ILogger<MainWindow> _logger = App.GetLogger<MainWindow>();
+    private readonly ProxyLogger _proxyLogger;
     private readonly WindowRecovery _windowRecovery;
     private ScrollViewer? _currentScrollViewer;
     private double _targetOffset;
@@ -34,12 +38,15 @@ public partial class MainWindow : FluentWindow, INavigationWindow
     private readonly double _inertiaDecay = 0.94;
     private readonly double _minVelocity = 0.3;
     private const double TargetFps = 60.0;
+    private bool _navigationRefreshQueued;
+    private Type? _lastPageType;
 
     public MainWindowViewModel ViewModel { get; }
 
     public MainWindow(MainWindowViewModel viewModel, INavigationService navigationService, ISnackbarService snackbarService, IContentDialogService contentDialogService, ProxyLogger proxyLogger)
     {
         _logger.LogDebug("主窗体实例化");
+        _proxyLogger = proxyLogger;
         DataContext = ViewModel = viewModel;
 
         InitializeComponent();
@@ -49,16 +56,33 @@ public partial class MainWindow : FluentWindow, INavigationWindow
         snackbarService.SetSnackbarPresenter(SnackbarPresenter);
         contentDialogService.SetDialogHost(RootContentDialogHost);
         navigationService.SetNavigationControl(RootNavigation);
+        RootNavigation.Navigated += (_, e) =>
+        {
+            _lastPageType = e.Page?.GetType() ?? _lastPageType;
+        };
+        I18nService.Instance.PropertyChanged += OnLanguageChanged;
 
         Application.Current.MainWindow = this;
 
         AddHandler(PreviewMouseWheelEvent, new MouseWheelEventHandler(OnGlobalPreviewMouseWheel), true);
 
-        Loaded += (s, e) => Activate();
+        Loaded += (s, e) =>
+        {
+            Activate();
+            QueueNavigationRefresh();
+        };
     }
 
     private void OnGlobalPreviewMouseWheel(object sender, MouseWheelEventArgs e)
     {
+        for (var source = e.OriginalSource as DependencyObject; source is not null; source = GetParent(source))
+        {
+            if (source is LogPage)
+            {
+                return;
+            }
+        }
+
         var scrollViewer = FindScrollViewerUnderMouse(e);
         if (scrollViewer == null)
             return;
@@ -239,6 +263,7 @@ public partial class MainWindow : FluentWindow, INavigationWindow
         _logger.LogDebug("主窗体退出");
         _windowRecovery.Dispose();
         CompositionTarget.Rendering -= OnCompositionTargetRendering;
+        I18nService.Instance.PropertyChanged -= OnLanguageChanged;
         RemoveHandler(PreviewMouseWheelEvent, new MouseWheelEventHandler(OnGlobalPreviewMouseWheel));
         base.OnClosed(e);
         App.GetService<NotifyIconViewModel>()?.Exit();
@@ -251,7 +276,55 @@ public partial class MainWindow : FluentWindow, INavigationWindow
 
     public INavigationView GetNavigation() => RootNavigation;
 
-    public bool Navigate(Type pageType) => RootNavigation.Navigate(pageType);
+    public bool Navigate(Type pageType)
+    {
+        var navigated = RootNavigation.Navigate(pageType);
+        if (navigated)
+        {
+            _lastPageType = pageType;
+        }
+
+        return navigated;
+    }
+
+    public void QueueNavigationRefresh()
+    {
+        if (_navigationRefreshQueued || !IsLoaded)
+        {
+            return;
+        }
+
+        _navigationRefreshQueued = true;
+        Dispatcher.BeginInvoke(DispatcherPriority.ContextIdle, () =>
+        {
+            _navigationRefreshQueued = false;
+            var frame = RootNavigation.Template.FindName("PART_NavigationViewContentPresenter", RootNavigation) as Frame;
+            if (frame is null || frame.Content is not null)
+            {
+                return;
+            }
+
+            var pageType = RootNavigation.SelectedItem?.TargetPageType ?? _lastPageType;
+            if (pageType is null)
+            {
+                return;
+            }
+
+            _proxyLogger.Warn($"导航内容为空，尝试恢复 {pageType.Name}");
+            if (!RootNavigation.Navigate(pageType) && frame.Content is null)
+            {
+                RootNavigation.ReplaceContent(pageType);
+            }
+        });
+    }
+
+    private void OnLanguageChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(I18nService.Revision))
+        {
+            QueueNavigationRefresh();
+        }
+    }
 
     public void SetServiceProvider(IServiceProvider serviceProvider)
     {

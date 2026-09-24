@@ -78,25 +78,7 @@ public partial class HomePageViewModel : ViewModel
     private double _contextLimit = ConfigDefaults.KeepaliveContextLimit;
 
     [ObservableProperty]
-    private bool _isPreparing;
-
-    [ObservableProperty]
-    private bool _hasPreparation;
-
-    [ObservableProperty]
-    private string _preparationActionText = "终止准备";
-
-    [ObservableProperty]
-    private string _prepareToolTip = string.Empty;
-
-    [ObservableProperty]
-    private string _keepAliveHint = string.Empty;
-
-    [ObservableProperty]
     private string _autoKeepAliveHint = string.Empty;
-
-    [ObservableProperty]
-    private string? _keepAliveHintToolTip;
 
     [ObservableProperty]
     private string _listenAddress = string.Empty;
@@ -157,16 +139,7 @@ public partial class HomePageViewModel : ViewModel
             KeepAliveEnabled = route?.KeepaliveEnabled ?? false;
             KeepAliveMinutes = route is null ? string.Empty : Workspace.KeepAliveMinutes;
             ContextLimit = route?.KeepaliveContextLimit ?? ConfigDefaults.KeepaliveContextLimit;
-            var snapshot = route is null ? null : Workspace.PreparationSnapshot(route.Id);
-            IsPreparing = snapshot?.Preparing == true || route is not null && Workspace.PreparationIsPending(route.Id);
-            HasPreparation = route is not null && Workspace.HasPreparation(route.Id);
-            PreparationActionText = IsPreparing ? "终止准备" : "停止保活";
-            PrepareToolTip = route is null ? string.Empty : "选择本通道供应商或临时配置新供应商；后台独立准备，不修改服务商和通道。";
             AutoKeepAliveHint = route is null ? string.Empty : Workspace.KeepAliveHint(route);
-            KeepAliveHint = route is null ? string.Empty : Workspace.PreparationHint(route.Id);
-            KeepAliveHintToolTip = snapshot?.PreparationLastError is { } reason
-                ? $"最近一次准备未完成：{reason}\n将持续重试，可点击“终止准备”取消。"
-                : null;
             ListenAddress = route is null ? string.Empty : LocalUrlOf(route);
         }
         finally
@@ -324,22 +297,6 @@ public partial class HomePageViewModel : ViewModel
         }
 
         Workspace.StopRoute(route.Id);
-        _workspaceService.Flush();
-    }
-
-    [RelayCommand]
-    private async Task OnPrepareKeepAlive()
-    {
-        if (Workspace.OpenPrepareDialog() is { } state)
-        {
-            await _dialogs.ShowPrepareOptionsAsync(state);
-        }
-    }
-
-    [RelayCommand]
-    private void OnCancelPreparation()
-    {
-        Workspace.CancelSelectedPreparation();
         _workspaceService.Flush();
     }
 

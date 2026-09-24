@@ -66,6 +66,7 @@
 
         <!--  代理服务，启动！  -->
         <ui:CardExpander Margin="0,12,0,12"
+                         AutomationProperties.AutomationId="ChannelConfiguration"
                          ContentPadding="0"
                          Icon="{ui:SymbolIcon Play24}">
             <ui:CardExpander.Header>
@@ -248,7 +249,6 @@
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="Auto" />
-                        <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
                     <ui:TextBlock Grid.Row="0"
                                   Grid.Column="0"
@@ -263,30 +263,10 @@
                     <ui:ToggleSwitch Grid.Row="0"
                                      Grid.RowSpan="2"
                                      Grid.Column="1"
-                                     Margin="0,0,10,0"
+                                     Margin="0,0,36,0"
                                      AutomationProperties.Name="{i18n:T 本通道保活}"
                                      IsChecked="{Binding KeepAliveEnabled, Mode=TwoWay}"
                                      IsEnabled="{Binding HasChannel}" />
-                    <StackPanel Grid.Row="0"
-                                Grid.RowSpan="2"
-                                Grid.Column="2"
-                                Margin="0,0,36,0"
-                                Orientation="Horizontal">
-                        <ui:Button Command="{Binding PrepareKeepAliveCommand}"
-                                   Content="{i18n:T 一键准备}"
-                                   IsEnabled="{Binding HasChannel}"
-                                   ToolTip="{Binding PrepareToolTip}" />
-                        <ui:Button Margin="6,0,0,0"
-                                   Appearance="Danger"
-                                   Command="{Binding CancelPreparationCommand}"
-                                   Content="{Binding PreparationActionText}"
-                                   Visibility="{Binding HasPreparation, Converter={StaticResource BooleanToVisibilityConverter}}" />
-                        <ui:ProgressRing Width="18"
-                                         Height="18"
-                                         Margin="8,0,0,0"
-                                         IsIndeterminate="True"
-                                         Visibility="{Binding IsPreparing, Converter={StaticResource BooleanToVisibilityConverter}}" />
-                    </StackPanel>
                 </Grid>
                 <Separator Margin="-18,0" BorderThickness="0,1,0,0" />
                 <Grid Margin="16">
@@ -345,20 +325,6 @@
                                   Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
                                   Text="{Binding AutoKeepAliveHint}"
                                   TextWrapping="Wrap" />
-                </Grid>
-                <Separator Margin="-18,0" BorderThickness="0,1,0,0" />
-                <Grid Margin="16">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="Auto" />
-                        <ColumnDefinition Width="*" />
-                    </Grid.ColumnDefinitions>
-                    <ui:TextBlock Grid.Column="0" Margin="0,0,16,0" FontTypography="Body" Text="{i18n:T 后台准备状态}" />
-                    <ui:TextBlock Grid.Column="1"
-                                  FontSize="11"
-                                  Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
-                                  Text="{Binding KeepAliveHint}"
-                                  TextWrapping="Wrap"
-                                  ToolTip="{Binding KeepAliveHintToolTip}" />
                 </Grid>
                 <Separator Margin="-18,0" BorderThickness="0,1,0,0" />
                 <Grid Margin="16">

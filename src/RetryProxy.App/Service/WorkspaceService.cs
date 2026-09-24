@@ -47,15 +47,20 @@ public sealed class WorkspaceService
             configService.Save();
         });
         Workspace.NoticePosted += OnNoticePosted;
+        Preparations = new PreparationWorkspace(proxyLogger);
+        Preparations.NoticePosted += ShowNotice;
         _refreshTimer = new DispatcherTimer(DispatcherPriority.Background) { Interval = NotifyRepaintDelay };
         _refreshTimer.Tick += (_, _) => Flush();
         _hintTimer = new DispatcherTimer(DispatcherPriority.Background) { Interval = TimeSpan.FromSeconds(1) };
         _hintTimer.Tick += (_, _) => Tick?.Invoke();
         Workspace.SetUiNotifier(RequestRefresh);
+        Preparations.SetUiNotifier(RequestRefresh);
         Workspace.RefreshServices();
     }
 
     public ProxyWorkspace Workspace { get; }
+
+    public PreparationWorkspace Preparations { get; }
 
     /// <summary>界面线程上的日志缓冲。</summary>
     public LogBuffer Logs { get; } = new();
@@ -85,7 +90,10 @@ public sealed class WorkspaceService
 
     public void Shutdown()
     {
+        Preparations.Shutdown();
         Workspace.Shutdown();
+        _refreshTimer.Stop();
+        _hintTimer.Stop();
     }
 
     /// <summary>页面在需要保活倒计时时登记自己；没有订阅者或提示不再随时间变化时停掉定时器。</summary>
@@ -105,7 +113,8 @@ public sealed class WorkspaceService
 
     private void UpdateHintTimer()
     {
-        var wanted = _hintSubscribers.Count > 0 && Workspace.KeepAliveHintChangesOverTime();
+        var wanted = _hintSubscribers.Count > 0
+            && (Workspace.KeepAliveHintChangesOverTime() || Preparations.HintChangesOverTime());
         if (wanted && !_hintTimer.IsEnabled)
         {
             _hintTimer.Start();
@@ -147,7 +156,7 @@ public sealed class WorkspaceService
         try
         {
             Workspace.PollServiceErrors();
-            Workspace.PollPendingPreparation();
+            Preparations.Poll();
             while (Workspace.PollPreparationEvents())
             {
             }
@@ -212,6 +221,11 @@ public sealed class WorkspaceService
     {
         // 提示已交给 Snackbar，清掉后下一条不会拼接在后面（对应 Rust 版模态框关掉后再显示下一条）。
         Workspace.Notice = null;
+        ShowNotice(message);
+    }
+
+    private void ShowNotice(string message)
+    {
         _logger.LogInformation("提示：{Notice}", message);
         try
         {

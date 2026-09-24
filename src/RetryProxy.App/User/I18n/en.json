@@ -140,5 +140,16 @@
   "项目主页": "Project page",
   "依赖致谢": "Acknowledgements",
   "感谢以下开源项目": "Thanks to these open-source projects",
-  "打开": "Open"
+  "打开": "Open",
+  "新增准备": "Add preparation",
+  "独立选择客户端、供应商与模型，准备成功后自动保活。": "Choose a client, provider and model. Keep-alive starts after preparation succeeds.",
+  "每项准备单独启停，设置与会话在关闭软件后清空。": "Each task starts and stops independently. Settings and sessions are cleared when the app closes.",
+  "尚未添加准备任务": "No preparation tasks yet",
+  "点击“新增准备”选择客户端和供应商。": "Choose Add preparation to select a client and provider.",
+  "修改设置": "Edit settings",
+  "删除": "Delete",
+  "供应商来源": "Provider source",
+  "使用本机客户端当前供应商": "Use the local client's current provider",
+  "手动配置供应商": "Configure a provider manually",
+  "供应商地址": "Provider URL"
 }

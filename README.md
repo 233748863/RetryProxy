@@ -15,7 +15,7 @@
 
 | 路径 | 说明 |
 |---|---|
-| `src\RetryProxy.App` | WPF 程序（WPF-UI，首页 / 运行状态 / 运行日志 / 缓存明细 / 设置 / 关于） |
+| `src\RetryProxy.App` | WPF 程序（WPF-UI，首页 / 一键准备 / 运行状态 / 运行日志 / 缓存明细 / 设置 / 关于） |
 | `src\RetryProxy.Core` | 配置、代理管线、统计持久化、保活与 CLI 会话、工作区编排（不依赖 WPF） |
 | `src\RetryProxy.Tests` | xUnit 用例（从 Rust 版 `tests/` 与模块单测逐一移植） |
 | `tests\` | PowerShell 端到端验收脚本（见下） |
@@ -24,7 +24,7 @@
 
 ## 构建与发布
 
-通道选择与保活参数在首页管理；点击“一键准备”选择本通道供应商或临时配置新供应商。本通道模式实时读取 CCC Switch 写入本机 `.codex/config.toml`、`.codex/auth.json`（Claude Code 通道读取 `.claude/settings.json`）的当前地址与密钥，可获取模型后选择或自行输入；新供应商模式手填地址和 API Key。独立后台代理只在内存中注入密钥，准备不修改已有服务商、通道或配置文件；每轮上游请求只尝试一次，未取得上下文时持续启动下一轮，取得后按弹窗设定的间隔保活（默认 5 分钟，可设 0.5～1440 分钟），直到手动停止；重启后临时设置与会话消失。过程进入普通日志，可用“保活”标签筛选，不会记录 API Key；旧版曾创建的通道不会自动删除。
+通道选择与通道保活参数在首页管理；左侧“一键准备”是独立功能，可新增多项准备任务，每项自行选择 Codex 或 Claude Code、供应商、模型与保活间隔，并单独启停。无需创建或启动通道，切换、修改、停用或删除通道均不影响准备任务。本机供应商模式在开始时读取所选客户端的当前地址与密钥（Codex 读取 `.codex/config.toml` 和 `.codex/auth.json`，Claude Code 读取 `.claude/settings.json`）；也可手填供应商地址与 API Key，模型支持获取后选择或直接输入。准备任务拥有独立后台代理和会话，使用独立的默认超时设置，每轮上游请求只尝试一次，未取得上下文时持续重试；取得后按设定间隔保活（默认 5 分钟，可设 0.5～1440 分钟），直到手动停止。已停止的任务可修改设置并重新开始，运行中的任务沿用启动时的地址与密钥。配置、密钥与会话只保留在本次运行的内存中，关闭软件后清空；不写入已有服务商、通道或客户端配置。过程进入普通日志，分别用“准备”和“保活”标签筛选，不记录 API Key。
 
 ```powershell
 dotnet build RetryProxy.sln
@@ -40,12 +40,12 @@ powershell -File build\publish.ps1 -SkipTests
 powershell -File tests\verify_exe.ps1
 # 追加托盘隐藏/还原、缓存页、隐藏期间流式请求、窗口异常位置恢复、关闭退出（在私有桌面运行）
 powershell -File tests\verify_exe.ps1 -VerifyTray
-# 保活：一键准备 / 自动保活 / 让行真实请求 / 前两次失败后重试 / 终止准备（PowerShell 7 + UIAutomation，各模式分别运行）
-pwsh -File tests\verify_keepalive.ps1
-pwsh -File tests\verify_keepalive.ps1 -Automatic
-pwsh -File tests\verify_keepalive.ps1 -Interrupt
-pwsh -File tests\verify_keepalive.ps1 -RetryPreparation
-pwsh -File tests\verify_keepalive.ps1 -CancelPreparation
+# 独立准备：空通道启动、模型获取、完成后保活、两项任务分别启停（私有桌面）
+pwsh -File tests\verify_preparation.ps1
+# 追加首页通道切换后准备任务仍保持运行
+pwsh -File tests\verify_preparation.ps1 -WithChannels
+# 较小窗口中的弹窗布局与客户端切换（私有桌面）
+pwsh -File tests\verify_preparation.ps1 -WithChannels -CompactWindow
 ```
 
 ## 配置与数据

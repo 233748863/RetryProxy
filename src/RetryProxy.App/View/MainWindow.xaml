@@ -65,6 +65,15 @@
                     </ui:NavigationViewItem.Icon>
                 </ui:NavigationViewItem>
 
+                <ui:NavigationViewItem Content="{i18n:T 一键准备}"
+                                       AutomationProperties.AutomationId="PreparationNavigation"
+                                       NavigationCacheMode="Enabled"
+                                       TargetPageType="{x:Type pages:PreparationPage}">
+                    <ui:NavigationViewItem.Icon>
+                        <ui:SymbolIcon Symbol="PlayCircle24" />
+                    </ui:NavigationViewItem.Icon>
+                </ui:NavigationViewItem>
+
                 <ui:NavigationViewItem Content="{i18n:T 运行状态}"
                                        NavigationCacheMode="Enabled"
                                        TargetPageType="{x:Type pages:StatusPage}">

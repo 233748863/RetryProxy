@@ -73,6 +73,7 @@ public partial class App : Application
 
             // Pages
             services.AddView<HomePage, HomePageViewModel>();
+            services.AddView<PreparationPage, PreparationPageViewModel>();
             services.AddView<StatusPage, StatusPageViewModel>();
             services.AddView<LogPage, LogPageViewModel>();
             services.AddView<CachePage, CachePageViewModel>();
@@ -113,7 +114,10 @@ public partial class App : Application
 
         try
         {
-            RuntimeHelper.CheckSingleInstance(SingleInstanceName);
+            // 注入配置的验收实例使用独立名称，避免唤醒或退出用户正在运行的程序。
+            RuntimeHelper.CheckSingleInstance(ProxyConfigLoader.IsTestInjectionActive()
+                ? $"{SingleInstanceName}_Test_{Environment.ProcessId}"
+                : SingleInstanceName);
             if (RuntimeHelper.IsDebug)
             {
                 ConsoleHelper.AllocateConsole("LLM Retry Proxy Console");

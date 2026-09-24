@@ -1,5 +1,3 @@
-using System;
-using System.Collections.Generic;
 using RetryProxy.Core.Config;
 
 namespace RetryProxy.Core.Workspace;
@@ -45,42 +43,6 @@ public sealed class RouteEditor
     public string MaxDelay { get; set; } = string.Empty;
 
     public bool IsEditing => Index is not null;
-}
-
-public enum PrepareMode
-{
-    CurrentProvider,
-    NewProvider,
-}
-
-/// <summary>“一键准备”选项窗的状态。</summary>
-public sealed class PreparationDialogState
-{
-    public string RouteId { get; init; } = string.Empty;
-
-    public PrepareMode Mode { get; set; } = PrepareMode.CurrentProvider;
-
-    public ClientType NewProviderClientType { get; set; } = ClientType.Codex;
-
-    public string NewProviderUrl { get; set; } = string.Empty;
-
-    public string ApiKey { get; set; } = string.Empty;
-
-    public IReadOnlyList<string> Models { get; set; } = Array.Empty<string>();
-
-    public string? SelectedModel { get; set; }
-
-    public string IdleMinutes { get; set; } = "5";
-
-    public void ClearModels()
-    {
-        Models = Array.Empty<string>();
-        SelectedModel = null;
-    }
-
-    public bool ShowKey { get; set; }
-
-    public string? Error { get; set; }
 }
 
 /// <summary>编辑器字段解析失败时抛出，消息即界面文案。</summary>

@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Net;
 using System.Net.Sockets;
-using System.Security.Cryptography;
 using RetryProxy.Core.Cli;
 using RetryProxy.Core.Config;
 using RetryProxy.Core.KeepAlive;
@@ -14,29 +13,14 @@ namespace RetryProxy.Core.Workspace;
 
 /// <summary>
 /// 界面编排层（对应 ui.rs 里 RetryProxyApp 的非绘制部分）：配置与选择同步、每条通道的服务与保活看门狗、
-/// 服务商/通道增删改、启停、保活设置与一键准备编排。只在界面线程上访问；
+/// 服务商/通道增删改、启停与通道保活设置。只在界面线程上访问；
 /// 后台线程只会通过 <see cref="SetUiNotifier"/> 设置的回调请求刷新。
 /// </summary>
 public sealed class ProxyWorkspace
 {
     private readonly Action<ProxyConfig>? _save;
     private readonly HashSet<string> _reportedServiceErrors = new();
-    private readonly Dictionary<string, TemporaryPreparation> _preparations = new();
-    private readonly Dictionary<string, PreparationDialogState> _preparationOptions = new();
     private Action? _uiNotifier;
-
-    private sealed class TemporaryPreparation
-    {
-        public required ProxyService Service { get; init; }
-
-        public required KeepAliveWatchdog Watchdog { get; init; }
-
-        public required int Port { get; init; }
-
-        public required CliCredential? Credential { get; init; }
-
-        public bool Pending { get; set; } = true;
-    }
 
     public ProxyWorkspace(ProxyLogger logger, ProxyConfig config, Action<ProxyConfig>? save)
     {
@@ -55,8 +39,6 @@ public sealed class ProxyWorkspace
 
     /// <summary>测试用：注入的 CLI 命令，让保活看门狗不去找本机 CLI。</summary>
     internal CliCommand? TestCliCommand { get; set; }
-
-    internal Func<ClientType, CliCredential> LocalProviderResolver { get; set; } = LocalProviderCredentials.Read;
 
     public Dictionary<string, ProxyService> Services { get; } = new();
 
@@ -107,11 +89,6 @@ public sealed class ProxyWorkspace
         {
             service.SetUiNotifier(notifier);
         }
-
-        foreach (var preparation in _preparations.Values)
-        {
-            preparation.Service.SetUiNotifier(notifier);
-        }
     }
 
     public void Save()
@@ -135,13 +112,6 @@ public sealed class ProxyWorkspace
 
     public void RefreshServices()
     {
-        foreach (var id in _preparations.Keys.Where(id => Config.Routes.All(route => route.Id != id)).ToList())
-        {
-            _preparations[id].Service.Stop(TimeSpan.FromSeconds(15));
-            _preparations.Remove(id);
-            _preparationOptions.Remove(id);
-        }
-
         foreach (var id in RouteKeepAlives.Keys.Where(id => Config.Routes.All(route => route.Id != id)).ToList())
         {
             RouteKeepAlives.Remove(id);
@@ -380,13 +350,6 @@ public sealed class ProxyWorkspace
 
     public void Shutdown()
     {
-        foreach (var preparation in _preparations.Values)
-        {
-            preparation.Service.Stop(TimeSpan.FromSeconds(15));
-        }
-
-        _preparations.Clear();
-        _preparationOptions.Clear();
         foreach (var service in Services.Values)
         {
             service.Stop(TimeSpan.FromSeconds(15));
@@ -571,7 +534,7 @@ public sealed class ProxyWorkspace
 
     public int FirstFreePort()
     {
-        var used = Config.Routes.Select(route => route.ListenPort).Concat(_preparations.Values.Select(item => item.Port)).ToHashSet();
+        var used = Config.Routes.Select(route => route.ListenPort).ToHashSet();
         for (var port = ConfigDefaults.ListenPort; port <= 65535; port++)
         {
             if (!used.Contains(port))
@@ -586,7 +549,7 @@ public sealed class ProxyWorkspace
     /// <summary>配置里未占用且此刻能在本机绑定的最小端口；新通道要马上启动，只看配置不够。</summary>
     public int FirstBindableFreePort()
     {
-        var used = Config.Routes.Select(route => route.ListenPort).Concat(_preparations.Values.Select(item => item.Port)).ToHashSet();
+        var used = Config.Routes.Select(route => route.ListenPort).ToHashSet();
         for (var port = ConfigDefaults.ListenPort; port <= 65535; port++)
         {
             if (used.Contains(port))
@@ -718,12 +681,6 @@ public sealed class ProxyWorkspace
             return;
         }
 
-        if (_preparations.Remove(routeId, out var preparation))
-        {
-            preparation.Service.Stop(TimeSpan.FromSeconds(15));
-        }
-
-        _preparationOptions.Remove(routeId);
         Config.Routes.RemoveAt(index);
         Services.Remove(routeId);
         SyncSelection();
@@ -817,7 +774,7 @@ public sealed class ProxyWorkspace
         }
         else if (!route.KeepaliveEnabled)
         {
-            status = "自动保活已关闭 · 可一键准备";
+            status = "自动保活已关闭";
         }
         else
         {
@@ -844,20 +801,6 @@ public sealed class ProxyWorkspace
             return false;
         }
 
-        if (_preparations.TryGetValue(route.Id, out var preparation))
-        {
-            var preparationSnapshot = preparation.Watchdog.Snapshot();
-            if (preparation.Pending || preparationSnapshot.Preparing)
-            {
-                return true;
-            }
-
-            return preparation.Service.IsRunning
-                && preparation.Watchdog.Enabled
-                && preparationSnapshot.ActiveRequests == 0
-                && !preparationSnapshot.Probing;
-        }
-
         if (!RouteKeepAlives.TryGetValue(route.Id, out var watchdog))
         {
             return false;
@@ -877,305 +820,12 @@ public sealed class ProxyWorkspace
         return route.KeepaliveEnabled && snapshot.ActiveRequests == 0 && !snapshot.Probing;
     }
 
-    // ---------------------------------------------------------------- 一键准备
-
-    public KeepAliveSnapshot? PreparationSnapshot(string routeId) =>
-        _preparations.TryGetValue(routeId, out var preparation) ? preparation.Watchdog.Snapshot() : null;
-    public int? PreparationListenPort(string routeId) =>
-        _preparations.TryGetValue(routeId, out var preparation) ? preparation.Port : null;
-    public bool PreparationIsPending(string routeId) =>
-        _preparations.TryGetValue(routeId, out var preparation) && preparation.Pending;
-    public bool HasPreparation(string routeId) => _preparations.ContainsKey(routeId);
-    public string PreparationHint(string routeId)
-    {
-        if (!_preparations.TryGetValue(routeId, out var preparation))
-        {
-            return "本次运行尚未准备";
-        }
-        var snapshot = preparation.Watchdog.Snapshot();
-        if (preparation.Pending)
-        {
-            return "后台准备服务启动中";
-        }
-        if (snapshot.Preparing)
-        {
-            return snapshot.PreparationRetryAfter is { } delay
-                ? $"第 {snapshot.PreparationAttempts} 次未完成，{Math.Ceiling(delay.TotalSeconds):F0} 秒后重试"
-                : $"正在后台准备（第 {snapshot.PreparationAttempts} 次）";
-        }
-        var remaining = preparation.Watchdog.Idle - preparation.Watchdog.IdleFor();
-        var countdown = snapshot.Probing
-            ? "正在进行后台保活"
-            : $"距下次保活 {UiText.FormatDurationCn(remaining < TimeSpan.Zero ? TimeSpan.Zero : remaining)}";
-        return $"首次准备完成 · {countdown} · 可手动停止\n本次运行：成功 {snapshot.Totals.Completed} 轮 · 失败 {snapshot.Totals.Failed} 轮 · 模型 {snapshot.Model ?? "本机默认"}";
-    }
-    public PreparationDialogState? OpenPrepareDialog()
-    {
-        var route = SelectedRouteRef();
-        if (route is null)
-        {
-            Notice = "请先选择一条通道，再一键准备";
-            return null;
-        }
-        if (_preparationOptions.TryGetValue(route.Id, out var saved))
-        {
-            return CopyPreparationOptions(saved);
-        }
-        return new PreparationDialogState { RouteId = route.Id, NewProviderClientType = route.ClientType };
-    }
-    private static PreparationDialogState CopyPreparationOptions(PreparationDialogState source) => new()
-    {
-        RouteId = source.RouteId,
-        Mode = source.Mode,
-        NewProviderClientType = source.NewProviderClientType,
-        NewProviderUrl = source.NewProviderUrl,
-        ApiKey = source.ApiKey,
-        SelectedModel = source.SelectedModel,
-        IdleMinutes = source.IdleMinutes,
-    };
-    public bool SubmitPrepareDialog(PreparationDialogState dialog)
-    {
-        var route = Config.Routes.FirstOrDefault(candidate => candidate.Id == dialog.RouteId);
-        if (route is null)
-        {
-            dialog.Error = "通道已不存在，无法准备";
-            return false;
-        }
-        var settings = CopyPreparationOptions(dialog);
-        var error = StartTemporaryPreparation(route, settings);
-        if (error is not null)
-        {
-            dialog.Error = error;
-            return false;
-        }
-        _preparationOptions[route.Id] = settings;
-        dialog.Error = null;
-        return true;
-    }
-    public CliCredential CurrentPreparationCredential(PreparationDialogState dialog)
-    {
-        var route = Config.Routes.FirstOrDefault(candidate => candidate.Id == dialog.RouteId)
-            ?? throw new WorkspaceException("通道已不存在，无法准备");
-        return LocalProviderResolver(route.ClientType);
-    }
-    public void SetPreparationModels(PreparationDialogState dialog, IReadOnlyList<string> models)
-    {
-        dialog.Models = models;
-        dialog.SelectedModel ??= models.FirstOrDefault();
-    }
-    public ProviderEndpoint PreparationTargetProvider(PreparationDialogState dialog)
-    {
-        ProviderEndpoint provider;
-        if (dialog.Mode == PrepareMode.CurrentProvider)
-        {
-            var route = Config.Routes.FirstOrDefault(candidate => candidate.Id == dialog.RouteId)
-                ?? throw new WorkspaceException("通道已不存在，无法准备");
-            provider = new ProviderEndpoint(route.ProviderName, CurrentPreparationCredential(dialog).BaseUrl);
-        }
-        else
-        {
-            provider = new ProviderEndpoint("临时保活", dialog.NewProviderUrl);
-        }
-        try
-        {
-            provider.Validate();
-        }
-        catch (ConfigException error)
-        {
-            throw new WorkspaceException(error.Message);
-        }
-        return provider;
-    }
-    public string PlanText(PreparationDialogState dialog) => dialog.Mode == PrepareMode.CurrentProvider
-        ? $"使用本通道的 {Config.Routes.First(route => route.Id == dialog.RouteId).ClientType.Label()} 配置，从本机 CLI 读取当前供应商地址与密钥；不修改现有通道。"
-        : $"按 {dialog.NewProviderClientType.Label()} 准备；新供应商地址、API Key 和模型仅存内存，不新增服务商或通道。";
-    internal ProxyConfig TemporaryRuntimeConfigFor(ProxyRoute origin, ProviderEndpoint provider, int port, double idleMinutes, ClientType clientType)
-    {
-        var runtime = Config.RuntimeConfigFor(origin.Id);
-        runtime.ClientType = clientType;
-        runtime.ListenPort = port;
-        runtime.MaxRetries = 0;
-        runtime.KeepaliveEnabled = false;
-        runtime.KeepaliveIdleMinutes = idleMinutes;
-        runtime.KeepaliveContextLimit = (long)KeepAliveWatchdog.DefaultContextLimit;
-        runtime.UpstreamBaseUrl = provider.BaseUrl.EndsWith("/v1", StringComparison.OrdinalIgnoreCase)
-            ? provider.BaseUrl[..^3] : provider.BaseUrl;
-        return runtime;
-    }
-
-    private string? StartTemporaryPreparation(ProxyRoute origin, PreparationDialogState settings)
-    {
-        var idleMinutes = UiText.ParseIdleMinutes(settings.IdleMinutes);
-        if (idleMinutes is null || idleMinutes < ConfigDefaults.MinKeepaliveIdleMinutes || idleMinutes > ConfigDefaults.MaxKeepaliveIdleMinutes)
-        {
-            return "独立保活间隔请输入 0.5～1440 分钟";
-        }
-
-        if (string.IsNullOrWhiteSpace(settings.SelectedModel))
-        {
-            return "请输入模型名称，或获取模型后选择一个用于准备";
-        }
-        var clientType = settings.Mode == PrepareMode.CurrentProvider ? origin.ClientType : settings.NewProviderClientType;
-        ProviderEndpoint provider;
-        CliCredential upstream;
-        try
-        {
-            if (settings.Mode == PrepareMode.CurrentProvider)
-            {
-                upstream = CurrentPreparationCredential(settings);
-                provider = new ProviderEndpoint(origin.ProviderName, upstream.BaseUrl);
-            }
-            else
-            {
-                provider = PreparationTargetProvider(settings);
-                upstream = CliCredential.Create(settings.ApiKey, provider.BaseUrl);
-            }
-        }
-        catch (WorkspaceException error)
-        {
-            return error.Message;
-        }
-        catch (CliException error)
-        {
-            return error.Message;
-        }
-        var port = FirstBindableFreePort();
-        var runtime = TemporaryRuntimeConfigFor(origin, provider, port, idleMinutes.Value, clientType);
-        var upstreamAddress = new Uri(provider.BaseUrl);
-        if (upstreamAddress.GetLeftPart(UriPartial.Authority) == origin.LocalUrl ||
-            upstreamAddress.GetLeftPart(UriPartial.Authority) == runtime.LocalUrl)
-        {
-            return "当前供应商地址指向本通道或后台临时代理，请在 CCC Switch 中切换到实际供应商";
-        }
-        CliCredential credential;
-        try
-        {
-            runtime.Validate(true);
-            credential = CliCredential.Create(Convert.ToHexString(RandomNumberGenerator.GetBytes(24)), runtime.LocalUrl, settings.SelectedModel);
-        }
-        catch (ConfigException error)
-        {
-            return error.Message;
-        }
-        catch (CliException error)
-        {
-            return error.Message;
-        }
-        var idle = TimeSpan.FromMinutes(idleMinutes.Value);
-        var watchdog = TestCliCommand is { } command
-            ? KeepAliveWatchdog.WithCliCommand(false, idle, command.Clone())
-            : new KeepAliveWatchdog(false, idle);
-        watchdog.SetContextLimit(KeepAliveWatchdog.DefaultContextLimit);
-        watchdog.ConfigureFlavor(KeepAliveFlavorExtensions.FromClientType(clientType));
-        watchdog.RequireContextForPreparation();
-        watchdog.EnableAfterPreparation();
-        var service = new ProxyService(Logger, "保活")
-            .WithKeepAliveWatchdog(watchdog)
-            .WithLogLabel(() => watchdog.Snapshot().Preparing || !watchdog.Enabled ? "准备" : "保活")
-            .WithUpstreamApiKey(upstream.ApiKey, credential.ApiKey);
-        service.SetUiNotifier(_uiNotifier);
-        try
-        {
-            service.RequestStart(runtime);
-        }
-        catch (ConfigException error)
-        {
-            return error.Message;
-        }
-        if (_preparations.TryGetValue(origin.Id, out var previous))
-        {
-            previous.Service.RequestStop();
-        }
-        _preparations[origin.Id] = new TemporaryPreparation
-        {
-            Service = service,
-            Watchdog = watchdog,
-            Credential = credential,
-            Port = port,
-        };
-        Logger.Info($"[准备] 已为“{origin.Name}”提交后台准备；临时地址、密钥和模型仅保留在本次运行，重启后清空");
-        PollPendingPreparation();
-        _uiNotifier?.Invoke();
-        return null;
-    }
-    public void PollPendingPreparation()
-    {
-        foreach (var (routeId, preparation) in _preparations.ToList())
-        {
-            if (!preparation.Pending)
-            {
-                continue;
-            }
-            switch (preparation.Service.State)
-            {
-                case ServiceState.Starting:
-                    continue;
-                case ServiceState.Running:
-                    preparation.Pending = false;
-                    try
-                    {
-                        if (preparation.Service.RequestPreparationWith(preparation.Credential))
-                        {
-                            Logger.Info($"[准备] 后台问答已开始，配置仅保留在内存中");
-                        }
-                    }
-                    catch (InvalidOperationException error)
-                    {
-                        Logger.Warn($"[准备] 后台准备启动失败：{error.Message}");
-                        Notice = $"后台准备启动失败：{error.Message}";
-                    }
-                    break;
-                default:
-                    _preparations.Remove(routeId);
-                    Logger.Warn($"[准备] 后台服务未启动：{preparation.Service.StartupError ?? "服务已停止"}");
-                    Notice = $"后台准备未启动：{preparation.Service.StartupError ?? "服务已停止"}";
-                    break;
-            }
-        }
-    }
-    public void CancelSelectedPreparation()
-    {
-        if (_preparations.Remove(SelectedRoute, out var preparation))
-        {
-            preparation.Watchdog.CancelPreparation();
-            preparation.Service.RequestStop();
-            Logger.Info("[准备] 本次后台准备已终止，临时通道已停止");
-            _uiNotifier?.Invoke();
-        }
-    }
     /// <summary>取走一条准备结果并写成提示；已有提示未消费时不取。返回是否取到。</summary>
     public bool PollPreparationEvents()
     {
         if (_notice is not null)
         {
             return false;
-        }
-
-        foreach (var preparation in _preparations.Values)
-        {
-            var temporaryResult = preparation.Watchdog.TakePreparationResult();
-            if (temporaryResult is null)
-            {
-                continue;
-            }
-
-            var message = temporaryResult switch
-            {
-                PreparationResult.Ready => "后台准备完成",
-                PreparationResult.Failed failed => $"后台准备未完成：{failed.Reason}",
-                _ => "后台准备已终止",
-            };
-            if (temporaryResult is PreparationResult.Failed)
-            {
-                Logger.Warn($"[准备] {message}");
-            }
-            else
-            {
-                Logger.Info($"[准备] {message}");
-            }
-
-            Notice = message;
-            return true;
         }
 
         foreach (var route in Config.Routes)

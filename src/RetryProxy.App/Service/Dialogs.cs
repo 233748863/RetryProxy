@@ -55,7 +55,7 @@ public sealed class Dialogs
 
     public async Task ShowPrepareOptionsAsync(PreparationDialogState state)
     {
-        var dialog = new PrepareOptionsDialog(_dialogs.GetDialogHostEx(), Workspace, state);
+        var dialog = new PrepareOptionsDialog(_dialogs.GetDialogHostEx(), _workspaceService.Preparations, state);
         await dialog.ShowAsync();
         _workspaceService.Flush();
     }

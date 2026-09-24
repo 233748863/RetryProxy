@@ -2,7 +2,6 @@ using RetryProxy.Core.Config;
 using RetryProxy.Core.Workspace;
 using RetryProxy.Service.I18n;
 using System;
-using System.Linq;
 using System.Threading;
 using System.Windows;
 using System.Windows.Controls;
@@ -12,51 +11,58 @@ using Wpf.Ui.Controls;
 
 namespace RetryProxy.View.Dialogs;
 
-/// <summary>后台准备选项窗：本通道供应商或内存中的新供应商。</summary>
+/// <summary>独立准备选项窗：自行选择客户端及本机或手动配置的供应商。</summary>
 public partial class PrepareOptionsDialog : ContentDialog
 {
     private readonly PreparationDialogState _state;
-    private readonly ProxyWorkspace _workspace;
-    private readonly ProxyRoute _route;
+    private readonly PreparationWorkspace _workspace;
     private bool _initialized;
     private CancellationTokenSource? _modelFetch;
 
-    public PrepareOptionsDialog(ContentDialogHost? host, ProxyWorkspace workspace, PreparationDialogState state)
+    public PrepareOptionsDialog(ContentDialogHost? host, PreparationWorkspace workspace, PreparationDialogState state)
         : base(host)
     {
         _workspace = workspace;
         _state = state;
-        _route = workspace.Config.Routes.First(route => route.Id == state.RouteId);
         InitializeComponent();
         ModelBox.AddHandler(TextBoxBase.TextChangedEvent, new TextChangedEventHandler(OnModelTextChanged));
         ModelBox.Text = state.SelectedModel ?? string.Empty;
         IdleMinutesBox.Text = state.IdleMinutes;
-        SubtitleText.Text = $"使用 {_route.ClientType.Label()} 在后台为“{_route.Name}”准备；新供应商仅存于本次运行，不修改现有配置。";
-        NewProviderUrlBox.Text = state.NewProviderUrl;
+        ProviderUrlBox.Text = state.ProviderUrl;
         ApiKeyBox.Password = state.ApiKey;
-        CurrentRadio.IsChecked = state.Mode == PrepareMode.CurrentProvider;
-        NewRadio.IsChecked = state.Mode == PrepareMode.NewProvider;
-        NewCodexRadio.IsChecked = state.NewProviderClientType == ClientType.Codex;
-        NewClaudeRadio.IsChecked = state.NewProviderClientType == ClientType.Claude;
+        CurrentRadio.IsChecked = state.Mode == PrepareMode.LocalProvider;
+        NewRadio.IsChecked = state.Mode == PrepareMode.CustomProvider;
+        CodexRadio.IsChecked = state.ClientType == ClientType.Codex;
+        ClaudeRadio.IsChecked = state.ClientType == ClientType.Claude;
         _initialized = true;
         Unloaded += (_, _) => ResetModels();
         UpdateMode();
         UpdateProvider();
     }
 
+    protected override Size MeasureOverride(Size availableSize)
+    {
+        // ContentDialog 的宽度属性只设上限；固定模板根容器，避免客户端说明文字带动弹窗伸缩。
+        // 宿主空间不足时随可用宽度收缩，保留模板自带的边距和纵向滚动。
+        if (GetTemplateChild("DialogRootGrid") is FrameworkElement dialogRoot)
+        {
+            var preferredWidth = DialogMaxWidth + DialogMargin.Left + DialogMargin.Right;
+            dialogRoot.SetCurrentValue(WidthProperty, Math.Min(preferredWidth, availableSize.Width));
+        }
+        return base.MeasureOverride(availableSize);
+    }
+
     private void UpdateMode()
     {
-        _state.Mode = NewRadio.IsChecked == true ? PrepareMode.NewProvider : PrepareMode.CurrentProvider;
+        _state.Mode = NewRadio.IsChecked == true ? PrepareMode.CustomProvider : PrepareMode.LocalProvider;
         PrimaryButtonText = I18nService.Instance.Translate("开始后台准备");
     }
 
     private void UpdateProvider()
     {
-        SubtitleText.Text = _state.Mode == PrepareMode.CurrentProvider
-            ? $"使用本通道的 {_route.ClientType.Label()} 在后台准备；不修改现有配置。"
-            : $"使用 {_state.NewProviderClientType.Label()} 为新供应商独立准备；不修改现有通道。";
-        NewProviderPanel.Visibility = _state.Mode == PrepareMode.NewProvider ? Visibility.Visible : Visibility.Collapsed;
-        NewProviderKeyPanel.Visibility = _state.Mode == PrepareMode.NewProvider ? Visibility.Visible : Visibility.Collapsed;
+        SubtitleText.Text = $"使用 {_state.ClientType.Label()} 独立准备，成功后按设定间隔自动保活。";
+        NewProviderPanel.Visibility = _state.Mode == PrepareMode.CustomProvider ? Visibility.Visible : Visibility.Collapsed;
+        NewProviderKeyPanel.Visibility = _state.Mode == PrepareMode.CustomProvider ? Visibility.Visible : Visibility.Collapsed;
         FetchModelsButton.Visibility = Visibility.Visible;
         ModelsLoadingText.Visibility = Visibility.Collapsed;
         ModelBox.ItemsSource = _state.Models.Count > 0 ? _state.Models : null;
@@ -91,7 +97,7 @@ public partial class PrepareOptionsDialog : ContentDialog
 
     private async void OnFetchModels(object sender, RoutedEventArgs e)
     {
-        _state.NewProviderUrl = NewProviderUrlBox.Text;
+        _state.ProviderUrl = ProviderUrlBox.Text;
         _state.ApiKey = ApiKeyBox.Password;
         ResetModels();
         ClearError();
@@ -100,17 +106,9 @@ public partial class PrepareOptionsDialog : ContentDialog
         string apiKey;
         try
         {
-            if (_state.Mode == PrepareMode.CurrentProvider)
-            {
-                var current = _workspace.CurrentPreparationCredential(_state);
-                provider = new ProviderEndpoint("本通道供应商", current.BaseUrl);
-                apiKey = current.ApiKey;
-            }
-            else
-            {
-                provider = _workspace.PreparationTargetProvider(_state);
-                apiKey = CliCredential.Create(_state.ApiKey, provider.BaseUrl).ApiKey;
-            }
+            var credential = _workspace.ResolveCredential(_state);
+            provider = new ProviderEndpoint("独立准备", credential.BaseUrl);
+            apiKey = credential.ApiKey;
         }
         catch (WorkspaceException error)
         {
@@ -129,15 +127,13 @@ public partial class PrepareOptionsDialog : ContentDialog
         ModelsLoadingText.Visibility = Visibility.Visible;
         try
         {
-            var clientType = _state.Mode == PrepareMode.CurrentProvider ? _route.ClientType : _state.NewProviderClientType;
-            var models = await ProviderModelFetcher.FetchAsync(provider, apiKey, clientType, cancellation.Token);
+            var models = await ProviderModelFetcher.FetchAsync(provider, apiKey, _state.ClientType, cancellation.Token);
             if (!ReferenceEquals(_modelFetch, cancellation))
             {
                 return;
             }
 
             _state.Models = models;
-            _workspace.SetPreparationModels(_state, models);
             var model = ModelBox.Text;
             ModelBox.ItemsSource = models;
             ModelBox.Text = model;
@@ -203,7 +199,7 @@ public partial class PrepareOptionsDialog : ContentDialog
             return;
         }
 
-        _state.NewProviderClientType = NewClaudeRadio.IsChecked == true ? ClientType.Claude : ClientType.Codex;
+        _state.ClientType = ClaudeRadio.IsChecked == true ? ClientType.Claude : ClientType.Codex;
         UpdateProvider();
         ResetModels(clearModel: true);
         ClearError();
@@ -224,8 +220,8 @@ public partial class PrepareOptionsDialog : ContentDialog
         {
             UpdateMode();
             UpdateProvider();
-            _state.NewProviderUrl = NewProviderUrlBox.Text;
-            if (_state.Mode == PrepareMode.NewProvider)
+            _state.ProviderUrl = ProviderUrlBox.Text;
+            if (_state.Mode == PrepareMode.CustomProvider)
             {
                 _state.ApiKey = ApiKeyBox.Password;
             }

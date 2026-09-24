@@ -138,6 +138,7 @@ public sealed class ProxyWorkspace
             watchdog.Configure(route.KeepaliveEnabled, idle);
             watchdog.SetContextLimit((ulong)Math.Max(route.KeepaliveContextLimit, 1));
             watchdog.ConfigureFlavor(KeepAliveFlavorExtensions.FromClientType(route.ClientType));
+            watchdog.SetReasoningEffort(route.KeepaliveReasoningEffort);
         }
 
         foreach (var id in Services.Keys.Where(id => Config.Routes.All(route => route.Id != id)).ToList())
@@ -594,6 +595,8 @@ public sealed class ProxyWorkspace
             KeepaliveEnabled = existing.KeepaliveEnabled,
             KeepaliveIdleMinutes = existing.KeepaliveIdleMinutes,
             KeepaliveContextLimit = existing.KeepaliveContextLimit,
+            KeepaliveReasoningEffort = existing.KeepaliveReasoningEffort.IsSupportedBy(editor.ClientType!.Value)
+                ? existing.KeepaliveReasoningEffort : ReasoningEffort.Default,
         };
         route.NormalizeInPlace();
         return route;
@@ -689,7 +692,7 @@ public sealed class ProxyWorkspace
 
     // ---------------------------------------------------------------- 保活
 
-    public void SetKeepAlive(string routeId, bool enabled, double idleMinutes, long contextLimit)
+    public void SetKeepAlive(string routeId, bool enabled, double idleMinutes, long contextLimit, ReasoningEffort? reasoningEffort = null)
     {
         var route = Config.Routes.FirstOrDefault(candidate => candidate.Id == routeId);
         if (route is null)
@@ -697,13 +700,21 @@ public sealed class ProxyWorkspace
             return;
         }
 
+        var effort = reasoningEffort ?? route.KeepaliveReasoningEffort;
+        if (!effort.IsSupportedBy(route.ClientType))
+        {
+            throw new WorkspaceException("该客户端不支持所选保活思考强度，请重新选择");
+        }
+
         route.KeepaliveEnabled = enabled;
         route.KeepaliveIdleMinutes = idleMinutes;
         route.KeepaliveContextLimit = contextLimit;
+        route.KeepaliveReasoningEffort = effort;
         if (RouteKeepAlives.TryGetValue(routeId, out var watchdog))
         {
             watchdog.Configure(enabled, TimeSpan.FromSeconds(idleMinutes * 60.0));
             watchdog.SetContextLimit((ulong)Math.Max(contextLimit, 1));
+            watchdog.SetReasoningEffort(effort);
         }
 
         Config = Config.Clone().Normalize();
@@ -713,7 +724,7 @@ public sealed class ProxyWorkspace
     /// <summary>
     /// 保活行的输入落地：分钟文本认不出来时回落原值，再夹到 0.5–1440；只有真正变化才写配置。
     /// </summary>
-    public void ApplyKeepAliveInput(bool enabled, string minutesText, long contextLimit)
+    public void ApplyKeepAliveInput(bool enabled, string minutesText, long contextLimit, ReasoningEffort? reasoningEffort = null)
     {
         var route = SelectedRouteRef();
         KeepAliveMinutes = minutesText;
@@ -726,9 +737,11 @@ public sealed class ProxyWorkspace
             UiText.ParseIdleMinutes(minutesText) ?? route.KeepaliveIdleMinutes,
             ConfigDefaults.MinKeepaliveIdleMinutes,
             ConfigDefaults.MaxKeepaliveIdleMinutes);
-        if (enabled != route.KeepaliveEnabled || minutes != route.KeepaliveIdleMinutes || contextLimit != route.KeepaliveContextLimit)
+        var effort = reasoningEffort ?? route.KeepaliveReasoningEffort;
+        if (enabled != route.KeepaliveEnabled || minutes != route.KeepaliveIdleMinutes || contextLimit != route.KeepaliveContextLimit
+            || effort != route.KeepaliveReasoningEffort)
         {
-            SetKeepAlive(route.Id, enabled, minutes, contextLimit);
+            SetKeepAlive(route.Id, enabled, minutes, contextLimit, effort);
         }
     }
 

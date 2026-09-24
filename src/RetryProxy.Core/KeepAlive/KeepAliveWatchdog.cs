@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
 using RetryProxy.Core.Cli;
+using RetryProxy.Core.Config;
 
 namespace RetryProxy.Core.KeepAlive;
 
@@ -44,6 +45,8 @@ public sealed class KeepAliveSuccess : IEquatable<KeepAliveSuccess>
 
 public sealed class KeepAliveSnapshot
 {
+    public ReasoningEffort ReasoningEffort { get; init; }
+
     public KeepAliveFlavor Flavor { get; init; } = KeepAliveFlavor.Unknown;
 
     public string? Model { get; init; }
@@ -189,6 +192,8 @@ public sealed class KeepAliveWatchdog
 
         public string? Model { get; set; }
 
+        public ReasoningEffort ReasoningEffort { get; init; }
+
         /// <summary>指定 Key 准备创建的会话只服务于那一次准备，不会被默认配置的保活复用。</summary>
         public CliCredential? Credential { get; init; }
     }
@@ -213,6 +218,7 @@ public sealed class KeepAliveWatchdog
     private long _lastActivityMs;
     private ulong _activeRequests;
     private KeepAliveFlavor _flavor = KeepAliveFlavor.Unknown;
+    private ReasoningEffort _reasoningEffort;
     private KeepAliveTemplate? _template;
     private KeepAliveSession? _session;
     private KeepAliveTotals _totals;
@@ -364,6 +370,27 @@ public sealed class KeepAliveWatchdog
             }
         }
 
+        NotifyUi();
+    }
+
+    /// <summary>新强度从下一轮后台问答生效；正在进行的问答继续使用原来的设置。</summary>
+    public void SetReasoningEffort(ReasoningEffort effort)
+    {
+        if (!Enum.IsDefined(effort))
+        {
+            throw new ArgumentOutOfRangeException(nameof(effort));
+        }
+
+        lock (_lock)
+        {
+            if (_reasoningEffort == effort)
+            {
+                return;
+            }
+            _reasoningEffort = effort;
+        }
+
+        Wake();
         NotifyUi();
     }
 
@@ -745,13 +772,13 @@ public sealed class KeepAliveWatchdog
             var questionIndex = ((_questionPicker() % JavaQuestions.Count) + JavaQuestions.Count) % JavaQuestions.Count;
             var question = JavaQuestions.All[questionIndex];
             var credential = _credential;
-            if (_session is not null && !Equals(_session.Credential, credential))
+            if (_session is not null && (!Equals(_session.Credential, credential) || _session.ReasoningEffort != _reasoningEffort))
             {
                 // 会话必须和本通道当前配置一致，不同配置之间不复用。
                 ClearSessionLocked();
             }
 
-            _session ??= new KeepAliveSession { Conversation = new Conversation(), Credential = credential };
+            _session ??= new KeepAliveSession { Conversation = new Conversation(), Credential = credential, ReasoningEffort = _reasoningEffort };
             var conversation = _session.Conversation;
             var turn = _session.Turns + 1;
             _nextFlight = unchecked(_nextFlight + 1);
@@ -770,7 +797,7 @@ public sealed class KeepAliveWatchdog
                 _preparationRetryAtMs = null;
             }
 
-            return new KeepAliveProbe(this, conversation.Retain(), flightId, _flavor, turn, questionIndex, question, credential);
+            return new KeepAliveProbe(this, conversation.Retain(), flightId, _flavor, turn, questionIndex, question, credential, _reasoningEffort);
         }
     }
 
@@ -781,6 +808,7 @@ public sealed class KeepAliveWatchdog
             return new KeepAliveSnapshot
             {
                 Flavor = _flavor,
+                ReasoningEffort = _reasoningEffort,
                 Model = _session?.Model ?? _credential?.Model,
                 SessionId = _session?.Conversation.Id,
                 Turns = _session?.Turns ?? 0,
@@ -982,7 +1010,7 @@ public sealed class KeepAliveProbe : IDisposable
     private readonly KeepAliveWatchdog _watchdog;
     private Conversation? _conversation;
 
-    internal KeepAliveProbe(KeepAliveWatchdog watchdog, Conversation conversation, ulong flightId, KeepAliveFlavor flavor, int turn, int questionIndex, string question, CliCredential? credential)
+    internal KeepAliveProbe(KeepAliveWatchdog watchdog, Conversation conversation, ulong flightId, KeepAliveFlavor flavor, int turn, int questionIndex, string question, CliCredential? credential, ReasoningEffort reasoningEffort)
     {
         _watchdog = watchdog;
         _conversation = conversation;
@@ -994,6 +1022,7 @@ public sealed class KeepAliveProbe : IDisposable
         Question = question;
         Cancel = conversation.Cancel;
         Credential = credential;
+        ReasoningEffort = reasoningEffort;
     }
 
     internal ulong FlightId { get; }
@@ -1012,6 +1041,8 @@ public sealed class KeepAliveProbe : IDisposable
 
     internal CliCredential? Credential { get; }
 
+    public ReasoningEffort ReasoningEffort { get; }
+
     /// <summary>本轮是否使用用户临时输入的 Key。</summary>
     public bool UsesSuppliedKey => Credential is { ApiKey.Length: > 0 };
 
@@ -1023,7 +1054,7 @@ public sealed class KeepAliveProbe : IDisposable
         await conversation.ProcessLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            conversation.Process ??= await CliSession.StartAsync(Flavor, SessionId, _watchdog.Command, Credential, cancellationToken).ConfigureAwait(false);
+            conversation.Process ??= await CliSession.StartAsync(Flavor, SessionId, _watchdog.Command, Credential, ReasoningEffort, cancellationToken).ConfigureAwait(false);
             var setupSeconds = started.Elapsed.TotalSeconds;
             var reply = await conversation.Process.AskAsync(Question, SessionId, cancellationToken).ConfigureAwait(false);
             if (reply.FirstContentSeconds is { } seconds)

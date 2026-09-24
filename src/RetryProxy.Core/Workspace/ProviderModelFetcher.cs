@@ -31,21 +31,17 @@ public static class ProviderModelFetcher
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeout.CancelAfter(TimeSpan.FromSeconds(15));
             var requestToken = timeout.Token;
-            using var request = new HttpRequestMessage(HttpMethod.Get, url);
-            if (clientType == ClientType.Claude)
-            {
-                request.Headers.TryAddWithoutValidation("x-api-key", apiKey);
-                request.Headers.TryAddWithoutValidation("anthropic-version", "2023-06-01");
-            }
-            else
-            {
-                request.Headers.TryAddWithoutValidation("Authorization", $"Bearer {apiKey}");
-            }
-
             HttpResponseMessage response;
             try
             {
-                response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, requestToken).ConfigureAwait(false);
+                response = await SendRequestAsync(client, url, apiKey, clientType, clientType != ClientType.Claude, requestToken).ConfigureAwait(false);
+                if (clientType == ClientType.Claude && response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
+                {
+                    // 部分中转站的 Claude 请求接受 x-api-key，但模型目录只接受 OpenAI 兼容的 Bearer。
+                    // 仅在同一个地址认证失败时更换格式；不跟随重定向，也不在日志中保留密钥或响应正文。
+                    response.Dispose();
+                    response = await SendRequestAsync(client, url, apiKey, clientType, useBearer: true, requestToken).ConfigureAwait(false);
+                }
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
             {
@@ -107,6 +103,18 @@ public static class ProviderModelFetcher
         }
 
         throw new WorkspaceException("服务商未提供模型列表接口（HTTP 404/405），请检查服务商地址");
+    }
+
+    private static async Task<HttpResponseMessage> SendRequestAsync(HttpClient client, string url, string apiKey,
+        ClientType clientType, bool useBearer, CancellationToken cancellationToken)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, url);
+        request.Headers.TryAddWithoutValidation(useBearer ? "Authorization" : "x-api-key", useBearer ? $"Bearer {apiKey}" : apiKey);
+        if (clientType == ClientType.Claude)
+        {
+            request.Headers.TryAddWithoutValidation("anthropic-version", "2023-06-01");
+        }
+        return await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
     }
 
     internal static IReadOnlyList<string> UrlCandidates(string baseUrl)

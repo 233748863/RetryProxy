@@ -37,6 +37,8 @@ public sealed class ProxyRoute : IEquatable<ProxyRoute>
 
     public long KeepaliveContextLimit { get; set; } = ConfigDefaults.KeepaliveContextLimit;
 
+    public ReasoningEffort KeepaliveReasoningEffort { get; set; }
+
     public string LocalUrl => $"http://{ConfigDefaults.ListenHost}:{ListenPort}";
 
     internal void NormalizeInPlace()
@@ -48,6 +50,11 @@ public sealed class ProxyRoute : IEquatable<ProxyRoute>
 
     public void Validate()
     {
+        if (!KeepaliveReasoningEffort.IsSupportedBy(ClientType))
+        {
+            throw new ConfigException("该客户端不支持所选保活思考强度，请重新选择");
+        }
+
         if (Id.Length == 0)
         {
             throw new ConfigException("转发通道 ID 不能为空");
@@ -105,6 +112,7 @@ public sealed class ProxyRoute : IEquatable<ProxyRoute>
             && DesiredRunning == other.DesiredRunning
             && KeepaliveEnabled == other.KeepaliveEnabled
             && KeepaliveIdleMinutes == other.KeepaliveIdleMinutes
+            && KeepaliveReasoningEffort == other.KeepaliveReasoningEffort
             && KeepaliveContextLimit == other.KeepaliveContextLimit;
     }
 

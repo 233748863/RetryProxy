@@ -4,11 +4,13 @@ $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
 $preparationUrl = $null
 $preparationModel = 'preparation-test-model'
+$preparationEffort = $null
 foreach ($argument in $args) {
     if ($argument -match '^model_providers\.retry_proxy_prepare\.base_url=(.+)$') {
         $preparationUrl = ($Matches[1] | ConvertFrom-Json).TrimEnd('/') + '/responses'
     }
     if ($argument -match '^model=(.+)$') { $preparationModel = $Matches[1] | ConvertFrom-Json }
+    if ($argument -match '^model_reasoning_effort=(.+)$') { $preparationEffort = $Matches[1] | ConvertFrom-Json }
 }
 if (-not $preparationUrl -or -not ([Uri]$preparationUrl).IsLoopback) { throw 'Expected a local test preparation service' }
 
@@ -26,6 +28,7 @@ while ($null -ne ($line = [Console]::In.ReadLine())) {
             while ($gate -and -not (Test-Path -LiteralPath $gate)) { Start-Sleep -Milliseconds 20 }
             $body = @{
                 model = $preparationModel; stream = $true; store = $false
+                reasoning = @{ effort = $preparationEffort }
                 input = @(@{ role = 'user'; content = @(@{ type = 'input_text'; text = $message.params.input[0].text }) })
                 client_metadata = @{ 'x-codex-turn-metadata' = (@{ retry_proxy_keepalive = $marker } | ConvertTo-Json -Compress) }
             } | ConvertTo-Json -Depth 10 -Compress

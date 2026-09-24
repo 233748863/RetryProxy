@@ -295,6 +295,29 @@
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
                     <StackPanel Grid.Column="0" Margin="0,0,16,0">
+                        <ui:TextBlock FontTypography="Body" Text="{i18n:T 思考强度}" />
+                        <ui:TextBlock FontSize="11"
+                                      Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
+                                      Text="{i18n:T 下轮后台问答生效；部分档位需要模型支持}"
+                                      TextWrapping="Wrap" />
+                    </StackPanel>
+                    <ComboBox Grid.Column="1"
+                              Width="184"
+                              Margin="0,0,36,0"
+                              VerticalAlignment="Center"
+                              AutomationProperties.AutomationId="ChannelReasoningEffort"
+                              DisplayMemberPath="Text"
+                              IsEnabled="{Binding HasChannel}"
+                              ItemsSource="{Binding KeepAliveEfforts}"
+                              SelectedItem="{Binding SelectedKeepAliveEffort, Mode=TwoWay}" />
+                </Grid>
+                <Separator Margin="-18,0" BorderThickness="0,1,0,0" />
+                <Grid Margin="16">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Grid.Column="0" Margin="0,0,16,0">
                         <ui:TextBlock FontTypography="Body" Text="{i18n:T 会话上限}" />
                         <ui:TextBlock FontSize="11"
                                       Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"

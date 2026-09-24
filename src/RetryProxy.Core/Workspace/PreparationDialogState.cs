@@ -27,6 +27,8 @@ public sealed class PreparationDialogState
 
     public string? SelectedModel { get; set; }
 
+    public ReasoningEffort ReasoningEffort { get; set; }
+
     public string IdleMinutes { get; set; } = "5";
 
     public string? Error { get; set; }
@@ -45,6 +47,7 @@ public sealed class PreparationDialogState
         ProviderUrl = ProviderUrl,
         ApiKey = ApiKey,
         SelectedModel = SelectedModel,
+        ReasoningEffort = ReasoningEffort,
         IdleMinutes = IdleMinutes,
     };
 }

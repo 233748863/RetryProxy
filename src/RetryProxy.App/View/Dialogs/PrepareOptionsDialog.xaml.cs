@@ -2,11 +2,13 @@ using RetryProxy.Core.Config;
 using RetryProxy.Core.Workspace;
 using RetryProxy.Service.I18n;
 using System;
+using System.Linq;
 using System.Threading;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using RetryProxy.Core.Cli;
+using RetryProxy.ViewModel;
 using Wpf.Ui.Controls;
 
 namespace RetryProxy.View.Dialogs;
@@ -38,6 +40,7 @@ public partial class PrepareOptionsDialog : ContentDialog
         Unloaded += (_, _) => ResetModels();
         UpdateMode();
         UpdateProvider();
+        UpdateReasoningEfforts();
     }
 
     protected override Size MeasureOverride(Size availableSize)
@@ -73,6 +76,26 @@ public partial class PrepareOptionsDialog : ContentDialog
     {
         _state.Error = null;
         ErrorText.Visibility = Visibility.Collapsed;
+    }
+
+    private void UpdateReasoningEfforts()
+    {
+        if (!_state.ReasoningEffort.IsSupportedBy(_state.ClientType))
+        {
+            _state.ReasoningEffort = ReasoningEffort.Default;
+        }
+        ReasoningEffortBox.ItemsSource = ReasoningEffortExtensions.AvailableFor(_state.ClientType)
+            .Select(effort => new PickerItem(effort.AsStr(), effort.Label())).ToArray();
+        ReasoningEffortBox.SelectedValue = _state.ReasoningEffort.AsStr();
+    }
+
+    private void OnReasoningEffortChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_initialized && ReasoningEffortBox.SelectedValue is string value)
+        {
+            _state.ReasoningEffort = ReasoningEffortExtensions.Parse(value);
+            ClearError();
+        }
     }
 
     private void ResetModels(bool clearModel = false)
@@ -200,6 +223,7 @@ public partial class PrepareOptionsDialog : ContentDialog
         }
 
         _state.ClientType = ClaudeRadio.IsChecked == true ? ClientType.Claude : ClientType.Codex;
+        UpdateReasoningEfforts();
         UpdateProvider();
         ResetModels(clearModel: true);
         ClearError();

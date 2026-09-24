@@ -33,6 +33,8 @@ powershell -File build\publish.ps1          # 先跑测试，再发布到 dist\R
 powershell -File build\publish.ps1 -SkipTests
 ```
 
+首页的“思考强度”按通道保存，从下一轮后台问答生效；一键准备的强度由每项任务单独选择，准备和之后的独立保活共用该设置。默认沿用客户端配置，其余档位需要模型与供应商支持；修改强度不会改写本机客户端配置。Claude 模型列表请求遇到 HTTP 401/403 时，会在同一地址改用 Bearer 认证（通过 Authorization 请求头携带密钥）重试一次，兼容采用 OpenAI 模型目录的供应商。
+
 ## 验收脚本
 
 ```powershell

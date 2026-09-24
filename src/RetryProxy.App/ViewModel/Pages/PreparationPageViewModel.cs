@@ -1,6 +1,7 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using RetryProxy.Core.Workspace;
+using RetryProxy.Core.Config;
 using RetryProxy.Service;
 using System.Collections.ObjectModel;
 using System.Linq;
@@ -119,7 +120,7 @@ public partial class PreparationTaskViewModel : ObservableObject
     {
         Title = task.Title;
         ProviderUrl = task.ProviderUrl;
-        Settings = $"模型 {task.Model} · 每 {task.IdleMinutes} 分钟保活";
+        Settings = $"模型 {task.Model} · 思考强度 {task.ReasoningEffort.Label()} · 每 {task.IdleMinutes} 分钟保活";
         Status = task.Status;
         Hint = task.Hint;
         var snapshot = task.Snapshot;

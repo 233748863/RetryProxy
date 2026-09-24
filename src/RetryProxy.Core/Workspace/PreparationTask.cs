@@ -25,6 +25,7 @@ public sealed class PreparationTask
     public string Title => $"准备 {Number} · {Options.ClientType.Label()}";
     public ClientType ClientType => Options.ClientType;
     public string Model => Options.SelectedModel ?? string.Empty;
+    public ReasoningEffort ReasoningEffort => Options.ReasoningEffort;
     public string IdleMinutes => Options.IdleMinutes;
     public string ProviderUrl { get; internal set; } = string.Empty;
     public int? ListenPort { get; internal set; }

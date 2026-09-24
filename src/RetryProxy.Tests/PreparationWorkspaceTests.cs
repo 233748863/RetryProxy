@@ -96,6 +96,7 @@ public sealed class PreparationWorkspaceTests
         var original = ProxyConfigJson.ToCanonicalJson(proxy.Config);
         var options = Options(mode, client);
         options.IdleMinutes = "7.5";
+        options.ReasoningEffort = ReasoningEffort.High;
         options.SelectedModel = " preparation-test-model ";
         var task = Start(fixture.Preparations, options);
 
@@ -103,6 +104,8 @@ public sealed class PreparationWorkspaceTests
         Assert.Empty(proxy.Config.Providers);
         Assert.Equal(original, ProxyConfigJson.ToCanonicalJson(proxy.Config));
         Assert.Equal(KeepAliveFlavorExtensions.FromClientType(client), task.Snapshot!.Flavor);
+        Assert.Equal(ReasoningEffort.High, task.Snapshot.ReasoningEffort);
+        Assert.Equal(ReasoningEffort.High, task.ReasoningEffort);
         Assert.True(task.Snapshot.WithKey);
         Assert.False(task.Snapshot.Enabled);
         Assert.Equal("preparation-test-model", task.Snapshot.Model);
@@ -114,6 +117,7 @@ public sealed class PreparationWorkspaceTests
 
         var saved = fixture.Preparations.OpenPrepareDialog(task.Id);
         Assert.Equal(client, saved.ClientType);
+        Assert.Equal(ReasoningEffort.High, saved.ReasoningEffort);
         Assert.Equal("7.5", saved.IdleMinutes);
         Assert.Equal(mode == PrepareMode.CustomProvider ? "sk-custom-fixture" : string.Empty, saved.ApiKey);
         var runtime = PreparationWorkspace.CreateRuntimeConfig(task.ProviderUrl, task.ListenPort!.Value, 7.5, client);
@@ -142,7 +146,7 @@ public sealed class PreparationWorkspaceTests
         foreach (var route in proxy.Config.Routes.ToList())
         {
             proxy.SelectRoute(route.Id);
-            proxy.SetKeepAlive(route.Id, false, 23, 999_999);
+            proxy.SetKeepAlive(route.Id, false, 23, 999_999, ReasoningEffort.Max);
             route.MaxRetries = 10_000;
             route.TimeoutSeconds = 1;
             proxy.RefreshServices();
@@ -162,6 +166,7 @@ public sealed class PreparationWorkspaceTests
         Assert.Equal(ServiceState.Running, task.State);
         Assert.Equal(TimeSpan.FromMinutes(5), task.Snapshot!.Idle);
         Assert.Equal(50_000UL, task.Snapshot.ContextLimit);
+        Assert.Equal(ReasoningEffort.Default, task.Snapshot.ReasoningEffort);
         Assert.Equal(preparationOptions.SelectedModel, fixture.Preparations.OpenPrepareDialog(task.Id).SelectedModel);
         fixture.Preparations.Stop(task.Id);
         WaitFor(fixture.Preparations, () => task.State == ServiceState.Stopped);

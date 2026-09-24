@@ -75,6 +75,12 @@ public partial class HomePageViewModel : ViewModel
     private string _keepAliveMinutes = string.Empty;
 
     [ObservableProperty]
+    private ObservableCollection<PickerItem> _keepAliveEfforts = [];
+
+    [ObservableProperty]
+    private PickerItem? _selectedKeepAliveEffort;
+
+    [ObservableProperty]
     private double _contextLimit = ConfigDefaults.KeepaliveContextLimit;
 
     [ObservableProperty]
@@ -138,6 +144,10 @@ public partial class HomePageViewModel : ViewModel
             ListenPort = route?.ListenPort.ToString() ?? string.Empty;
             KeepAliveEnabled = route?.KeepaliveEnabled ?? false;
             KeepAliveMinutes = route is null ? string.Empty : Workspace.KeepAliveMinutes;
+            var efforts = ReasoningEffortExtensions.AvailableFor(route?.ClientType ?? ClientType.Codex)
+                .Select(effort => new PickerItem(effort.AsStr(), effort.Label())).ToList();
+            ReplaceIfChanged(KeepAliveEfforts, efforts);
+            SelectedKeepAliveEffort = KeepAliveEfforts.FirstOrDefault(item => item.Key == (route?.KeepaliveReasoningEffort ?? ReasoningEffort.Default).AsStr());
             ContextLimit = route?.KeepaliveContextLimit ?? ConfigDefaults.KeepaliveContextLimit;
             AutoKeepAliveHint = route is null ? string.Empty : Workspace.KeepAliveHint(route);
             ListenAddress = route is null ? string.Empty : LocalUrlOf(route);
@@ -202,6 +212,14 @@ public partial class HomePageViewModel : ViewModel
 
     partial void OnContextLimitChanged(double value) => ApplyKeepAlive();
 
+    partial void OnSelectedKeepAliveEffortChanged(PickerItem? value)
+    {
+        if (value is not null)
+        {
+            ApplyKeepAlive();
+        }
+    }
+
     private void ApplyKeepAlive()
     {
         if (_syncing)
@@ -212,7 +230,8 @@ public partial class HomePageViewModel : ViewModel
         if (Workspace.SelectedRouteRef() is not null)
         {
             var limit = double.IsFinite(ContextLimit) && ContextLimit >= 1 ? (long)Math.Round(ContextLimit) : 1;
-            Workspace.ApplyKeepAliveInput(KeepAliveEnabled, KeepAliveMinutes, limit);
+            var effort = ReasoningEffortExtensions.Parse(SelectedKeepAliveEffort?.Key ?? "default");
+            Workspace.ApplyKeepAliveInput(KeepAliveEnabled, KeepAliveMinutes, limit, effort);
             _workspaceService.Flush();
         }
     }

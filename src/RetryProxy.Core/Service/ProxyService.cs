@@ -188,6 +188,7 @@ public sealed class ProxyService
             KeepAlive.SetContextLimit((ulong)Math.Max(config.KeepaliveContextLimit, 1));
             var flavor = KeepAliveFlavorExtensions.FromClientType(config.ClientType);
             KeepAlive.ConfigureFlavor(flavor);
+            KeepAlive.SetReasoningEffort(config.KeepaliveReasoningEffort);
             var stopSignal = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
             _stopSignal = stopSignal;
             var runtime = _runtimeConfig;

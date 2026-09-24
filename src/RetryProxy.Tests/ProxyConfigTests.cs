@@ -512,7 +512,7 @@ public class ProxyConfigTests
                 "id", "name", "provider_name", "client_type", "listen_port", "max_retries",
                 "timeout_seconds", "generation_timeout_seconds", "total_timeout_seconds",
                 "base_delay_seconds", "max_delay_seconds", "desired_running",
-                "keepalive_enabled", "keepalive_idle_minutes", "keepalive_context_limit",
+                "keepalive_enabled", "keepalive_idle_minutes", "keepalive_context_limit", "keepalive_reasoning_effort",
             },
             routeKeys);
     }

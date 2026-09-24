@@ -307,6 +307,29 @@ public class WorkspaceTests
     }
 
     [Fact]
+    public void KeepAliveEffortIsSavedPerChannelAndSurvivesOtherSettingsAndRefreshes()
+    {
+        using var fixture = new Fixture();
+        var app = fixture.App;
+        app.SelectRoute("alpha-one");
+        app.ApplyKeepAliveInput(true, "7", 50000, ReasoningEffort.Low);
+        app.SelectRoute("alpha-two");
+        app.ApplyKeepAliveInput(false, "9", 72000, ReasoningEffort.Max);
+        app.RefreshServices();
+
+        Assert.Equal(ReasoningEffort.Low, app.RouteKeepAlives["alpha-one"].Snapshot().ReasoningEffort);
+        Assert.Equal(ReasoningEffort.Max, app.RouteKeepAlives["alpha-two"].Snapshot().ReasoningEffort);
+        Assert.Equal(ReasoningEffort.Low, app.Config.RuntimeConfigFor("alpha-one").KeepaliveReasoningEffort);
+        Assert.Equal(ReasoningEffort.Max, app.Config.RuntimeConfigFor("alpha-two").KeepaliveReasoningEffort);
+        app.SelectRoute("alpha-one");
+        app.ApplyKeepAliveInput(false, "12", 80000);
+        Assert.Equal(ReasoningEffort.Low, app.SelectedRouteRef()!.KeepaliveReasoningEffort);
+        Assert.Equal(ReasoningEffort.Low, app.RouteKeepAlives["alpha-one"].Snapshot().ReasoningEffort);
+        app.SelectRoute("alpha-two");
+        Assert.Equal(ReasoningEffort.Max, app.SelectedRouteRef()!.KeepaliveReasoningEffort);
+    }
+
+    [Fact]
     public void DisablingOneChannelOnlyCancelsItsOwnBackgroundRequest()
     {
         using var fixture = new Fixture();

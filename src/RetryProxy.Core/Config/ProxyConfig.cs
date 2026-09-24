@@ -39,6 +39,8 @@ public sealed class ProxyConfig : IEquatable<ProxyConfig>
 
     public long KeepaliveContextLimit { get; set; } = ConfigDefaults.KeepaliveContextLimit;
 
+    public ReasoningEffort KeepaliveReasoningEffort { get; set; }
+
     public List<ProviderEndpoint> Providers { get; set; } = new();
 
     public List<ProxyRoute> Routes { get; set; } = new();
@@ -119,6 +121,7 @@ public sealed class ProxyConfig : IEquatable<ProxyConfig>
         KeepaliveEnabled = route.KeepaliveEnabled;
         KeepaliveIdleMinutes = route.KeepaliveIdleMinutes;
         KeepaliveContextLimit = route.KeepaliveContextLimit;
+        KeepaliveReasoningEffort = route.KeepaliveReasoningEffort;
         var provider = ProviderByName(route.ProviderName);
         if (provider is not null)
         {
@@ -210,6 +213,7 @@ public sealed class ProxyConfig : IEquatable<ProxyConfig>
             KeepaliveEnabled = route.KeepaliveEnabled,
             KeepaliveIdleMinutes = route.KeepaliveIdleMinutes,
             KeepaliveContextLimit = route.KeepaliveContextLimit,
+            KeepaliveReasoningEffort = route.KeepaliveReasoningEffort,
             Providers = Providers.Select(item => item.Clone()).ToList(),
             Routes = new List<ProxyRoute>(),
             SelectedRouteId = string.Empty,
@@ -269,6 +273,11 @@ public sealed class ProxyConfig : IEquatable<ProxyConfig>
         if (KeepaliveContextLimit == 0)
         {
             throw new ConfigException("保活会话用量阈值必须大于 0");
+        }
+
+        if (!KeepaliveReasoningEffort.IsSupportedBy(ClientType))
+        {
+            throw new ConfigException("该客户端不支持所选保活思考强度，请重新选择");
         }
 
         UrlRules.ValidateRetrySettings(
@@ -432,6 +441,7 @@ public sealed class ProxyConfig : IEquatable<ProxyConfig>
             && KeepaliveEnabled == other.KeepaliveEnabled
             && KeepaliveIdleMinutes == other.KeepaliveIdleMinutes
             && KeepaliveContextLimit == other.KeepaliveContextLimit
+            && KeepaliveReasoningEffort == other.KeepaliveReasoningEffort
             && Providers.SequenceEqual(other.Providers)
             && Routes.SequenceEqual(other.Routes)
             && SelectedRouteId == other.SelectedRouteId

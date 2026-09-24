@@ -5,6 +5,7 @@ using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
 using RetryProxy.Core.Cli;
+using RetryProxy.Core.Config;
 using RetryProxy.Core.Internal;
 using RetryProxy.Core.KeepAlive;
 using Xunit;
@@ -22,6 +23,38 @@ public class KeepAliveWatchdogTests
     }
 
     private static CliCredential SuppliedKey() => CliCredential.Create("sk-test-secret", "http://127.0.0.1:18081");
+
+    [Fact]
+    public void EffortChangesApplyToTheNextSessionWithoutInterruptingTheCurrentTurn()
+    {
+        var (watchdog, service) = Running(true);
+        using var registration = service;
+        watchdog.SetReasoningEffort(ReasoningEffort.Low);
+        watchdog.MakeDueForTest();
+        var first = watchdog.BeginDueProbe()!;
+        Assert.Equal(ReasoningEffort.Low, first.ReasoningEffort);
+
+        watchdog.SetReasoningEffort(ReasoningEffort.High);
+        Assert.False(first.Cancel.IsCancellationRequested);
+        Assert.Equal(ReasoningEffort.Low, first.ReasoningEffort);
+        Assert.NotNull(first.Complete("test-model", 52));
+        first.Dispose();
+
+        watchdog.MakeDueForTest();
+        var second = watchdog.BeginDueProbe()!;
+        Assert.Equal(ReasoningEffort.High, second.ReasoningEffort);
+        Assert.NotEqual(first.SessionId, second.SessionId);
+        Assert.Equal(1, second.Turn);
+        Assert.NotNull(second.Complete("test-model", 55));
+        second.Dispose();
+
+        watchdog.SetReasoningEffort(ReasoningEffort.High);
+        watchdog.MakeDueForTest();
+        using var third = watchdog.BeginDueProbe()!;
+        Assert.Equal(second.SessionId, third.SessionId);
+        Assert.Equal(2, third.Turn);
+        Assert.Equal(2UL, watchdog.Snapshot().Totals.Completed);
+    }
 
     [Fact]
     public void PreparationNeedsNoUserHistoryAndDoesNotEnableAutomaticMode()

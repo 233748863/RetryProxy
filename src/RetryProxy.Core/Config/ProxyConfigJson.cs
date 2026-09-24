@@ -15,7 +15,7 @@ public readonly record struct ParsedProxyConfig(ProxyConfig Config, bool Migrate
 
 /// <summary>
 /// ProxyConfig 与 JSON 之间的转换：读取时执行 schema 6 迁移，写出时使用固定键序的
-/// snake_case 结构（与 Rust 版 canonical_value 完全一致）。
+/// snake_case 结构，保留旧版键序并追加可选字段。
 /// </summary>
 public static class ProxyConfigJson
 {
@@ -317,6 +317,7 @@ public static class ProxyConfigJson
             writer.WriteBoolean("keepalive_enabled", route.KeepaliveEnabled);
             WriteDouble(writer, "keepalive_idle_minutes", route.KeepaliveIdleMinutes);
             writer.WriteNumber("keepalive_context_limit", route.KeepaliveContextLimit);
+            writer.WriteString("keepalive_reasoning_effort", route.KeepaliveReasoningEffort.AsStr());
             writer.WriteEndObject();
         }
 
@@ -404,6 +405,7 @@ public static class ProxyConfigJson
             KeepaliveEnabled = Boolean(value, "keepalive_enabled", false, $"{label} keepalive_enabled"),
             KeepaliveIdleMinutes = Number(value, "keepalive_idle_minutes", ConfigDefaults.KeepaliveIdleMinutes, $"{label} keepalive_idle_minutes"),
             KeepaliveContextLimit = ToLong(Integer(value, "keepalive_context_limit", (ulong)ConfigDefaults.KeepaliveContextLimit, $"{label} keepalive_context_limit"), $"{label} keepalive_context_limit必须是整数"),
+            KeepaliveReasoningEffort = ReasoningEffortExtensions.Parse(OptionalString(value, "keepalive_reasoning_effort", "default")),
         };
         route.NormalizeInPlace();
         return route;

@@ -90,19 +90,38 @@
                           FontTypography="Caption"
                           Text="{i18n:T 正在获取模型…}"
                           Visibility="Collapsed" />
-            <StackPanel Margin="0,8,0,0" Orientation="Horizontal">
-                <ui:TextBlock VerticalAlignment="Center" FontTypography="Body" Text="{i18n:T 独立保活间隔}" />
-                <ui:TextBox x:Name="IdleMinutesBox"
-                            AutomationProperties.AutomationId="PreparationIdleMinutes"
-                            Width="72"
-                            Margin="12,0,6,0"
-                            ToolTip="{i18n:T 允许输入 0.5～1440 分钟}" />
-                <ui:TextBlock VerticalAlignment="Center" FontTypography="Body" Text="{i18n:T 分钟}" />
-            </StackPanel>
+            <Grid Margin="0,8,0,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="16" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <StackPanel Grid.Column="0">
+                    <ui:TextBlock Margin="0,0,0,4" FontTypography="Body" Text="{i18n:T 思考强度}" />
+                    <ComboBox x:Name="ReasoningEffortBox"
+                              AutomationProperties.AutomationId="PreparationReasoningEffort"
+                              HorizontalAlignment="Stretch"
+                              DisplayMemberPath="Text"
+                              SelectedValuePath="Key"
+                              SelectionChanged="OnReasoningEffortChanged"
+                              ToolTip="{i18n:T 默认沿用客户端设置；其余档位需要所选模型支持。}" />
+                </StackPanel>
+                <StackPanel Grid.Column="2">
+                    <ui:TextBlock Margin="0,0,0,4" FontTypography="Body" Text="{i18n:T 独立保活间隔}" />
+                    <StackPanel Orientation="Horizontal">
+                        <ui:TextBox x:Name="IdleMinutesBox"
+                                    AutomationProperties.AutomationId="PreparationIdleMinutes"
+                                    Width="72"
+                                    Margin="0,0,6,0"
+                                    ToolTip="{i18n:T 允许输入 0.5～1440 分钟}" />
+                        <ui:TextBlock VerticalAlignment="Center" FontTypography="Body" Text="{i18n:T 分钟}" />
+                    </StackPanel>
+                </StackPanel>
+            </Grid>
             <ui:TextBlock Margin="0,4,0,0"
                           FontTypography="Caption"
                           Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
-                          Text="{i18n:T 准备成功后按此间隔保活；仅在本次运行有效}"
+                          Text="{i18n:T 准备及后续保活均使用所选强度；仅在本次运行有效}"
                           TextWrapping="Wrap" />
             <ui:TextBlock x:Name="PlanText"
                           Margin="0,8,0,0"

@@ -75,6 +75,55 @@ public class ProviderModelFetcherTests
         Assert.DoesNotContain("private", error.Message);
     }
 
+    [Theory]
+    [InlineData(HttpStatusCode.Unauthorized)]
+    [InlineData(HttpStatusCode.Forbidden)]
+    public async Task ClaudeRetriesTheSameModelEndpointWithBearerWhenApiKeyAuthIsRejected(HttpStatusCode status)
+    {
+        var requests = new List<string>();
+        using var client = new HttpClient(new StubHandler(request =>
+        {
+            requests.Add(request.RequestUri!.AbsoluteUri);
+            Assert.Equal("2023-06-01", request.Headers.GetValues("anthropic-version").Single());
+            if (requests.Count == 1)
+            {
+                Assert.Equal("secret", request.Headers.GetValues("x-api-key").Single());
+                Assert.False(request.Headers.Contains("Authorization"));
+                return new HttpResponseMessage(status);
+            }
+            Assert.Equal("Bearer secret", request.Headers.GetValues("Authorization").Single());
+            Assert.False(request.Headers.Contains("x-api-key"));
+            return JsonResponse("{\"data\":[{\"id\":\"claude-opus-5-5\"}]}");
+        }));
+
+        var models = await ProviderModelFetcher.FetchAsync(
+            new ProviderEndpoint("gateway", "https://api.test/api/anthropic"), "secret", ClientType.Claude, client, CancellationToken.None);
+
+        Assert.Equal(new[] { "claude-opus-5-5" }, models);
+        Assert.Equal(new[] { "https://api.test/api/anthropic/v1/models", "https://api.test/api/anthropic/v1/models" }, requests);
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.BadRequest, 1)]
+    [InlineData(HttpStatusCode.TooManyRequests, 1)]
+    [InlineData(HttpStatusCode.InternalServerError, 1)]
+    [InlineData(HttpStatusCode.Unauthorized, 2)]
+    public async Task FailedAuthenticationDoesNotLoopOrTryUnrelatedPaths(HttpStatusCode status, int expectedRequests)
+    {
+        var requests = 0;
+        using var client = new HttpClient(new StubHandler(request =>
+        {
+            requests++;
+            Assert.Equal("/api/anthropic/v1/models", request.RequestUri!.AbsolutePath);
+            return new HttpResponseMessage(status) { Content = new StringContent("secret upstream details") };
+        }));
+        var error = await Assert.ThrowsAsync<WorkspaceException>(() => ProviderModelFetcher.FetchAsync(
+            new ProviderEndpoint("gateway", "https://api.test/api/anthropic"), "secret", ClientType.Claude, client, CancellationToken.None));
+        Assert.Equal(expectedRequests, requests);
+        Assert.Contains(((int)status).ToString(), error.Message);
+        Assert.DoesNotContain("secret", error.Message);
+    }
+
     private static HttpResponseMessage JsonResponse(string text) => new(HttpStatusCode.OK)
     {
         Content = new StringContent(text, Encoding.UTF8, "application/json"),

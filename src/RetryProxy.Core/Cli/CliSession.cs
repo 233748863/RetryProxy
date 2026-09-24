@@ -11,6 +11,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using RetryProxy.Core.Internal;
 using RetryProxy.Core.KeepAlive;
+using RetryProxy.Core.Config;
 using RetryProxy.Core.Stats;
 
 namespace RetryProxy.Core.Cli;
@@ -193,8 +194,14 @@ internal sealed class CliSession : IDisposable
         return servers.Count == 0 ? new JsonObject() : new JsonObject { ["mcp_servers"] = servers };
     }
 
-    public static async Task<CliSession> StartAsync(KeepAliveFlavor flavor, string marker, CliCommand? commandOverride, CliCredential? credential, CancellationToken cancellationToken)
+    public static async Task<CliSession> StartAsync(KeepAliveFlavor flavor, string marker, CliCommand? commandOverride, CliCredential? credential,
+        ReasoningEffort reasoningEffort, CancellationToken cancellationToken)
     {
+        if (!reasoningEffort.IsSupportedBy(flavor == KeepAliveFlavor.Claude ? ClientType.Claude : ClientType.Codex))
+        {
+            throw new CliException("该客户端不支持所选思考强度，请重新选择");
+        }
+
         var configured = commandOverride?.Clone() ?? CliCommand.Discover(flavor);
         string directory;
         try
@@ -231,6 +238,23 @@ internal sealed class CliSession : IDisposable
             var settings = credential is null ? "{\"disableAllHooks\":true}" : credential.ApiKey.Length == 0
                 ? ClaudeModelSettings(credential.Model)
                 : ClaudeCredentialSettings(credential);
+            if (reasoningEffort != ReasoningEffort.Default)
+            {
+                var effort = reasoningEffort.AsStr();
+                // 环境变量优先于 --effort；同时覆盖子进程环境和 --settings，避免用户层 env 抢回优先级。
+                var settingsObject = JsonNode.Parse(settings)!.AsObject();
+                var settingsEnvironment = settingsObject["env"] as JsonObject;
+                if (settingsEnvironment is null)
+                {
+                    settingsEnvironment = new JsonObject();
+                    settingsObject["env"] = settingsEnvironment;
+                }
+                settingsEnvironment["CLAUDE_CODE_EFFORT_LEVEL"] = effort;
+                settings = JsonText.Serialize(settingsObject);
+                start.Environment["CLAUDE_CODE_EFFORT_LEVEL"] = effort;
+                start.ArgumentList.Add("--effort");
+                start.ArgumentList.Add(effort);
+            }
             foreach (var argument in new[]
                      {
                          "--print", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
@@ -282,6 +306,12 @@ internal sealed class CliSession : IDisposable
             {
                 start.ArgumentList.Add("-c");
                 start.ArgumentList.Add(setting);
+            }
+
+            if (reasoningEffort != ReasoningEffort.Default)
+            {
+                start.ArgumentList.Add("-c");
+                start.ArgumentList.Add($"model_reasoning_effort=\"{reasoningEffort.AsStr()}\"");
             }
 
             if (credential is { ApiKey.Length: > 0 })

@@ -66,6 +66,28 @@ function Set-Field([string]$Id, [string]$Value) {
     throw "Field cannot be edited: $Id"
 }
 
+function Select-ComboItem([string]$Id, [string]$Text, [switch]$ByName) {
+    $picker = @(Find-Elements $Id -ById:(-not $ByName))[0]
+    if ($null -eq $picker) { throw "Missing picker: $Id" }
+    $picker.SetFocus()
+    $expand = $picker.GetCurrentPattern([Windows.Automation.ExpandCollapsePattern]::Pattern)
+    $expand.Expand()
+    try {
+        $condition = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ControlTypeProperty, [Windows.Automation.ControlType]::ListItem)
+        $items = $picker.FindAll([Windows.Automation.TreeScope]::Descendants, $condition)
+        $item = @($items | Where-Object { $_.Current.Name -like $Text })[0]
+        if ($null -eq $item) { throw "Missing option $Text in $Id" }
+        $item.GetCurrentPattern([Windows.Automation.SelectionItemPattern]::Pattern).Select()
+    } finally { $expand.Collapse() }
+}
+
+function Get-ComboSelection([string]$Id) {
+    $picker = @(Find-Elements $Id -ById)[0]
+    $selection = $picker.GetCurrentPattern([Windows.Automation.SelectionPattern]::Pattern).Current.GetSelection()
+    if ($selection.Count -gt 0) { return $selection[0].Current.Name }
+    return ''
+}
+
 function Assert-WindowStable([string]$Context) {
     # 只观察窗口，覆盖布局和窗口恢复的延迟；验收过程不改变窗口位置或尺寸。
     foreach ($sample in 1..4) {
@@ -90,7 +112,7 @@ function Assert-DialogActionsVisible {
 function Get-PreparationDialogLayout {
     $layout = @{}
     foreach ($id in @('PreparationDialog', 'PreparationCodex', 'PreparationClaude', 'PreparationLocalProvider', 'PreparationCustomProvider',
-        'PreparationProviderUrl', 'PreparationApiKey', 'PreparationModel', 'PreparationIdleMinutes')) {
+        'PreparationProviderUrl', 'PreparationApiKey', 'PreparationModel', 'PreparationReasoningEffort', 'PreparationIdleMinutes')) {
         $element = @(Find-Elements $id -ById | Where-Object { -not $_.Current.IsOffscreen })[0]
         if ($null -ne $element) { $layout[$id] = $element.Current.BoundingRectangle }
     }
@@ -128,7 +150,7 @@ function Get-FreePort {
     finally { $listener.Stop() }
 }
 
-function Add-Preparation([string]$Minutes) {
+function Add-Preparation([string]$Minutes, [string]$Effort) {
     Invoke-Control 'AddPreparation' -ById
     Wait-For { @(Find-Elements 'PreparationCodex' -ById).Count -gt 0 } 'Preparation dialog did not open'
     Assert-WindowStable 'opening the preparation dialog'
@@ -141,6 +163,16 @@ function Add-Preparation([string]$Minutes) {
     Set-Field 'PreparationApiKey' 'sk-prepare-fixture'
     Invoke-Control '获取模型'
     Wait-For { @(Find-Elements '获取模型' | Where-Object { $_.Current.IsEnabled }).Count -gt 0 } 'Model lookup did not finish'
+    Select-ComboItem 'PreparationModel' 'preparation-test-model'
+    Select-ComboItem 'PreparationReasoningEffort' '极限 · ultra'
+    Invoke-Control 'PreparationClaude' -ById
+    Wait-For { (Get-ComboSelection 'PreparationReasoningEffort') -eq '默认（沿用客户端）' } 'Unsupported Claude effort was retained'
+    Select-ComboItem 'PreparationReasoningEffort' '最高 · max'
+    Invoke-Control '获取模型'
+    Wait-For { @(Find-Elements '获取模型' | Where-Object { $_.Current.IsEnabled }).Count -gt 0 } 'Claude model lookup did not finish'
+    Select-ComboItem 'PreparationModel' 'preparation-test-model'
+    Invoke-Control 'PreparationCodex' -ById
+    Select-ComboItem 'PreparationReasoningEffort' $Effort
     Set-Field 'PreparationModel' 'preparation-test-model'
     Set-Field 'PreparationIdleMinutes' $Minutes
     Assert-DialogActionsVisible
@@ -174,10 +206,21 @@ try {
                 $context = $pending.GetAwaiter().GetResult()
                 $path = $context.Request.Url.AbsolutePath
                 $authOk = $context.Request.Headers['Authorization'] -eq 'Bearer sk-prepare-fixture'
-                $record = @{ path = $path; authOk = $authOk } | ConvertTo-Json -Compress
+                $apiKeyOk = $context.Request.Headers['x-api-key'] -eq 'sk-prepare-fixture'
+                $effort = $null
+                if ($path -ne '/v1/models') {
+                    $reader = [IO.StreamReader]::new($context.Request.InputStream)
+                    try { $requestBody = $reader.ReadToEnd() | ConvertFrom-Json } finally { $reader.Dispose() }
+                    $effort = $requestBody.reasoning.effort
+                }
+                $record = @{ path = $path; authOk = $authOk; apiKeyOk = $apiKeyOk; effort = $effort } | ConvertTo-Json -Compress
                 [IO.File]::AppendAllText((Join-Path $Directory 'upstream-events.jsonl'), $record + "`n")
                 $body = if ($path -eq '/v1/models') { '{"data":[{"id":"preparation-test-model"}]}' } else { "data: {`"type`":`"response.completed`",`"response`":{`"status`":`"completed`"}}`n`n" }
                 $context.Response.ContentType = if ($path -eq '/v1/models') { 'application/json' } else { 'text/event-stream' }
+                if ($path -eq '/v1/models' -and -not $authOk) {
+                    $context.Response.StatusCode = 401
+                    $body = '{"error":{"message":"fixture requires Bearer auth"}}'
+                }
                 $bytes = [Text.Encoding]::UTF8.GetBytes($body)
                 $context.Response.ContentLength64 = $bytes.Length
                 $context.Response.OutputStream.Write($bytes, 0, $bytes.Length)
@@ -219,13 +262,13 @@ try {
     Invoke-Control 'PreparationNavigation' -ById
     Wait-For { @(Find-Elements '尚未添加准备任务').Count -gt 0 } 'Empty preparation page was not shown'
     Assert-WindowStable 'opening the preparation page'
-    Add-Preparation '5'
+    Add-Preparation '5' '低 · low'
     Wait-For { @(Find-Elements '保活中').Count -gt 0 } 'First preparation did not complete'
     Assert-WindowStable 'completing preparation'
     Write-Host 'Independent preparation and model lookup passed.'
 
     Remove-Item -LiteralPath $gate
-    Add-Preparation '7.5'
+    Add-Preparation '7.5' '高 · high'
     Wait-For { @(Find-Elements '终止准备').Count -gt 0 } 'Second preparation was not pending'
     Invoke-Control '终止准备'
     Wait-For { @(Find-Elements '已停止').Count -gt 0 } 'Second task did not stop'
@@ -241,6 +284,7 @@ try {
         $configuration = @(Find-Elements 'ChannelConfiguration' -ById)[0]
         $configuration.GetCurrentPattern([Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
         Wait-For { @(Find-Elements '通道选择').Count -gt 0 } 'Home channel selector is missing'
+        Select-ComboItem 'ChannelReasoningEffort' '极限 · ultra'
         $picker = @(Find-Elements '通道选择')[0]
         $expand = $picker.GetCurrentPattern([Windows.Automation.ExpandCollapsePattern]::Pattern)
         $expand.Expand()
@@ -254,6 +298,12 @@ try {
             $selection = $picker.GetCurrentPattern([Windows.Automation.SelectionPattern]::Pattern).Current.GetSelection()
             return $selection.Count -gt 0 -and $selection[0].Current.Name -like 'fixture-claude*'
         } 'Home did not switch to the second channel'
+        Wait-For { (Get-ComboSelection 'ChannelReasoningEffort') -eq '默认（沿用客户端）' } 'Channel switch shared a reasoning effort'
+        Select-ComboItem 'ChannelReasoningEffort' '最高 · max'
+        Select-ComboItem '通道选择' 'fixture-codex*' -ByName
+        Wait-For { (Get-ComboSelection 'ChannelReasoningEffort') -eq '极限 · ultra' } 'Codex channel effort was lost'
+        Select-ComboItem '通道选择' 'fixture-claude*' -ByName
+        Wait-For { (Get-ComboSelection 'ChannelReasoningEffort') -eq '最高 · max' } 'Claude channel effort was lost'
     }
     Assert-WindowStable 'opening the home page and selecting a channel'
     Invoke-Control 'PreparationNavigation' -ById
@@ -275,8 +325,12 @@ try {
     Wait-For { @(Find-Elements 'PreparationCodex' -ById).Count -eq 0 } 'Preparation dialog was not cancelled'
     Assert-WindowStable 'cancelling the preparation dialog'
     $events = @(Get-Content -LiteralPath $eventPath | ForEach-Object { $_ | ConvertFrom-Json })
-    if (@($events | Where-Object { -not $_.authOk }).Count -gt 0) { throw 'Preparation forwarded an incorrect credential' }
-    if (@($events | Where-Object path -eq '/v1/models').Count -ne 2) { throw 'Model lookup did not use the selected provider' }
+    $modelEvents = @($events | Where-Object path -eq '/v1/models')
+    $preparationEvents = @($events | Where-Object path -ne '/v1/models')
+    if (@($preparationEvents | Where-Object { -not $_.authOk }).Count -gt 0) { throw 'Preparation forwarded an incorrect credential' }
+    if ($modelEvents.Count -ne 6 -or @($modelEvents | Where-Object { -not $_.authOk -and $_.apiKeyOk }).Count -ne 2) { throw 'Claude model lookup did not retry Bearer authentication exactly once' }
+    if (@($modelEvents | Where-Object authOk).Count -ne 4) { throw 'Model lookup did not use the selected provider' }
+    if (@($preparationEvents | Where-Object effort -eq 'low').Count -eq 0 -or @($preparationEvents | Where-Object effort -eq 'high').Count -eq 0) { throw 'Selected reasoning efforts did not reach the preparation clients' }
     $log = Get-Content -LiteralPath (Join-Path $runtime 'logs\retry-proxy.log') -Raw
     if ($log.Contains('sk-prepare-fixture')) { throw 'Preparation logged its API key' }
     if (Test-Path -LiteralPath (Join-Path $runtime 'User\config.json')) { throw 'Preparation persisted temporary settings' }

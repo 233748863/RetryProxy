@@ -77,7 +77,8 @@ public sealed class PreparationWorkspace
         ? $"开始时读取 {options.ClientType.Label()} 当前供应商的地址与密钥，运行中的任务沿用开始时的配置。"
         : $"使用 {options.ClientType.Label()} 为填写的供应商准备，地址、密钥与会话仅在本次运行有效。";
 
-    internal static ProxyConfig CreateRuntimeConfig(string baseUrl, int port, double idleMinutes, ClientType clientType) => new()
+    internal static ProxyConfig CreateRuntimeConfig(string baseUrl, int port, double idleMinutes, ClientType clientType,
+        ReasoningEffort reasoningEffort = ReasoningEffort.Default) => new()
     {
         ClientType = clientType,
         ListenPort = port,
@@ -85,6 +86,7 @@ public sealed class PreparationWorkspace
         KeepaliveEnabled = false,
         KeepaliveIdleMinutes = idleMinutes,
         KeepaliveContextLimit = (long)KeepAliveWatchdog.DefaultContextLimit,
+        KeepaliveReasoningEffort = reasoningEffort,
         UpstreamBaseUrl = baseUrl.EndsWith("/v1", StringComparison.OrdinalIgnoreCase) ? baseUrl[..^3] : baseUrl,
     };
 
@@ -108,6 +110,11 @@ public sealed class PreparationWorkspace
             return false;
         }
         options.SelectedModel = options.SelectedModel.Trim();
+        if (!options.ReasoningEffort.IsSupportedBy(options.ClientType))
+        {
+            dialog.Error = "该客户端不支持所选思考强度，请重新选择";
+            return false;
+        }
 
         ProxyConfig runtime;
         CliCredential upstream;
@@ -118,7 +125,7 @@ public sealed class PreparationWorkspace
             using var listener = new TcpListener(IPAddress.Loopback, 0);
             listener.Start();
             var port = ((IPEndPoint)listener.LocalEndpoint).Port;
-            runtime = CreateRuntimeConfig(upstream.BaseUrl, port, idle.Value, options.ClientType);
+            runtime = CreateRuntimeConfig(upstream.BaseUrl, port, idle.Value, options.ClientType, options.ReasoningEffort);
             var address = new Uri(upstream.BaseUrl);
             if (address.IsLoopback && (address.Port == port || _tasks.Values.Any(item => !item.CanStart && item.ListenPort == address.Port)))
             {

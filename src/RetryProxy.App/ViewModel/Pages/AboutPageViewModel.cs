@@ -5,6 +5,7 @@ using RetryProxy.Service;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 
 namespace RetryProxy.ViewModel.Pages;
 
@@ -36,6 +37,20 @@ public partial class AboutPageViewModel : ViewModel
     public AboutPageViewModel(WorkspaceService workspaceService)
     {
         _workspaceService = workspaceService;
+    }
+
+    [RelayCommand]
+    private void OnOpenDocumentation()
+    {
+        var docs = Global.Absolute("docs");
+        if (Directory.Exists(docs))
+        {
+            OnOpenUrl(docs);
+        }
+        else
+        {
+            OnOpenUrl($"{RepositoryUrl}/tree/main/docs");
+        }
     }
 
     [RelayCommand]

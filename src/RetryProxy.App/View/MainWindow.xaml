@@ -58,10 +58,29 @@
             </b:Interaction.Behaviors>
             <ui:NavigationView.MenuItems>
                 <ui:NavigationViewItem Content="{i18n:T 首页}"
+                                       AutomationProperties.AutomationId="HomeNavigation"
                                        NavigationCacheMode="Enabled"
                                        TargetPageType="{x:Type pages:HomePage}">
                     <ui:NavigationViewItem.Icon>
                         <ui:SymbolIcon Symbol="Home24" />
+                    </ui:NavigationViewItem.Icon>
+                </ui:NavigationViewItem>
+
+                <ui:NavigationViewItem Content="{i18n:T 运行概况}"
+                                       AutomationProperties.AutomationId="OverviewNavigation"
+                                       NavigationCacheMode="Enabled"
+                                       TargetPageType="{x:Type pages:OverviewPage}">
+                    <ui:NavigationViewItem.Icon>
+                        <ui:SymbolIcon Symbol="Pulse24" />
+                    </ui:NavigationViewItem.Icon>
+                </ui:NavigationViewItem>
+
+                <ui:NavigationViewItem Content="{i18n:T 通道管理}"
+                                       AutomationProperties.AutomationId="ChannelNavigation"
+                                       NavigationCacheMode="Enabled"
+                                       TargetPageType="{x:Type pages:ChannelPage}">
+                    <ui:NavigationViewItem.Icon>
+                        <ui:SymbolIcon Symbol="Channel24" />
                     </ui:NavigationViewItem.Icon>
                 </ui:NavigationViewItem>
 
@@ -71,14 +90,6 @@
                                        TargetPageType="{x:Type pages:PreparationPage}">
                     <ui:NavigationViewItem.Icon>
                         <ui:SymbolIcon Symbol="PlayCircle24" />
-                    </ui:NavigationViewItem.Icon>
-                </ui:NavigationViewItem>
-
-                <ui:NavigationViewItem Content="{i18n:T 运行状态}"
-                                       NavigationCacheMode="Enabled"
-                                       TargetPageType="{x:Type pages:StatusPage}">
-                    <ui:NavigationViewItem.Icon>
-                        <ui:SymbolIcon Symbol="Pulse24" />
                     </ui:NavigationViewItem.Icon>
                 </ui:NavigationViewItem>
 
@@ -99,7 +110,8 @@
                 </ui:NavigationViewItem>
             </ui:NavigationView.MenuItems>
             <ui:NavigationView.FooterMenuItems>
-                <ui:NavigationViewItem Content="{i18n:T 设置}"
+                <ui:NavigationViewItem Content="{i18n:T 软件设置}"
+                                       AutomationProperties.AutomationId="SettingsNavigation"
                                        NavigationCacheMode="Enabled"
                                        TargetPageType="{x:Type pages:SettingsPage}">
                     <ui:NavigationViewItem.Icon>

@@ -73,8 +73,9 @@ public partial class App : Application
 
             // Pages
             services.AddView<HomePage, HomePageViewModel>();
+            services.AddView<OverviewPage, OverviewPageViewModel>();
+            services.AddView<ChannelPage, ChannelPageViewModel>();
             services.AddView<PreparationPage, PreparationPageViewModel>();
-            services.AddView<StatusPage, StatusPageViewModel>();
             services.AddView<LogPage, LogPageViewModel>();
             services.AddView<CachePage, CachePageViewModel>();
             services.AddView<SettingsPage, SettingsPageViewModel>();

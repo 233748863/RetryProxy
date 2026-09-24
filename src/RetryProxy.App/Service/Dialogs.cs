@@ -8,7 +8,7 @@ using Wpf.Ui.Controls;
 
 namespace RetryProxy.Service;
 
-/// <summary>首页与运行状态页共用的对话框入口（WPF-UI ContentDialog）。</summary>
+/// <summary>通道管理与独立准备共用的对话框入口（WPF-UI ContentDialog）。</summary>
 public sealed class Dialogs
 {
     private readonly IContentDialogService _dialogs;

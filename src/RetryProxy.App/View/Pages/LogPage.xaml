@@ -105,7 +105,7 @@
                            CommandParameter="keepalive"
                            Content="{i18n:T 通道保活}"
                            Style="{StaticResource LogFilterChip}"
-                           ToolTip="{i18n:T 首页通道的后台问答与自动保活}" />
+                           ToolTip="{i18n:T 通道的后台问答与自动保活}" />
                 <ui:Button Appearance="{Binding IsPreparation, Converter={StaticResource BooleanToChipAppearanceConverter}}"
                            AutomationProperties.AutomationId="LogSourcePreparation"
                            Command="{Binding SetSourceCommand}"

@@ -253,10 +253,16 @@ try {
     Wait-For { Test-Path -LiteralPath (Join-Path $runtime 'upstream.ready') } 'Fixture upstream did not start'
     $config = @{ schema_version = 6; upstream_base_url = ''; providers = @(); routes = @(); desired_running = $false }
     if ($WithChannels) {
-        $config.providers = @(@{ name = 'fixture'; base_url = "http://127.0.0.1:$upstreamPort" })
+        $longProvider = 'fixture-other-' + ('服务商长名称校验' * 8)
+        $config.providers = @(
+            @{ name = 'fixture'; base_url = "http://127.0.0.1:$upstreamPort" },
+            @{ name = $longProvider; base_url = "http://127.0.0.1:$upstreamPort" },
+            @{ name = 'fixture-empty'; base_url = "http://127.0.0.1:$upstreamPort" }
+        )
         $config.routes = @(
             @{ id = 'fixture-codex'; name = 'fixture-codex'; provider_name = 'fixture'; client_type = 'codex'; listen_port = (Get-FreePort); desired_running = $false },
-            @{ id = 'fixture-claude'; name = 'fixture-claude'; provider_name = 'fixture'; client_type = 'claude'; listen_port = (Get-FreePort); desired_running = $false }
+            @{ id = 'fixture-claude'; name = 'fixture-claude'; provider_name = 'fixture'; client_type = 'claude'; listen_port = (Get-FreePort); desired_running = $false },
+            @{ id = 'fixture-other'; name = ('fixture-other-' + ('通道长名称校验' * 8)); provider_name = $longProvider; client_type = 'codex'; listen_port = (Get-FreePort); desired_running = $false }
         )
         $config.selected_route_id = 'fixture-codex'
     }
@@ -281,6 +287,50 @@ try {
         } 'Private test window did not reach its compact size'
     }
     $initialBounds = [RetryProxyTrayVerification]::Bounds($window)
+    Wait-For { @(Find-Elements 'HomeOverviewCard' -ById).Count -gt 0 } 'Application did not open the application home by default'
+    $homeDestinations = @(
+        @{ Card = 'HomeOverviewCard'; Marker = 'ManageChannels' },
+        @{ Card = 'HomeChannelsCard'; Marker = 'ProviderPicker' },
+        @{ Card = 'HomePreparationCard'; Marker = 'AddPreparation' },
+        @{ Card = 'HomeLogsCard'; Marker = 'LogCounter' },
+        @{ Card = 'HomeCacheCard'; Marker = 'CachePageTitle' },
+        @{ Card = 'HomeSettingsCard'; Marker = 'SwitchAppearance' }
+    )
+    foreach ($destination in $homeDestinations) {
+        Invoke-Control $destination.Card -ById
+        Wait-For { @(Find-Elements $destination.Marker -ById).Count -gt 0 } "Home card opened the wrong page: $($destination.Card)"
+        Assert-WindowStable "opening $($destination.Card)"
+        Invoke-Control 'HomeNavigation' -ById
+        Wait-For { @(Find-Elements 'HomeOverviewCard' -ById).Count -gt 0 } 'Navigation did not return to the application home'
+    }
+    Write-Host 'All six home cards and return navigation passed.'
+    Invoke-Control 'HomeOverviewCard' -ById
+    Wait-For { @(Find-Elements 'ManageChannels' -ById).Count -gt 0 } 'Home card did not open the overview'
+    foreach ($id in @('EnableAllChannels', 'DisableAllChannels', 'ChannelKeepAlive', 'ChannelReasoningEffort')) {
+        if (@(Find-Elements $id -ById).Count -gt 0) { throw "Management control is still on the overview: $id" }
+    }
+    if (-not $WithChannels) {
+        Wait-For { @(Find-Elements '尚未创建通道，请前往通道管理添加服务商和通道').Count -gt 0 } 'Empty overview did not explain how to add a channel'
+    } else {
+        Select-ComboItem 'OverviewChannelPicker' 'fixture-other*'
+        Wait-For {
+            $url = @(Find-Elements 'OverviewLocalUrl' -ById)[0]
+            return $null -ne $url -and $url.Current.Name.Contains([string]$config.routes[2].listen_port)
+        } 'Cross-provider selection did not update the overview address'
+        Assert-WindowStable 'selecting a channel with a long provider and channel name'
+        Invoke-Control 'ManageChannels' -ById
+        Wait-For { @(Find-Elements 'ProviderPicker' -ById).Count -gt 0 } 'Channel management did not open'
+        if ((Get-ComboSelection 'ProviderPicker') -notlike 'fixture-other*' -or (Get-ComboSelection 'ChannelPicker') -notlike 'fixture-other*') {
+            throw 'Overview selection did not synchronize the provider and channel in management'
+        }
+        Assert-WindowStable 'showing long names in channel management'
+        Select-ComboItem 'ProviderPicker' 'fixture-empty*'
+        Invoke-Control 'OverviewNavigation' -ById
+        Wait-For { @(Find-Elements '选择通道查看运行状态').Count -gt 0 } 'Overview did not handle a provider without channels'
+        if (@(Find-Elements 'OverviewTotalRequests' -ById | Where-Object { -not $_.Current.IsOffscreen }).Count -gt 0) { throw 'Overview kept displaying statistics from the previous channel' }
+        Select-ComboItem 'OverviewChannelPicker' 'fixture-codex*'
+    }
+    Assert-WindowStable 'opening the overview from its home card'
     Invoke-Control 'PreparationNavigation' -ById
     Wait-For { @(Find-Elements '尚未添加准备任务').Count -gt 0 } 'Empty preparation page was not shown'
     Assert-WindowStable 'opening the preparation page'
@@ -300,12 +350,19 @@ try {
     Wait-For { @(Find-Elements '保活中').Count -ge 2 } 'Second task did not restart independently'
     Assert-WindowStable 'adding and restarting a second preparation task'
 
-    Invoke-Control '首页'
+    Invoke-Control 'HomeNavigation' -ById
+    Invoke-Control 'HomeOverviewCard' -ById
+    Wait-For { @(Find-Elements 'ManageChannels' -ById).Count -gt 0 } 'Overview is missing'
     if ($WithChannels) {
-        Wait-For { @(Find-Elements 'ChannelConfiguration' -ById).Count -gt 0 } 'Home configuration is missing'
-        $configuration = @(Find-Elements 'ChannelConfiguration' -ById)[0]
-        $configuration.GetCurrentPattern([Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
-        Wait-For { @(Find-Elements '通道选择').Count -gt 0 } 'Home channel selector is missing'
+        Select-ComboItem 'OverviewChannelPicker' 'fixture-claude*'
+        Wait-For { (Get-ComboSelection 'OverviewChannelPicker') -like 'fixture-claude*' } 'Overview did not switch channels'
+        Select-ComboItem 'OverviewChannelPicker' 'fixture-codex*'
+    }
+    Invoke-Control 'ManageChannels' -ById
+    Wait-For { @(Find-Elements 'EnableAllChannels' -ById).Count -gt 0 } 'Overview shortcut did not open channel management'
+    if ($WithChannels) {
+        Wait-For { @(Find-Elements 'ToggleChannel' -ById).Count -gt 0 } 'Channel configuration is missing'
+        Wait-For { @(Find-Elements '通道选择').Count -gt 0 } 'Channel management selector is missing'
         Select-ComboItem 'ChannelReasoningEffort' '极限 · ultra'
         $picker = @(Find-Elements '通道选择')[0]
         $expand = $picker.GetCurrentPattern([Windows.Automation.ExpandCollapsePattern]::Pattern)
@@ -319,15 +376,16 @@ try {
         Wait-For {
             $selection = $picker.GetCurrentPattern([Windows.Automation.SelectionPattern]::Pattern).Current.GetSelection()
             return $selection.Count -gt 0 -and $selection[0].Current.Name -like 'fixture-claude*'
-        } 'Home did not switch to the second channel'
+        } 'Channel management did not switch to the second channel'
         Wait-For { (Get-ComboSelection 'ChannelReasoningEffort') -eq '默认（沿用客户端）' } 'Channel switch shared a reasoning effort'
         Select-ComboItem 'ChannelReasoningEffort' '最高 · max'
         Select-ComboItem '通道选择' 'fixture-codex*' -ByName
         Wait-For { (Get-ComboSelection 'ChannelReasoningEffort') -eq '极限 · ultra' } 'Codex channel effort was lost'
         Select-ComboItem '通道选择' 'fixture-claude*' -ByName
         Wait-For { (Get-ComboSelection 'ChannelReasoningEffort') -eq '最高 · max' } 'Claude channel effort was lost'
+        @(Find-Elements 'ChannelReasoningEffort' -ById)[0].SetFocus()
     }
-    Assert-WindowStable 'opening the home page and selecting a channel'
+    Assert-WindowStable 'opening channel management and selecting a channel'
     Invoke-Control 'PreparationNavigation' -ById
     Wait-For { @(Find-Elements '保活中').Count -ge 2 } 'Navigation or channel selection changed preparation state'
     if (@(Find-Elements '准备 1 · Codex').Count -eq 0 -or @(Find-Elements '准备 2 · Codex').Count -eq 0) { throw 'Task identities changed with the channel' }

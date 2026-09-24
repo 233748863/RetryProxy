@@ -7,7 +7,7 @@
     [switch]$NoScreenshot
 )
 # C# 版保活验收（移植自 D:\API-Proxy\tests\verify_keepalive_exe.ps1，PowerShell 7 + UIAutomation）。
-# 与 Rust 版的差异：保活开关/间隔/一键准备/终止准备都在「运行状态」页，脚本先点导航项切过去；
+# 通道保活开关与间隔在「通道管理」页；独立准备的验收见 verify_preparation.ps1。
 # 通道切换通过 ComboBox 的 ExpandCollapse + SelectionItem；准备完成/终止用 Snackbar 提示而非带“确定”的弹窗，不再点“确定”；
 # 间隔文本框可访问名为“保活间隔分钟”；开关是 ToggleSwitch（TogglePattern，控件类型 Button）。
 
@@ -371,8 +371,8 @@ while ($null -ne $line) {
         catch { return $false }
     } '程序监听未启动' 30
     Wait-Condition { $app.Refresh(); $app.MainWindowHandle -ne 0 -and $app.MainWindowTitle -eq 'LLM Retry Proxy' } '程序窗口未创建'
-    Invoke-NavigationItem '运行状态'
-    Wait-Condition { $null -ne (Get-KeepaliveToggle) } '运行状态页未显示保活控件'
+    Invoke-NavigationItem '通道管理'
+    Wait-Condition { $null -ne (Get-KeepaliveToggle) } '通道管理页未显示保活控件'
     Verify-IndependentChannelControls
     Write-Host '通道独立设置检查通过。'
     $request = @{ model = 'client-format-model'; stream = $true; store = $false; instructions = 'required client system instructions'; tools = @(@{ type = 'function'; name = 'client_tool'; parameters = @{ type = 'object' } }); input = @(@{ role = 'user'; content = @(@{ type = 'input_text'; text = '正常客户端验证消息' }) }) } | ConvertTo-Json -Depth 10

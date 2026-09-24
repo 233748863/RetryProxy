@@ -45,6 +45,7 @@
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
                 <TextBlock Grid.Column="0"
+                           AutomationProperties.AutomationId="CachePageTitle"
                            VerticalAlignment="Center"
                            FontSize="16"
                            FontWeight="SemiBold"
@@ -54,7 +55,8 @@
                           DisplayMemberPath="Text"
                           ItemsSource="{Binding Channels}"
                           SelectedItem="{Binding SelectedChannel, Mode=TwoWay}"
-                          ToolTip="{i18n:T 与首页选中的通道保持同步}"
+                          AutomationProperties.AutomationId="CacheChannelPicker"
+                          ToolTip="{i18n:T 与运行概况和通道管理选中的通道保持同步}"
                           Visibility="{Binding HasChannel, Converter={StaticResource BooleanToVisibilityConverter}}" />
             </Grid>
 

@@ -223,7 +223,7 @@ public sealed class ProxyWorkspace
         Save();
     }
 
-    /// <summary>按通道 ID 选中，同时把服务商切到它所属的服务商（运行状态页的通道下拉跨服务商）。</summary>
+    /// <summary>按通道 ID 选中，同时切换到所属服务商，供运行概况和缓存页跨服务商查看。</summary>
     public void SelectRouteAcrossProviders(string routeId)
     {
         var route = Config.Routes.FirstOrDefault(candidate => candidate.Id == routeId);
@@ -576,7 +576,7 @@ public sealed class ProxyWorkspace
     /// <summary>把编辑器文本解析成通道；解析失败抛 <see cref="WorkspaceException"/>，消息即界面文案。</summary>
     public ProxyRoute RouteFromEditor(RouteEditor editor)
     {
-        // 编辑弹窗里没有启停和保活这两组开关，它们在首页卡片上，改名改端口时要原样保留。
+        // 启停和保活开关位于通道管理页面，编辑弹窗改名或改端口时要原样保留。
         var existing = editor.Index is { } index && index < Config.Routes.Count ? Config.Routes[index] : new ProxyRoute();
         var route = new ProxyRoute
         {

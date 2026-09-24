@@ -17,6 +17,7 @@ x86/
 [Ll]og/
 dist/
 build/release-stage/
+build/test-results/
 build/rollback/
 build/instance-backups/
 build/publish-staging-*/

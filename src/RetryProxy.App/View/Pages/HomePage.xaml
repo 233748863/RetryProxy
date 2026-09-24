@@ -1,384 +1,144 @@
 <Page x:Class="RetryProxy.View.Pages.HomePage"
       xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
       xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-      xmlns:b="http://schemas.microsoft.com/xaml/behaviors"
-      xmlns:controls="clr-namespace:RetryProxy.View.Controls"
       xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
       xmlns:i18n="clr-namespace:RetryProxy.Service.I18n"
       xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
       xmlns:pages="clr-namespace:RetryProxy.ViewModel.Pages"
       xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+      xmlns:views="clr-namespace:RetryProxy.View.Pages"
       Title="HomePage"
       d:DataContext="{d:DesignInstance Type=pages:HomePageViewModel}"
-      d:DesignHeight="850"
-      d:DesignWidth="800"
+      d:DesignHeight="550"
+      d:DesignWidth="720"
       ui:Design.Background="{DynamicResource ApplicationBackgroundBrush}"
       ui:Design.Foreground="{DynamicResource TextFillColorPrimaryBrush}"
       FontFamily="{StaticResource TextThemeFontFamily}"
       Foreground="{DynamicResource TextFillColorPrimaryBrush}"
       mc:Ignorable="d">
+    <Page.Resources>
+        <Style x:Key="ApplicationCard"
+               BasedOn="{StaticResource {x:Type ui:CardAction}}"
+               TargetType="ui:CardAction">
+            <Setter Property="Height" Value="136" />
+            <Setter Property="Margin" Value="0,0,12,12" />
+            <Setter Property="Padding" Value="16" />
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+            <Setter Property="IsChevronVisible" Value="False" />
+            <Setter Property="Command" Value="{Binding NavigateCommand}" />
+        </Style>
+        <Style x:Key="ApplicationIcon" TargetType="ui:SymbolIcon">
+            <Setter Property="FontSize" Value="32" />
+            <Setter Property="Margin" Value="0,0,0,12" />
+            <Setter Property="HorizontalAlignment" Value="Center" />
+        </Style>
+        <Style x:Key="ApplicationDescription" TargetType="ui:TextBlock">
+            <Setter Property="FontTypography" Value="Caption" />
+            <Setter Property="Foreground" Value="{DynamicResource TextFillColorSecondaryBrush}" />
+            <Setter Property="Margin" Value="0,4,0,0" />
+            <Setter Property="TextAlignment" Value="Center" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+        </Style>
+    </Page.Resources>
 
-    <b:Interaction.Triggers>
-        <b:EventTrigger EventName="Loaded">
-            <b:InvokeCommandAction Command="{Binding LoadedCommand}" CommandParameter="{Binding}" />
-        </b:EventTrigger>
-    </b:Interaction.Triggers>
-
-    <StackPanel Margin="42,16,42,12">
-
-        <!--  横幅  -->
-        <Border Height="200" CornerRadius="8">
-            <Grid>
-                <Border ClipToBounds="True" CornerRadius="8">
+    <ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+        <StackPanel x:Name="HomeContent" Margin="{StaticResource PagePadding}">
+            <Border Height="180"
+                    Margin="0,0,0,20"
+                    AutomationProperties.AutomationId="HomeBanner"
+                    CornerRadius="{StaticResource ControlCornerRadius}">
+                <Border.Background>
+                    <ImageBrush ImageSource="pack://application:,,,/Resources/Images/banner.jpg" Stretch="UniformToFill" />
+                </Border.Background>
+                <Border Padding="24" CornerRadius="{StaticResource ControlCornerRadius}">
                     <Border.Background>
-                        <ImageBrush ImageSource="{Binding BannerImageSource}"
-                                    RenderOptions.BitmapScalingMode="HighQuality"
-                                    Stretch="UniformToFill" />
-                    </Border.Background>
-                    <Border.OpacityMask>
-                        <LinearGradientBrush StartPoint="0,1" EndPoint="1,0">
-                            <GradientStop Color="Transparent" />
-                            <GradientStop Offset="0.7" Color="White" />
+                        <LinearGradientBrush StartPoint="0,0.5" EndPoint="1,0.5">
+                            <GradientStop Offset="0" Color="#DA161616" />
+                            <GradientStop Offset="0.5" Color="#80161616" />
+                            <GradientStop Offset="1" Color="#00161616" />
                         </LinearGradientBrush>
-                    </Border.OpacityMask>
+                    </Border.Background>
+                    <StackPanel VerticalAlignment="Bottom">
+                        <ui:TextBlock FontTypography="TitleLarge" Foreground="White" Text="{i18n:T LLM Retry Proxy}" />
+                        <ui:TextBlock Margin="0,4,0,0" FontTypography="Subtitle" Foreground="White"
+                                      Text="{i18n:T 桌面应用控制中心}" TextWrapping="Wrap" />
+                        <ui:TextBlock Margin="0,4,0,0" FontTypography="Body" Foreground="#E6FFFFFF"
+                                      Text="{i18n:T 通道管理与运行监控}" TextWrapping="Wrap" />
+                    </StackPanel>
                 </Border>
-                <Grid>
-                    <StackPanel Margin="52,0,0,26"
-                                HorizontalAlignment="Left"
-                                VerticalAlignment="Bottom"
-                                Background="Transparent">
-                        <ui:TextBlock FontTypography="Title" Text="LLM Retry Proxy" />
-                        <ui:TextBlock FontTypography="Subtitle"
-                                      Opacity="0.8"
-                                      Text="{i18n:T 本地 LLM 反向代理，自动重试，免费且开源}" />
-                        <ui:TextBlock FontTypography="BodyStrong" Opacity="0.5">
-                            <Hyperlink Command="{Binding GoToWikiUrlCommand}"
-                                       Foreground="{DynamicResource TextFillColorPrimaryBrush}"
-                                       TextDecorations="None">
-                                <Run Text="{i18n:T 点击查看文档与教程}" />
-                                <Run FontFamily="{StaticResource FluentSystemIcons}" FontWeight="Light">&#xEE7A;</Run>
-                            </Hyperlink>
-                        </ui:TextBlock>
-                    </StackPanel>
-                </Grid>
-            </Grid>
-        </Border>
+            </Border>
 
-        <!--  代理服务，启动！  -->
-        <ui:CardExpander Margin="0,12,0,12"
-                         AutomationProperties.AutomationId="ChannelConfiguration"
-                         ContentPadding="0"
-                         Icon="{ui:SymbolIcon Play24}">
-            <ui:CardExpander.Header>
-                <Grid>
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="Auto" />
-                    </Grid.RowDefinitions>
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="Auto" />
-                    </Grid.ColumnDefinitions>
-                    <ui:TextBlock Grid.Row="0"
-                                  Grid.Column="0"
-                                  FontTypography="Body"
-                                  Text="{i18n:T 代理服务，启动！}"
-                                  TextWrapping="Wrap" />
-                    <ui:TextBlock Grid.Row="1"
-                                  Grid.Column="0"
-                                  Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
-                                  TextWrapping="Wrap">
-                        <Run Text="{i18n:T 服务启动后本地端口才会开始转发请求，}" /><Run FontWeight="Bold"
-                                                                                       Text="{i18n:T 点击展开启动相关配置}"
-                                                                                       TextDecorations="Underline" /><Run Text="{i18n:T 。}" />
-                    </ui:TextBlock>
-                    <StackPanel Grid.Row="0"
-                                Grid.RowSpan="2"
-                                Grid.Column="1"
-                                Margin="0,0,24,0"
-                                Orientation="Horizontal">
-                        <controls:TwoStateButton DisableCommand="{Binding StopProxyCommand}"
-                                                 DisableContent="{i18n:T 停止}"
-                                                 DisableIcon="{ui:SymbolIcon Dismiss24}"
-                                                 EnableCommand="{Binding StartProxyCommand}"
-                                                 EnableContent="{i18n:T 启动}"
-                                                 EnableIcon="{ui:SymbolIcon Play24}"
-                                                 IsChecked="{Binding IsProxyRunning, Mode=OneWay}" />
+            <ui:TextBlock Margin="0,0,0,12" FontTypography="Subtitle" Text="{i18n:T 应用}" />
+            <UniformGrid Margin="0,0,-12,-12"
+                         Columns="{Binding ActualWidth, ElementName=HomeContent, Converter={StaticResource AdaptiveUniformGridColumnsConverter}, ConverterParameter='184,3'}">
+                <ui:CardAction AutomationProperties.AutomationId="HomeOverviewCard"
+                               AutomationProperties.Name="{i18n:T 运行概况}"
+                               AutomationProperties.HelpText="{i18n:T 查看通道状态与请求统计}"
+                               CommandParameter="{x:Type views:OverviewPage}"
+                               Style="{StaticResource ApplicationCard}">
+                    <StackPanel>
+                        <ui:SymbolIcon Style="{StaticResource ApplicationIcon}" Symbol="Pulse24" />
+                        <ui:TextBlock FontTypography="BodyStrong" Text="{i18n:T 运行概况}" TextAlignment="Center" />
+                        <ui:TextBlock Style="{StaticResource ApplicationDescription}" Text="{i18n:T 查看通道状态与请求统计}" />
                     </StackPanel>
-                </Grid>
-            </ui:CardExpander.Header>
-            <StackPanel>
-                <Separator Margin="-18,0" BorderThickness="0,1,0,0" />
-                <Grid Margin="16">
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="Auto" />
-                    </Grid.RowDefinitions>
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="Auto" />
-                    </Grid.ColumnDefinitions>
-                    <ui:TextBlock Grid.Row="0"
-                                  Grid.Column="0"
-                                  FontTypography="Body"
-                                  Text="{i18n:T 服务商}"
-                                  TextWrapping="Wrap" />
-                    <ui:TextBlock Grid.Row="1"
-                                  Grid.Column="0"
-                                  Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
-                                  Text="{i18n:T 选择上游服务商，通道将转发到该服务商的基础地址}"
-                                  TextWrapping="Wrap" />
-                    <StackPanel Grid.Row="0"
-                                Grid.RowSpan="2"
-                                Grid.Column="1"
-                                Margin="0,0,36,0"
-                                Orientation="Horizontal">
-                        <ComboBox MinWidth="220"
-                                  VerticalAlignment="Center"
-                                  DisplayMemberPath="Text"
-                                  ItemsSource="{Binding Providers, Mode=OneWay}"
-                                  SelectedItem="{Binding SelectedProvider, Mode=TwoWay}" />
-                        <ui:Button Margin="6,0,0,0"
-                                   Command="{Binding AddProviderCommand}"
-                                   Icon="{ui:SymbolIcon Add24}"
-                                   ToolTip="{i18n:T 新增服务商}" />
-                        <ui:Button Margin="4,0,0,0"
-                                   Command="{Binding EditProviderCommand}"
-                                   Icon="{ui:SymbolIcon Edit24}"
-                                   IsEnabled="{Binding HasProvider}"
-                                   ToolTip="{i18n:T 编辑服务商}" />
-                        <ui:Button Margin="4,0,0,0"
-                                   Command="{Binding DeleteProviderCommand}"
-                                   Icon="{ui:SymbolIcon Delete24}"
-                                   IsEnabled="{Binding HasProvider}"
-                                   ToolTip="{i18n:T 删除服务商}" />
+                </ui:CardAction>
+                <ui:CardAction AutomationProperties.AutomationId="HomeChannelsCard"
+                               AutomationProperties.Name="{i18n:T 通道管理}"
+                               AutomationProperties.HelpText="{i18n:T 管理服务商、通道与保活}"
+                               CommandParameter="{x:Type views:ChannelPage}"
+                               Style="{StaticResource ApplicationCard}">
+                    <StackPanel>
+                        <ui:SymbolIcon Style="{StaticResource ApplicationIcon}" Symbol="Channel24" />
+                        <ui:TextBlock FontTypography="BodyStrong" Text="{i18n:T 通道管理}" TextAlignment="Center" />
+                        <ui:TextBlock Style="{StaticResource ApplicationDescription}" Text="{i18n:T 管理服务商、通道与保活}" />
                     </StackPanel>
-                </Grid>
-                <Separator Margin="-18,0" BorderThickness="0,1,0,0" />
-                <Grid Margin="16">
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="Auto" />
-                    </Grid.RowDefinitions>
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="Auto" />
-                    </Grid.ColumnDefinitions>
-                    <ui:TextBlock Grid.Row="0"
-                                  Grid.Column="0"
-                                  FontTypography="Body"
-                                  Text="{i18n:T 通道}"
-                                  TextWrapping="Wrap" />
-                    <ui:TextBlock Grid.Row="1"
-                                  Grid.Column="0"
-                                  Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
-                                  TextWrapping="Wrap">
-                        <Run Text="{i18n:T 每个通道占用一个本地端口，可独立启停}" /><Run Text=" · " /><Run Text="{Binding ProviderUsage, Mode=OneWay}" />
-                    </ui:TextBlock>
-                    <StackPanel Grid.Row="0"
-                                Grid.RowSpan="2"
-                                Grid.Column="1"
-                                Margin="0,0,36,0"
-                                Orientation="Horizontal">
-                        <ComboBox MinWidth="220"
-                                  VerticalAlignment="Center"
-                                  AutomationProperties.Name="{i18n:T 通道选择}"
-                                  DisplayMemberPath="Text"
-                                  IsEnabled="{Binding HasChannel}"
-                                  ItemsSource="{Binding Channels, Mode=OneWay}"
-                                  SelectedItem="{Binding SelectedChannel, Mode=TwoWay}" />
-                        <ui:Button Margin="6,0,0,0"
-                                   Command="{Binding AddChannelCommand}"
-                                   Icon="{ui:SymbolIcon Add24}"
-                                   IsEnabled="{Binding HasProvider}"
-                                   ToolTip="{i18n:T 新增通道}" />
-                        <ui:Button Margin="4,0,0,0"
-                                   Command="{Binding EditChannelCommand}"
-                                   Icon="{ui:SymbolIcon Edit24}"
-                                   IsEnabled="{Binding CanEditChannel}"
-                                   ToolTip="{Binding ChannelEditToolTip}"
-                                   ToolTipService.ShowOnDisabled="True" />
-                        <ui:Button Margin="4,0,0,0"
-                                   Command="{Binding DeleteChannelCommand}"
-                                   Icon="{ui:SymbolIcon Delete24}"
-                                   IsEnabled="{Binding CanEditChannel}"
-                                   ToolTip="{Binding ChannelEditToolTip}"
-                                   ToolTipService.ShowOnDisabled="True" />
+                </ui:CardAction>
+                <ui:CardAction AutomationProperties.AutomationId="HomePreparationCard"
+                               AutomationProperties.Name="{i18n:T 一键准备}"
+                               AutomationProperties.HelpText="{i18n:T 独立准备客户端并持续保活}"
+                               CommandParameter="{x:Type views:PreparationPage}"
+                               Style="{StaticResource ApplicationCard}">
+                    <StackPanel>
+                        <ui:SymbolIcon Style="{StaticResource ApplicationIcon}" Symbol="PlayCircle24" />
+                        <ui:TextBlock FontTypography="BodyStrong" Text="{i18n:T 一键准备}" TextAlignment="Center" />
+                        <ui:TextBlock Style="{StaticResource ApplicationDescription}" Text="{i18n:T 独立准备客户端并持续保活}" />
                     </StackPanel>
-                </Grid>
-                <ui:TextBlock Margin="16,0,16,12"
-                              Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
-                              Text="{Binding EmptyHint}"
-                              TextWrapping="Wrap"
-                              Visibility="{Binding HasChannel, Converter={StaticResource BooleanToVisibilityRevertConverter}}" />
-                <Separator Margin="-18,0" BorderThickness="0,1,0,0" />
-                <Grid Margin="16">
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="Auto" />
-                    </Grid.RowDefinitions>
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="Auto" />
-                    </Grid.ColumnDefinitions>
-                    <ui:TextBlock Grid.Row="0"
-                                  Grid.Column="0"
-                                  FontTypography="Body"
-                                  Text="{i18n:T 本地监听端口}"
-                                  TextWrapping="Wrap" />
-                    <ui:TextBlock Grid.Row="1"
-                                  Grid.Column="0"
-                                  Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
-                                  Text="{i18n:T 默认 8080，后续通道依次递增}"
-                                  TextWrapping="Wrap" />
-                    <ui:TextBox Grid.Row="0"
-                                Grid.RowSpan="2"
-                                Grid.Column="1"
-                                MinWidth="90"
-                                Margin="0,0,36,0"
-                                IsEnabled="{Binding HasChannel}"
-                                IsReadOnly="{Binding IsProxyRunning}"
-                                Text="{Binding ListenPort, Mode=TwoWay}" />
-                </Grid>
-                <Separator Margin="-18,0" BorderThickness="0,1,0,0" />
-                <Grid Margin="16">
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="Auto" />
-                    </Grid.RowDefinitions>
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="Auto" />
-                    </Grid.ColumnDefinitions>
-                    <ui:TextBlock Grid.Row="0"
-                                  Grid.Column="0"
-                                  FontTypography="Body"
-                                  Text="{i18n:T 本通道保活}"
-                                  TextWrapping="Wrap" />
-                    <ui:TextBlock Grid.Row="1"
-                                  Grid.Column="0"
-                                  Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
-                                  Text="{i18n:T 空闲超过设定分钟数后自动发送保活请求，避免上游会话过期}"
-                                  TextWrapping="Wrap" />
-                    <ui:ToggleSwitch Grid.Row="0"
-                                     Grid.RowSpan="2"
-                                     Grid.Column="1"
-                                     Margin="0,0,36,0"
-                                     AutomationProperties.Name="{i18n:T 本通道保活}"
-                                     IsChecked="{Binding KeepAliveEnabled, Mode=TwoWay}"
-                                     IsEnabled="{Binding HasChannel}" />
-                </Grid>
-                <Separator Margin="-18,0" BorderThickness="0,1,0,0" />
-                <Grid Margin="16">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="Auto" />
-                    </Grid.ColumnDefinitions>
-                    <StackPanel Grid.Column="0" Margin="0,0,16,0">
-                        <ui:TextBlock FontTypography="Body" Text="{i18n:T 保活间隔}" />
-                        <ui:TextBlock FontSize="11"
-                                      Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
-                                      Text="{i18n:T 空闲指定分钟后发送保活请求}"
-                                      TextWrapping="Wrap" />
+                </ui:CardAction>
+                <ui:CardAction AutomationProperties.AutomationId="HomeLogsCard"
+                               AutomationProperties.Name="{i18n:T 运行日志}"
+                               AutomationProperties.HelpText="{i18n:T 按来源查看与筛选日志}"
+                               CommandParameter="{x:Type views:LogPage}"
+                               Style="{StaticResource ApplicationCard}">
+                    <StackPanel>
+                        <ui:SymbolIcon Style="{StaticResource ApplicationIcon}" Symbol="DocumentText24" />
+                        <ui:TextBlock FontTypography="BodyStrong" Text="{i18n:T 运行日志}" TextAlignment="Center" />
+                        <ui:TextBlock Style="{StaticResource ApplicationDescription}" Text="{i18n:T 按来源查看与筛选日志}" />
                     </StackPanel>
-                    <StackPanel Grid.Column="1" Margin="0,0,36,0" VerticalAlignment="Center" Orientation="Horizontal">
-                        <ui:TextBox Width="56"
-                                    IsEnabled="{Binding KeepAliveEnabled}"
-                                    Text="{Binding KeepAliveMinutes, Mode=TwoWay}" />
-                        <TextBlock Margin="6,0,0,0" VerticalAlignment="Center" Text="{i18n:T 分钟}" />
+                </ui:CardAction>
+                <ui:CardAction AutomationProperties.AutomationId="HomeCacheCard"
+                               AutomationProperties.Name="{i18n:T 缓存明细}"
+                               AutomationProperties.HelpText="{i18n:T 查看缓存命中与用量}"
+                               CommandParameter="{x:Type views:CachePage}"
+                               Style="{StaticResource ApplicationCard}">
+                    <StackPanel>
+                        <ui:SymbolIcon Style="{StaticResource ApplicationIcon}" Symbol="Database24" />
+                        <ui:TextBlock FontTypography="BodyStrong" Text="{i18n:T 缓存明细}" TextAlignment="Center" />
+                        <ui:TextBlock Style="{StaticResource ApplicationDescription}" Text="{i18n:T 查看缓存命中与用量}" />
                     </StackPanel>
-                </Grid>
-                <Separator Margin="-18,0" BorderThickness="0,1,0,0" />
-                <Grid Margin="16">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="Auto" />
-                    </Grid.ColumnDefinitions>
-                    <StackPanel Grid.Column="0" Margin="0,0,16,0">
-                        <ui:TextBlock FontTypography="Body" Text="{i18n:T 思考强度}" />
-                        <ui:TextBlock FontSize="11"
-                                      Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
-                                      Text="{i18n:T 下轮后台问答生效；部分档位需要模型支持}"
-                                      TextWrapping="Wrap" />
+                </ui:CardAction>
+                <ui:CardAction AutomationProperties.AutomationId="HomeSettingsCard"
+                               AutomationProperties.Name="{i18n:T 软件设置}"
+                               AutomationProperties.HelpText="{i18n:T 调整外观、语言与启动方式}"
+                               CommandParameter="{x:Type views:SettingsPage}"
+                               Style="{StaticResource ApplicationCard}">
+                    <StackPanel>
+                        <ui:SymbolIcon Style="{StaticResource ApplicationIcon}" Symbol="Settings24" />
+                        <ui:TextBlock FontTypography="BodyStrong" Text="{i18n:T 软件设置}" TextAlignment="Center" />
+                        <ui:TextBlock Style="{StaticResource ApplicationDescription}" Text="{i18n:T 调整外观、语言与启动方式}" />
                     </StackPanel>
-                    <ComboBox Grid.Column="1"
-                              Width="184"
-                              Margin="0,0,36,0"
-                              VerticalAlignment="Center"
-                              AutomationProperties.AutomationId="ChannelReasoningEffort"
-                              DisplayMemberPath="Text"
-                              IsEnabled="{Binding HasChannel}"
-                              ItemsSource="{Binding KeepAliveEfforts}"
-                              SelectedItem="{Binding SelectedKeepAliveEffort, Mode=TwoWay}" />
-                </Grid>
-                <Separator Margin="-18,0" BorderThickness="0,1,0,0" />
-                <Grid Margin="16">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="Auto" />
-                    </Grid.ColumnDefinitions>
-                    <StackPanel Grid.Column="0" Margin="0,0,16,0">
-                        <ui:TextBlock FontTypography="Body" Text="{i18n:T 会话上限}" />
-                        <ui:TextBlock FontSize="11"
-                                      Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
-                                      Text="{i18n:T 超过该用量后清理后台会话并重新创建，不影响聊天记录}"
-                                      TextWrapping="Wrap" />
-                    </StackPanel>
-                    <StackPanel Grid.Column="1" Margin="0,0,36,0" VerticalAlignment="Center" Orientation="Horizontal">
-                        <ui:NumberBox Width="120"
-                                      LargeChange="10000"
-                                      MaxDecimalPlaces="0"
-                                      Minimum="1"
-                                      SmallChange="1000"
-                                      SpinButtonPlacementMode="Compact"
-                                      IsEnabled="{Binding HasChannel}"
-                                      Value="{Binding ContextLimit, Mode=TwoWay}" />
-                        <TextBlock Margin="6,0,0,0" VerticalAlignment="Center" Text="token" />
-                    </StackPanel>
-                </Grid>
-                <Separator Margin="-18,0" BorderThickness="0,1,0,0" />
-                <Grid Margin="16">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="Auto" />
-                        <ColumnDefinition Width="*" />
-                    </Grid.ColumnDefinitions>
-                    <ui:TextBlock Grid.Column="0" Margin="0,0,16,0" FontTypography="Body" Text="{i18n:T 自动保活状态}" />
-                    <ui:TextBlock Grid.Column="1"
-                                  FontSize="11"
-                                  Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
-                                  Text="{Binding AutoKeepAliveHint}"
-                                  TextWrapping="Wrap" />
-                </Grid>
-                <Separator Margin="-18,0" BorderThickness="0,1,0,0" />
-                <Grid Margin="16">
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="Auto" />
-                    </Grid.RowDefinitions>
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="Auto" />
-                    </Grid.ColumnDefinitions>
-                    <ui:TextBlock Grid.Row="0"
-                                  Grid.Column="0"
-                                  FontTypography="Body"
-                                  Text="{i18n:T 本地监听地址}"
-                                  TextWrapping="Wrap" />
-                    <ui:TextBlock Grid.Row="1"
-                                  Grid.Column="0"
-                                  Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
-                                  Text="{Binding ListenAddress, Mode=OneWay}"
-                                  TextWrapping="Wrap" />
-                    <ui:Button Grid.Row="0"
-                               Grid.RowSpan="2"
-                               Grid.Column="1"
-                               Margin="0,0,36,0"
-                               Command="{Binding CopyListenAddressCommand}"
-                               Content="{i18n:T 复制}"
-                               Icon="{ui:SymbolIcon Copy24}" />
-                </Grid>
-            </StackPanel>
-        </ui:CardExpander>
-
-    </StackPanel>
+                </ui:CardAction>
+            </UniformGrid>
+        </StackPanel>
+    </ScrollViewer>
 </Page>

@@ -5,8 +5,9 @@ using RetryProxy.Core.Metrics;
 using RetryProxy.Core.Service;
 using RetryProxy.Core.Workspace;
 using RetryProxy.Service;
+using RetryProxy.Service.I18n;
+using RetryProxy.View.Pages;
 using System;
-using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
 using System.Threading.Tasks;
@@ -20,13 +21,16 @@ namespace RetryProxy.ViewModel.Pages;
 /// <summary>请求明细一行。</summary>
 public sealed record ActiveRequestRow(string RequestId, string Attempt, string Phase, Brush PhaseBrush, string Target);
 
-public partial class StatusPageViewModel : ViewModel
+public partial class OverviewPageViewModel : ViewModel
 {
     private const string DateHelpBase = "按本机日期统计，午夜自动切换。请求按编号去重，重试单独计数；跨日仍未完成的请求计入新一天。\n处理中只显示当前实际请求；历史未完成表示日志没有成功或失败的结束记录，计入总请求，单独列出。\n首次升级按现有日志恢复，已被覆盖的旧日志无法补回，缺失用量保持未获取。";
 
     private static readonly TimeSpan CopiedLabelDuration = TimeSpan.FromMilliseconds(1600);
 
     private readonly WorkspaceService _workspaceService;
+    private readonly INavigationService _navigationService;
+    private bool _syncing;
+    private string? _displayedRouteId;
     private int _copyVersion;
 
     private ProxyWorkspace Workspace => _workspaceService.Workspace;
@@ -41,7 +45,13 @@ public partial class StatusPageViewModel : ViewModel
     private string _versionText = $"v{Global.Version}";
 
     [ObservableProperty]
-    private string _selectedChannelLabel = string.Empty;
+    private ObservableCollection<PickerItem> _channels = [];
+
+    [ObservableProperty]
+    private PickerItem? _selectedChannel;
+
+    [ObservableProperty]
+    private bool _hasChannels;
 
     [ObservableProperty]
     private bool _hasChannel;
@@ -142,20 +152,12 @@ public partial class StatusPageViewModel : ViewModel
     [ObservableProperty]
     private bool _hasRequests;
 
-    [ObservableProperty]
-    private string _maxRetriesText = string.Empty;
-
-    [ObservableProperty]
-    private string _timeoutsText = string.Empty;
-
-    [ObservableProperty]
-    private string _backoffText = string.Empty;
-
     public string RateHelp => CacheText.RateHelp;
 
-    public StatusPageViewModel(WorkspaceService workspaceService)
+    public OverviewPageViewModel(WorkspaceService workspaceService, INavigationService navigationService)
     {
         _workspaceService = workspaceService;
+        _navigationService = navigationService;
         _workspaceService.Refreshed += Refresh;
         _workspaceService.Tick += Refresh;
         Refresh();
@@ -190,10 +192,20 @@ public partial class StatusPageViewModel : ViewModel
         RunningSummary = $"{running} / {Workspace.Config.Routes.Count} 个通道在运行";
         RunningBrush = running > 0 ? ThemeBrush("SystemFillColorSuccessBrush") : ThemeBrush("TextFillColorSecondaryBrush");
 
+        RefreshChannels();
         var route = Workspace.SelectedRouteRef();
+        if (_displayedRouteId != route?.Id)
+        {
+            _displayedRouteId = route?.Id;
+            _copyVersion++;
+            CopyLabel = "本地监听";
+            CopyLabelBrush = ThemeBrush("TextFillColorSecondaryBrush");
+        }
+
         HasChannel = route is not null;
-        EmptyHint = "请在首页选择或创建通道";
-        SelectedChannelLabel = route is null ? string.Empty : $"{route.Name} · {route.ListenPort}";
+        EmptyHint = I18nService.Instance.Translate(HasChannels
+            ? "选择通道查看运行状态"
+            : "尚未创建通道，请前往通道管理添加服务商和通道");
         var state = route is null ? ServiceState.Stopped : Workspace.RouteState(route.Id);
         StateLabel = UiText.StateLabel(state);
         StateSeverity = state switch
@@ -213,6 +225,42 @@ public partial class StatusPageViewModel : ViewModel
         RefreshStatistics(route);
     }
 
+    private void RefreshChannels()
+    {
+        _syncing = true;
+        try
+        {
+            var channels = Workspace.Config.Routes.Select(route => new PickerItem(
+                route.Id, $"{route.Name} · {route.ListenPort} · {route.ProviderName}")).ToList();
+            if (Channels.Count != channels.Count || !Channels.SequenceEqual(channels))
+            {
+                Channels.Clear();
+                foreach (var channel in channels)
+                {
+                    Channels.Add(channel);
+                }
+            }
+
+            HasChannels = Channels.Count > 0;
+            SelectedChannel = Channels.FirstOrDefault(channel => channel.Key == Workspace.SelectedRoute);
+        }
+        finally
+        {
+            _syncing = false;
+        }
+    }
+
+    partial void OnSelectedChannelChanged(PickerItem? value)
+    {
+        if (_syncing || value is null || value.Key == Workspace.SelectedRoute)
+        {
+            return;
+        }
+
+        Workspace.SelectRouteAcrossProviders(value.Key);
+        _workspaceService.Flush();
+    }
+
     private void ClearRouteDetails()
     {
         Hint = string.Empty;
@@ -228,7 +276,7 @@ public partial class StatusPageViewModel : ViewModel
         var snapshot = Workspace.RouteKeepAlives.TryGetValue(route.Id, out var watchdog) ? watchdog.Snapshot() : null;
         Hint = Workspace.KeepAliveHint(route);
         HintToolTip = snapshot?.PreparationLastError is { } reason
-            ? $"最近一次准备未完成：{reason}\n将持续重试，可在首页点击“终止准备”取消。"
+            ? $"最近一次后台问答未完成：{reason}\n通道保活可在“通道管理”中调整。"
             : null;
     }
 
@@ -314,23 +362,12 @@ public partial class StatusPageViewModel : ViewModel
         }
 
         HasRequests = Requests.Count > 0;
-        MaxRetriesText = $"{route.MaxRetries} 次";
-        TimeoutsText = $"{UiText.TrimFloat(route.TimeoutSeconds)} / {UiText.TrimFloat(route.TotalTimeoutSeconds)} 秒";
-        BackoffText = $"{UiText.TrimFloat(route.BaseDelaySeconds)} – {UiText.TrimFloat(route.MaxDelaySeconds)} 秒";
     }
 
     [RelayCommand]
-    private void OnEnableAll()
+    private void OnManageChannels()
     {
-        Workspace.StartAll();
-        _workspaceService.Flush();
-    }
-
-    [RelayCommand]
-    private void OnDisableAll()
-    {
-        Workspace.StopAll();
-        _workspaceService.Flush();
+        _navigationService.Navigate(typeof(ChannelPage));
     }
 
     [RelayCommand]

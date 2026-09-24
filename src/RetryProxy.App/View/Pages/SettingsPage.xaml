@@ -17,170 +17,186 @@
       Foreground="{DynamicResource TextFillColorPrimaryBrush}"
       mc:Ignorable="d">
 
-    <StackPanel Margin="{StaticResource PagePadding}">
-        <TextBlock Margin="0,0,0,12"
-                   FontSize="16"
-                   FontWeight="SemiBold"
-                   Text="{i18n:T 软件设置}" />
+    <ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+        <StackPanel Margin="{StaticResource PagePadding}">
+            <TextBlock Margin="0,0,0,12"
+                       FontSize="16"
+                       FontWeight="SemiBold"
+                       Text="{i18n:T 软件设置}" />
 
-        <!--  界面语言  -->
-        <ui:CardControl Margin="0,0,0,12" Icon="{ui:SymbolIcon Globe24}">
-            <ui:CardControl.Header>
-                <Grid>
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="Auto" />
-                    </Grid.RowDefinitions>
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="Auto" />
-                    </Grid.ColumnDefinitions>
-                    <ui:TextBlock Grid.Row="0"
-                                  Grid.Column="0"
-                                  FontTypography="Body"
-                                  Text="{i18n:T 软件UI语言}"
-                                  TextWrapping="Wrap" />
-                    <ui:TextBlock Grid.Row="1"
-                                  Grid.Column="0"
-                                  Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
-                                  Text="UI Language"
-                                  TextWrapping="Wrap" />
-                    <ComboBox Grid.Row="0"
-                              Grid.RowSpan="2"
-                              Grid.Column="1"
-                              Width="200"
-                              Margin="0,0,36,0"
-                              DisplayMemberPath="Value"
-                              ItemsSource="{Binding LanguageDict}"
-                              SelectedItem="{Binding Config.OtherConfig.UiCultureInfoName, Converter={StaticResource CultureInfoNameToKVPConverter}, Mode=TwoWay}"
-                              SelectedValuePath="Key">
-                        <b:Interaction.Triggers>
-                            <b:EventTrigger EventName="SelectionChanged">
-                                <b:InvokeCommandAction Command="{Binding UiLanguageSelectionChangedCommand}" CommandParameter="{Binding SelectedItem, RelativeSource={RelativeSource AncestorType={x:Type ComboBox}}}" />
-                            </b:EventTrigger>
-                        </b:Interaction.Triggers>
-                    </ComboBox>
-                </Grid>
-            </ui:CardControl.Header>
-        </ui:CardControl>
+            <!--  界面语言  -->
+            <ui:CardControl Margin="0,0,0,12" Icon="{ui:SymbolIcon Globe24}">
+                <ui:CardControl.Header>
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <ui:TextBlock Grid.Row="0"
+                                      Grid.Column="0"
+                                      FontTypography="Body"
+                                      Text="{i18n:T 软件UI语言}"
+                                      TextWrapping="Wrap" />
+                        <ui:TextBlock Grid.Row="1"
+                                      Grid.Column="0"
+                                      Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
+                                      Text="UI Language"
+                                      TextWrapping="Wrap" />
+                        <ComboBox Grid.Row="0"
+                                  Grid.RowSpan="2"
+                                  Grid.Column="1"
+                                  Width="200"
+                                  Margin="0,0,36,0"
+                                  DisplayMemberPath="Value"
+                                  ItemsSource="{Binding LanguageDict}"
+                                  SelectedItem="{Binding Config.OtherConfig.UiCultureInfoName, Converter={StaticResource CultureInfoNameToKVPConverter}, Mode=TwoWay}"
+                                  SelectedValuePath="Key">
+                            <b:Interaction.Triggers>
+                                <b:EventTrigger EventName="SelectionChanged">
+                                    <b:InvokeCommandAction Command="{Binding UiLanguageSelectionChangedCommand}" CommandParameter="{Binding SelectedItem, RelativeSource={RelativeSource AncestorType={x:Type ComboBox}}}" />
+                                </b:EventTrigger>
+                            </b:Interaction.Triggers>
+                        </ComboBox>
+                    </Grid>
+                </ui:CardControl.Header>
+            </ui:CardControl>
 
-        <!--  日志目录  -->
-        <ui:CardControl Margin="0,0,0,12" Icon="{ui:SymbolIcon DocumentText24}">
-            <ui:CardControl.Header>
+            <!--  外观沿用主窗口的主题切换逻辑  -->
+            <ui:CardControl Margin="0,0,0,12" Icon="{ui:SymbolIcon Blur24}">
+                <ui:CardControl.Header>
+                    <StackPanel>
+                        <ui:TextBlock FontTypography="Body" Text="{i18n:T 外观}" />
+                        <ui:TextBlock Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
+                                      Text="{i18n:T 切换深浅主题或背景样式}" TextWrapping="Wrap" />
+                    </StackPanel>
+                </ui:CardControl.Header>
+                <ui:Button AutomationProperties.AutomationId="SwitchAppearance"
+                           Command="{Binding DataContext.SwitchBackdropCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                           Content="{i18n:T 切换外观}" Icon="{ui:SymbolIcon Blur24}" />
+            </ui:CardControl>
+
+            <!--  日志目录  -->
+            <ui:CardControl Margin="0,0,0,12" Icon="{ui:SymbolIcon DocumentText24}">
+                <ui:CardControl.Header>
+                    <StackPanel>
+                        <ui:TextBlock FontTypography="Body" Text="{i18n:T 日志目录}" TextWrapping="Wrap" />
+                        <ui:TextBlock Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
+                                      Text="{Binding LogDirectory}"
+                                      TextWrapping="Wrap" />
+                    </StackPanel>
+                </ui:CardControl.Header>
+                <ui:Button Command="{Binding OpenLogDirectoryCommand}"
+                           Content="{i18n:T 打开目录}"
+                           Icon="{ui:SymbolIcon FolderOpen24}"
+                           ToolTip="{i18n:T 运行日志 retry-proxy.log 所在目录}" />
+            </ui:CardControl>
+
+            <!--  每日统计目录  -->
+            <ui:CardControl Margin="0,0,0,12" Icon="{ui:SymbolIcon DataHistogram24}">
+                <ui:CardControl.Header>
+                    <StackPanel>
+                        <ui:TextBlock FontTypography="Body" Text="{i18n:T 每日统计目录}" TextWrapping="Wrap" />
+                        <ui:TextBlock Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
+                                      Text="{Binding StatisticsDirectory}"
+                                      TextWrapping="Wrap" />
+                    </StackPanel>
+                </ui:CardControl.Header>
+                <ui:Button Command="{Binding OpenStatisticsDirectoryCommand}"
+                           Content="{i18n:T 打开目录}"
+                           Icon="{ui:SymbolIcon FolderOpen24}"
+                           ToolTip="{i18n:T 每个通道一个子目录，按天保存 jsonl 统计记录}" />
+            </ui:CardControl>
+
+            <!--  随系统启动  -->
+            <ui:CardExpander Margin="0,0,0,12"
+                             ContentPadding="0"
+                             Icon="{ui:SymbolIcon LinkSquare24}">
+                <ui:CardExpander.Header>
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <ui:TextBlock Grid.Row="0"
+                                      Grid.Column="0"
+                                      FontTypography="Body"
+                                      Text="{i18n:T 开机自动启动}"
+                                      TextWrapping="Wrap" />
+                        <ui:TextBlock Grid.Row="1"
+                                      Grid.Column="0"
+                                      Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
+                                      Text="{i18n:T 登录系统后自动运行代理，并恢复上次启用的通道。}"
+                                      TextWrapping="Wrap" />
+                        <ui:ToggleSwitch Grid.Row="0"
+                                         Grid.RowSpan="2"
+                                         Grid.Column="1"
+                                         Margin="0,0,24,0"
+                                         IsChecked="{Binding AutoStartEnabled, Mode=TwoWay}" />
+                    </Grid>
+                </ui:CardExpander.Header>
                 <StackPanel>
-                    <ui:TextBlock FontTypography="Body" Text="{i18n:T 日志目录}" TextWrapping="Wrap" />
-                    <ui:TextBlock Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
-                                  Text="{Binding LogDirectory}"
-                                  TextWrapping="Wrap" />
+                    <Separator Margin="-18,0" BorderThickness="0,1,0,0" />
+                    <Grid Margin="16">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <ui:TextBlock Grid.Row="0"
+                                      Grid.Column="0"
+                                      FontTypography="Body"
+                                      Text="{i18n:T 启动时最小化到托盘}"
+                                      TextWrapping="Wrap" />
+                        <ui:TextBlock Grid.Row="1"
+                                      Grid.Column="0"
+                                      Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
+                                      Text="{i18n:T 启动后不显示主窗口，仅保留托盘图标}"
+                                      TextWrapping="Wrap" />
+                        <ui:ToggleSwitch Grid.Row="0"
+                                         Grid.RowSpan="2"
+                                         Grid.Column="1"
+                                         Margin="0,0,36,0"
+                                         IsChecked="{Binding Config.CommonConfig.StartMinimized, Mode=TwoWay}" />
+                    </Grid>
+                    <Separator Margin="-18,0" BorderThickness="0,1,0,0" />
+                    <Grid Margin="16">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <ui:TextBlock Grid.Row="0"
+                                      Grid.Column="0"
+                                      FontTypography="Body"
+                                      Text="{i18n:T 关闭窗口时最小化到托盘}"
+                                      TextWrapping="Wrap" />
+                        <ui:TextBlock Grid.Row="1"
+                                      Grid.Column="0"
+                                      Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
+                                      Text="{i18n:T 点击关闭按钮不退出程序，代理继续在后台运行}"
+                                      TextWrapping="Wrap" />
+                        <ui:ToggleSwitch Grid.Row="0"
+                                         Grid.RowSpan="2"
+                                         Grid.Column="1"
+                                         Margin="0,0,36,0"
+                                         IsChecked="{Binding Config.CommonConfig.ExitToTray, Mode=TwoWay}" />
+                    </Grid>
                 </StackPanel>
-            </ui:CardControl.Header>
-            <ui:Button Command="{Binding OpenLogDirectoryCommand}"
-                       Content="{i18n:T 打开目录}"
-                       Icon="{ui:SymbolIcon FolderOpen24}"
-                       ToolTip="{i18n:T 运行日志 retry-proxy.log 所在目录}" />
-        </ui:CardControl>
-
-        <!--  每日统计目录  -->
-        <ui:CardControl Margin="0,0,0,12" Icon="{ui:SymbolIcon DataHistogram24}">
-            <ui:CardControl.Header>
-                <StackPanel>
-                    <ui:TextBlock FontTypography="Body" Text="{i18n:T 每日统计目录}" TextWrapping="Wrap" />
-                    <ui:TextBlock Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
-                                  Text="{Binding StatisticsDirectory}"
-                                  TextWrapping="Wrap" />
-                </StackPanel>
-            </ui:CardControl.Header>
-            <ui:Button Command="{Binding OpenStatisticsDirectoryCommand}"
-                       Content="{i18n:T 打开目录}"
-                       Icon="{ui:SymbolIcon FolderOpen24}"
-                       ToolTip="{i18n:T 每个通道一个子目录，按天保存 jsonl 统计记录}" />
-        </ui:CardControl>
-
-        <!--  随系统启动  -->
-        <ui:CardExpander Margin="0,0,0,12"
-                         ContentPadding="0"
-                         Icon="{ui:SymbolIcon LinkSquare24}">
-            <ui:CardExpander.Header>
-                <Grid>
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="Auto" />
-                    </Grid.RowDefinitions>
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="Auto" />
-                    </Grid.ColumnDefinitions>
-                    <ui:TextBlock Grid.Row="0"
-                                  Grid.Column="0"
-                                  FontTypography="Body"
-                                  Text="{i18n:T 开机自动启动}"
-                                  TextWrapping="Wrap" />
-                    <ui:TextBlock Grid.Row="1"
-                                  Grid.Column="0"
-                                  Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
-                                  Text="{i18n:T 登录系统后自动运行代理，并恢复上次启用的通道。}"
-                                  TextWrapping="Wrap" />
-                    <ui:ToggleSwitch Grid.Row="0"
-                                     Grid.RowSpan="2"
-                                     Grid.Column="1"
-                                     Margin="0,0,24,0"
-                                     IsChecked="{Binding AutoStartEnabled, Mode=TwoWay}" />
-                </Grid>
-            </ui:CardExpander.Header>
-            <StackPanel>
-                <Separator Margin="-18,0" BorderThickness="0,1,0,0" />
-                <Grid Margin="16">
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="Auto" />
-                    </Grid.RowDefinitions>
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="Auto" />
-                    </Grid.ColumnDefinitions>
-                    <ui:TextBlock Grid.Row="0"
-                                  Grid.Column="0"
-                                  FontTypography="Body"
-                                  Text="{i18n:T 启动时最小化到托盘}"
-                                  TextWrapping="Wrap" />
-                    <ui:TextBlock Grid.Row="1"
-                                  Grid.Column="0"
-                                  Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
-                                  Text="{i18n:T 启动后不显示主窗口，仅保留托盘图标}"
-                                  TextWrapping="Wrap" />
-                    <ui:ToggleSwitch Grid.Row="0"
-                                     Grid.RowSpan="2"
-                                     Grid.Column="1"
-                                     Margin="0,0,36,0"
-                                     IsChecked="{Binding Config.CommonConfig.StartMinimized, Mode=TwoWay}" />
-                </Grid>
-                <Separator Margin="-18,0" BorderThickness="0,1,0,0" />
-                <Grid Margin="16">
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="Auto" />
-                    </Grid.RowDefinitions>
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="Auto" />
-                    </Grid.ColumnDefinitions>
-                    <ui:TextBlock Grid.Row="0"
-                                  Grid.Column="0"
-                                  FontTypography="Body"
-                                  Text="{i18n:T 关闭窗口时最小化到托盘}"
-                                  TextWrapping="Wrap" />
-                    <ui:TextBlock Grid.Row="1"
-                                  Grid.Column="0"
-                                  Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
-                                  Text="{i18n:T 点击关闭按钮不退出程序，代理继续在后台运行}"
-                                  TextWrapping="Wrap" />
-                    <ui:ToggleSwitch Grid.Row="0"
-                                     Grid.RowSpan="2"
-                                     Grid.Column="1"
-                                     Margin="0,0,36,0"
-                                     IsChecked="{Binding Config.CommonConfig.ExitToTray, Mode=TwoWay}" />
-                </Grid>
-            </StackPanel>
-        </ui:CardExpander>
-    </StackPanel>
+            </ui:CardExpander>
+        </StackPanel>
+    </ScrollViewer>
 </Page>

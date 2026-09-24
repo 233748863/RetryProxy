@@ -48,17 +48,19 @@ function Invoke-TrayDoubleClick([IntPtr]$Tray) {
     Send-TrayWindowMessage $Tray $TrayCallback $TrayIconId $LButtonDblClk
 }
 
-function Find-UiElement([IntPtr]$Window, [string]$Name) {
+function Find-UiElement([IntPtr]$Window, [string]$Name, [switch]$ById) {
     $root = [System.Windows.Automation.AutomationElement]::FromHandle($Window)
-    $condition = [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, $Name)
+    $property = if ($ById) { [System.Windows.Automation.AutomationElement]::AutomationIdProperty } else { [System.Windows.Automation.AutomationElement]::NameProperty }
+    $condition = [System.Windows.Automation.PropertyCondition]::new($property, $Name)
     return $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
 }
 
-function Invoke-UiElement([IntPtr]$Window, [string]$Name) {
+function Invoke-UiElement([IntPtr]$Window, [string]$Name, [switch]$ById) {
     # 同名元素可能有多个（导航项本身 + 它内部的文本），取第一个带可操作模式的。
-    Wait-TrayCondition { $null -ne (Find-UiElement $Window $Name) } "UI element was not available: $Name"
+    Wait-TrayCondition { $null -ne (Find-UiElement $Window $Name -ById:$ById) } "UI element was not available: $Name"
     $root = [System.Windows.Automation.AutomationElement]::FromHandle($Window)
-    $condition = [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, $Name)
+    $property = if ($ById) { [System.Windows.Automation.AutomationElement]::AutomationIdProperty } else { [System.Windows.Automation.AutomationElement]::NameProperty }
+    $condition = [System.Windows.Automation.PropertyCondition]::new($property, $Name)
     $types = @()
     foreach ($element in $root.FindAll([System.Windows.Automation.TreeScope]::Descendants, $condition)) {
         $types += $element.Current.ControlType.ProgrammaticName
@@ -291,6 +293,44 @@ try {
         $trayWindow = [RetryProxyTrayVerification]::FindWindowByTitlePrefix($process.Id, 'wpfui_th_')
         Wait-TrayCondition { [RetryProxyTrayVerification]::IsUsable($mainWindow) } 'Main window did not become usable'
 
+        # 首页卡片直达运行概况；单通道与批量启停统一在通道管理，切换与重启保留统计。
+        Wait-TrayCondition { $null -ne (Find-UiElement $mainWindow 'HomeOverviewCard' -ById) } 'Startup did not open the application home'
+        Invoke-UiElement $mainWindow 'HomeOverviewCard' -ById
+        Wait-TrayCondition { $null -ne (Find-UiElement $mainWindow 'ManageChannels' -ById) } 'Home card did not open the overview'
+        foreach ($id in @('ToggleChannel', 'EnableAllChannels', 'DisableAllChannels', 'ChannelKeepAlive')) {
+            if ($null -ne (Find-UiElement $mainWindow $id -ById)) { throw "Management control is still on the overview: $id" }
+        }
+        Wait-TrayCondition {
+            $counter = Find-UiElement $mainWindow 'OverviewTotalRequests' -ById
+            return $null -ne $counter -and $counter.Current.Name -eq [string]$cacheHealth.metrics.total_requests
+        } 'Overview did not show the current channel statistics'
+        Invoke-NavigationItem $mainWindow '通道管理'
+        Wait-TrayCondition { $null -ne (Find-UiElement $mainWindow 'ToggleChannel' -ById) } 'Channel management did not load'
+        foreach ($operation in @('single', 'all')) {
+            $stopControl = if ($operation -eq 'single') { 'ToggleChannel' } else { 'DisableAllChannels' }
+            $startControl = if ($operation -eq 'single') { 'ToggleChannel' } else { 'EnableAllChannels' }
+            Invoke-UiElement $mainWindow $stopControl -ById
+            Wait-TrayCondition {
+                try { $null = Invoke-RestMethod "http://127.0.0.1:$proxyPort/_retry/health" -TimeoutSec 1; return $false }
+                catch { return $true }
+            } "Channel management failed to stop the proxy: $operation"
+            Wait-TrayCondition { (Find-UiElement $mainWindow $startControl -ById).Current.IsEnabled } 'Channel start did not become available'
+            Invoke-UiElement $mainWindow $startControl -ById
+            Wait-TrayCondition {
+                try { $null = Invoke-RestMethod "http://127.0.0.1:$proxyPort/_retry/health" -TimeoutSec 1; return $true }
+                catch { return $false }
+            } "Channel management failed to start the proxy: $operation"
+        }
+        Invoke-NavigationItem $mainWindow '软件设置'
+        Wait-TrayCondition { $null -ne (Find-UiElement $mainWindow 'SwitchAppearance' -ById) } 'Appearance setting is missing'
+        Invoke-UiElement $mainWindow 'SwitchAppearance' -ById
+        Invoke-NavigationItem $mainWindow '运行概况'
+        Wait-TrayCondition {
+            $counter = Find-UiElement $mainWindow 'OverviewTotalRequests' -ById
+            return $null -ne $counter -and $counter.Current.Name -eq [string]$cacheHealth.metrics.total_requests
+        } 'Navigation or channel restart lost statistics'
+        Write-Host 'Overview, channel management, single/all start-stop and software settings checks passed.'
+
         foreach ($maximized in @($false, $true)) {
             $command = if ($maximized) { 0xF030 } else { 0xF120 }
             Send-TrayWindowMessage $mainWindow 0x0112 $command
@@ -326,7 +366,7 @@ try {
         Wait-TrayCondition { $null -ne (Find-UiElement $mainWindow '缓存明细 · E2E') } 'Cache page did not show the channel title'
         $cachePageResult = Invoke-RestMethod "http://127.0.0.1:$proxyPort/test" -TimeoutSec 5
         if ($process.HasExited -or $cachePageResult.result -ne 'proxy-ok') { throw 'Opening the cache page interrupted the proxy' }
-        Invoke-NavigationItem $mainWindow '首页'
+        Invoke-NavigationItem $mainWindow '运行概况'
         Write-Host 'Cache page check passed.'
 
         $client = [Net.Http.HttpClient]::new()

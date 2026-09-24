@@ -39,10 +39,16 @@
                                       TextWrapping="Wrap" />
                     </StackPanel>
                 </ui:CardControl.Header>
-                <ui:Button Command="{Binding OpenUrlCommand}"
-                           CommandParameter="{x:Static pages:AboutPageViewModel.RepositoryUrl}"
-                           Content="{i18n:T 项目主页}"
-                           Icon="{ui:SymbolIcon Open24}" />
+                <StackPanel>
+                    <ui:Button Command="{Binding OpenUrlCommand}"
+                               CommandParameter="{x:Static pages:AboutPageViewModel.RepositoryUrl}"
+                               Content="{i18n:T 项目主页}"
+                               Icon="{ui:SymbolIcon Open24}" />
+                    <ui:Button Margin="0,6,0,0"
+                               Command="{Binding OpenDocumentationCommand}"
+                               Content="{i18n:T 文档与教程}"
+                               Icon="{ui:SymbolIcon Library24}" />
+                </StackPanel>
             </ui:CardControl>
 
             <!--  依赖致谢  -->

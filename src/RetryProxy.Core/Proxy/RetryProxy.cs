@@ -164,6 +164,7 @@ public sealed class RetryProxy
 
         Cli.CliReply? reply = null;
         string? failure = null;
+        var timedOut = false;
         string? interruption = null;
         using (var timeout = new CancellationTokenSource())
         using (var linked = CancellationTokenSource.CreateLinkedTokenSource(Cancel, probe.Cancel, timeout.Token))
@@ -196,6 +197,7 @@ public sealed class RetryProxy
             }
             else if (reply is null && failure is null)
             {
+                timedOut = true;
                 failure = $"CLI 本轮执行超过 {StreamLifecycle.Format(timeoutSeconds)} 秒，已终止并清理会话";
             }
         }
@@ -215,7 +217,7 @@ public sealed class RetryProxy
 
         if (failure is not null)
         {
-            probe.Fail(failure);
+            probe.Fail(failure, timedOut && preparing);
             logger.Warn($"{prefix}，响应未完成：{failure}，耗时 {elapsed:F2} 秒，{afterFailure}");
             return;
         }

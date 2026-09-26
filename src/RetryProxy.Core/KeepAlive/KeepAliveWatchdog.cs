@@ -81,6 +81,8 @@ public sealed class KeepAliveSnapshot
     public TimeSpan? PreparationRetryAfter { get; init; }
 
     public string? PreparationLastError { get; init; }
+
+    public bool PreparationLastErrorIsTimeout { get; init; }
 }
 
 /// <summary>一次准备的结局（对应 PreparationResult）。</summary>
@@ -88,7 +90,7 @@ public abstract record PreparationResult
 {
     public sealed record Ready : PreparationResult;
 
-    public sealed record Failed(string Reason) : PreparationResult;
+    public sealed record Failed(string Reason, bool TimedOut = false) : PreparationResult;
 
     public sealed record Cancelled : PreparationResult;
 }
@@ -231,6 +233,7 @@ public sealed class KeepAliveWatchdog
     private ulong _preparationAttempts;
     private long? _preparationRetryAtMs;
     private string? _preparationLastError;
+    private bool _preparationLastErrorIsTimeout;
     private readonly Queue<PreparationResult> _preparationResults = new();
     private int _runningServices;
     private Action? _notifier;
@@ -323,6 +326,7 @@ public sealed class KeepAliveWatchdog
         _preparation = null;
         _preparationRetryAtMs = null;
         _preparationLastError = null;
+        _preparationLastErrorIsTimeout = false;
         if (_flight is { } flight && preparation == PreparationState.Running(flight.Id))
         {
             if (flight.Result is PreparationResult.Ready)
@@ -417,6 +421,7 @@ public sealed class KeepAliveWatchdog
             _credential = null;
             _preparationRetryAtMs = null;
             _preparationLastError = null;
+            _preparationLastErrorIsTimeout = false;
             _preparationResults.Clear();
         }
 
@@ -585,6 +590,7 @@ public sealed class KeepAliveWatchdog
             _preparationAttempts = reusableFlight is null ? 0UL : 1UL;
             _preparationRetryAtMs = null;
             _preparationLastError = null;
+            _preparationLastErrorIsTimeout = false;
         }
 
         Wake();
@@ -825,19 +831,20 @@ public sealed class KeepAliveWatchdog
                 PreparationAttempts = _preparationAttempts,
                 PreparationRetryAfter = _preparationRetryAtMs is { } retryAt ? TimeSpan.FromMilliseconds(Math.Max(0, retryAt - NowMs)) : null,
                 PreparationLastError = _preparationLastError,
+                PreparationLastErrorIsTimeout = _preparationLastErrorIsTimeout,
             };
         }
     }
 
     // ---------------------------------------------------------------- 探测回调（由 KeepAliveProbe 调用）
 
-    internal void FinishUnsuccessfully(ulong flightId, string reason, bool interrupted)
+    internal void FinishUnsuccessfully(ulong flightId, string reason, bool interrupted, bool timedOut = false)
     {
         lock (_lock)
         {
             if (_flight is { Result: null } flight && flight.Id == flightId)
             {
-                flight.Result = new PreparationResult.Failed(reason);
+                flight.Result = new PreparationResult.Failed(reason, timedOut);
                 if (interrupted)
                 {
                     _totals.Interrupted = Saturating(_totals.Interrupted);
@@ -933,6 +940,7 @@ public sealed class KeepAliveWatchdog
                         _preparation = null;
                         _preparationRetryAtMs = null;
                         _preparationLastError = null;
+                        _preparationLastErrorIsTimeout = false;
                         _preparationResults.Enqueue(new PreparationResult.Ready());
                     }
                     else
@@ -940,6 +948,7 @@ public sealed class KeepAliveWatchdog
                         _preparation = PreparationState.Pending;
                         _preparationRetryAtMs = NowMs + (long)PreparationRetryDelay(Random.Shared).TotalMilliseconds;
                         _preparationLastError = flight.Result is PreparationResult.Failed failed ? failed.Reason : "本轮已让行或中断，等待继续准备";
+                        _preparationLastErrorIsTimeout = flight.Result is PreparationResult.Failed { TimedOut: true };
                         Wake();
                     }
                 }
@@ -1074,7 +1083,7 @@ public sealed class KeepAliveProbe : IDisposable
         }
     }
 
-    public void Fail(string reason) => _watchdog.FinishUnsuccessfully(FlightId, reason, interrupted: false);
+    public void Fail(string reason, bool timedOut = false) => _watchdog.FinishUnsuccessfully(FlightId, reason, interrupted: false, timedOut);
 
     public void Interrupt(string reason) => _watchdog.FinishUnsuccessfully(FlightId, reason, interrupted: true);
 

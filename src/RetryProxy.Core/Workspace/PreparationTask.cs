@@ -35,7 +35,15 @@ public sealed class PreparationTask
     public bool CanStart => State is ServiceState.Stopped or ServiceState.Error;
     public bool CanStop => State is ServiceState.Starting or ServiceState.Running;
     public bool IsPreparing => CanStop && (Pending || Snapshot?.Preparing == true);
-    public string? LastError => Failure ?? Service?.StartupError ?? Snapshot?.PreparationLastError;
+    public string? LastError
+    {
+        get
+        {
+            var snapshot = Snapshot;
+            return Failure ?? Service?.StartupError
+                ?? (snapshot is { Preparing: true, PreparationLastErrorIsTimeout: true } ? null : snapshot?.PreparationLastError);
+        }
+    }
 
     public string Status => State switch
     {

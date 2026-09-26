@@ -301,6 +301,33 @@ public sealed class PreparationWorkspaceTests
     }
 
     [Fact]
+    public void RoutinePreparationTimeoutDoesNotAppearAsAnError()
+    {
+        using var fixture = new Fixture();
+        var watchdog = new KeepAliveWatchdog(false, TimeSpan.FromMinutes(5));
+        using var registration = watchdog.RegisterService(KeepAliveFlavor.Codex);
+        var task = new PreparationTask(Options(), 1)
+        {
+            Service = new ProxyService(fixture.Logger, "prepare").WithKeepAliveWatchdog(watchdog),
+        };
+        Assert.True(watchdog.RequestPreparation());
+        using (var probe = watchdog.BeginDueProbe()!)
+        {
+            probe.Fail("CLI 本轮执行超过 630 秒，已终止并清理会话", timedOut: true);
+        }
+        Assert.True(watchdog.Snapshot().PreparationLastErrorIsTimeout);
+        Assert.Null(task.LastError);
+
+        watchdog.SetPreparationRetryNowForTest();
+        using (var probe = watchdog.BeginDueProbe()!)
+        {
+            probe.Fail("供应商拒绝访问");
+        }
+        Assert.False(watchdog.Snapshot().PreparationLastErrorIsTimeout);
+        Assert.Equal("供应商拒绝访问", task.LastError);
+    }
+
+    [Fact]
     public void FailuresKeepRetryingUntilStoppedAndShutdownClearsAllTemporaryState()
     {
         using var fixture = new Fixture();

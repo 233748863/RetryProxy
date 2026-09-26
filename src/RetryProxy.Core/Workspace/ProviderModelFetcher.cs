@@ -10,18 +10,29 @@ using System.Threading;
 using System.Threading.Tasks;
 using RetryProxy.Core.Config;
 using RetryProxy.Core.Cli;
+using RetryProxy.Core.Service;
 
 namespace RetryProxy.Core.Workspace;
 
 public static class ProviderModelFetcher
 {
     private const int MaxResponseBytes = 1024 * 1024;
-    private static readonly HttpClient Client = new(new HttpClientHandler { AllowAutoRedirect = false });
+    private static readonly HttpClient Client = CreateClient(SystemProxyResolver.Shared);
     private static readonly string[] CompatibilitySuffixes =
     {
         "/api/claudecode", "/api/anthropic", "/apps/anthropic", "/api/coding",
         "/claudecode", "/anthropic", "/step_plan", "/coding", "/claude",
     };
+
+    internal static HttpClient CreateClient(IProxyResolver proxyResolver) => new(new SocketsHttpHandler
+    {
+        AllowAutoRedirect = false,
+        AutomaticDecompression = DecompressionMethods.None,
+        UseCookies = false,
+        UseProxy = true,
+        Proxy = new ResolverWebProxy(proxyResolver),
+        PooledConnectionIdleTimeout = TimeSpan.FromSeconds(90),
+    });
 
     public static Task<IReadOnlyList<string>> FetchAsync(ProviderEndpoint provider, string apiKey, ClientType clientType, CancellationToken cancellationToken,
         ClaudeAuthMode authMode = ClaudeAuthMode.Bearer)

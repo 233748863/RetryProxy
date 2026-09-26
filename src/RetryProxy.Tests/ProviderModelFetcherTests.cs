@@ -8,7 +8,9 @@ using System.Threading;
 using System.Threading.Tasks;
 using RetryProxy.Core.Cli;
 using RetryProxy.Core.Config;
+using RetryProxy.Core.Service;
 using RetryProxy.Core.Workspace;
+using RetryProxy.Tests.Support;
 using Xunit;
 
 namespace RetryProxy.Tests;
@@ -61,6 +63,25 @@ public class ProviderModelFetcherTests
         result = await ProviderModelFetcher.FetchAsync(
             new ProviderEndpoint("codex", "https://api.test/v1"), "secret", ClientType.Codex, codexClient, CancellationToken.None);
         Assert.Equal(new[] { "codex-chosen" }, result);
+    }
+
+    [Fact]
+    public async Task FetchUsesSuppliedProxyResolverForSuppliedProviderUrl()
+    {
+        await using var upstream = await FakeUpstream.StartAsync(async context =>
+        {
+            Assert.Equal("/v1/models", context.Request.Path);
+            Assert.Equal("Bearer secret", context.Request.Headers.Authorization.ToString());
+            await Upstream.Text(context, 200, "{\"data\":[{\"id\":\"model-from-proxy\"}]}");
+        });
+        var resolver = new FixedProxyResolver(new Uri(upstream.BaseUrl));
+        using var client = ProviderModelFetcher.CreateClient(resolver);
+
+        var models = await ProviderModelFetcher.FetchAsync(
+            new ProviderEndpoint("manual", "http://model-provider.test"), "secret", ClientType.Codex, client, CancellationToken.None);
+
+        Assert.Equal(new[] { "model-from-proxy" }, models);
+        Assert.True(resolver.ResolveCalls > 0);
     }
 
     [Fact]
@@ -201,5 +222,16 @@ public class ProviderModelFetcherTests
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
             => Task.FromResult(responder(request));
+    }
+
+    private sealed class FixedProxyResolver(Uri proxyUrl) : IProxyResolver
+    {
+        public int ResolveCalls { get; private set; }
+
+        public ProxyDecision Resolve(Uri target)
+        {
+            ResolveCalls++;
+            return new ProxyDecision(proxyUrl, true);
+        }
     }
 }

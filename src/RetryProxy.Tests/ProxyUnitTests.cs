@@ -26,6 +26,19 @@ namespace RetryProxy.Tests;
 /// <summary>对应 proxy.rs 里的单元测试。</summary>
 public class ProxyUnitTests
 {
+    [Fact]
+    public void ClaudeToolChoiceKeepsDeclaredToolsButPreventsTheirUse()
+    {
+        const string body = "{\"model\":\"claude-opus-5-5\",\"tools\":[{\"name\":\"Read\"}],\"tool_choice\":{\"type\":\"auto\"}}";
+        using var modified = JsonDocument.Parse(HeaderRules.DisableClaudeToolUse(Encoding.UTF8.GetBytes(body)));
+        Assert.Equal("none", modified.RootElement.GetProperty("tool_choice").GetProperty("type").GetString());
+        Assert.Equal("Read", modified.RootElement.GetProperty("tools")[0].GetProperty("name").GetString());
+        foreach (var unchanged in new[] { "not JSON", "{\"tools\":[]}", "{\"model\":\"claude-opus-5-5\"}" })
+        {
+            Assert.Equal(unchanged, Encoding.UTF8.GetString(HeaderRules.DisableClaudeToolUse(Encoding.UTF8.GetBytes(unchanged)).Span));
+        }
+    }
+
     private static Pipeline Proxy(double baseDelay, double maxDelay, Func<double>? random = null)
     {
         var config = Configs.Default();

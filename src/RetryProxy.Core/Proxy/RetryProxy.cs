@@ -658,6 +658,11 @@ public sealed class RetryProxy
         var method = ctx.Method;
         var safePath = ctx.SafePath;
         var headers = HeaderRules.CopyRequestHeaders(requestHeaders);
+        if (_localAccessKey is not null && Config.ClientType == ClientType.Claude
+            && HttpMethods.IsPost(method) && KeepAliveFlavorExtensions.Detect(safePath) == KeepAliveFlavor.Claude)
+        {
+            body = HeaderRules.DisableClaudeToolUse(body);
+        }
         if (_upstreamApiKey is { } apiKey)
         {
             headers.Remove("authorization");

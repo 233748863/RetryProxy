@@ -87,6 +87,18 @@ internal static class HeaderRules
         return output;
     }
 
+    public static ReadOnlyMemory<byte> DisableClaudeToolUse(ReadOnlyMemory<byte> body)
+    {
+        if (JsonText.TryParseNode(body.Span) is not JsonObject request
+            || request["tools"] is not JsonArray { Count: > 0 })
+        {
+            return body;
+        }
+
+        request["tool_choice"] = new JsonObject { ["type"] = "none" };
+        return JsonSerializer.SerializeToUtf8Bytes(request, JsonText.Compact);
+    }
+
     /// <summary>去掉客户端元数据里代理自己塞进去的保活标记；不是那种结构的正文原样返回。</summary>
     public static ReadOnlyMemory<byte> StripInternalRequestMetadata(ReadOnlyMemory<byte> body)
     {

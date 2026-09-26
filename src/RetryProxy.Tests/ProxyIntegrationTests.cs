@@ -42,6 +42,50 @@ public class ProxyIntegrationTests
         return config;
     }
 
+    [Fact]
+    public async Task TemporaryClaudeOnlyForcesNoToolCallsAndPreservesDeclaredTools()
+    {
+        var requests = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        await using var upstream = await FakeUpstream.StartAsync(async context =>
+        {
+            using var reader = new StreamReader(context.Request.Body);
+            requests.Enqueue(await reader.ReadToEndAsync());
+            await Upstream.Text(context, 200, "ok");
+        });
+        using var logger = ProxyLogger.Silent(TempLogDirectory());
+        var normalPort = FreePort();
+        var temporaryPort = FreePort();
+        var normal = new ProxyService(logger, "normal");
+        var temporary = new ProxyService(logger, "prepare").WithUpstreamApiKey("sk-upstream", "local-key");
+        var normalConfig = ServiceConfig(upstream.BaseUrl, normalPort, 0);
+        normalConfig.ClientType = ClientType.Claude;
+        var temporaryConfig = ServiceConfig(upstream.BaseUrl, temporaryPort, 0);
+        temporaryConfig.ClientType = ClientType.Claude;
+        normal.Start(normalConfig, TimeSpan.FromSeconds(5));
+        temporary.Start(temporaryConfig, TimeSpan.FromSeconds(5));
+        try
+        {
+            using var client = TestClient.Create();
+            const string body = "{\"model\":\"claude-opus-5-5\",\"tools\":[{\"name\":\"Read\"}]}";
+            using var ordinary = await TestClient.Send(client, HttpMethod.Post, $"http://127.0.0.1:{normalPort}/v1/messages", body);
+            using var prepared = await TestClient.Send(client, HttpMethod.Post, $"http://127.0.0.1:{temporaryPort}/v1/messages", body,
+                headers: new System.Collections.Generic.Dictionary<string, string> { ["authorization"] = "Bearer local-key" });
+            Assert.Equal(HttpStatusCode.OK, ordinary.StatusCode);
+            Assert.Equal(HttpStatusCode.OK, prepared.StatusCode);
+            var forwarded = requests.ToArray();
+            using var normalRequest = JsonDocument.Parse(forwarded[0]);
+            using var temporaryRequest = JsonDocument.Parse(forwarded[1]);
+            Assert.False(normalRequest.RootElement.TryGetProperty("tool_choice", out _));
+            Assert.Equal("none", temporaryRequest.RootElement.GetProperty("tool_choice").GetProperty("type").GetString());
+            Assert.Equal(normalRequest.RootElement.GetProperty("tools").GetRawText(), temporaryRequest.RootElement.GetProperty("tools").GetRawText());
+        }
+        finally
+        {
+            temporary.Stop(TimeSpan.FromSeconds(5));
+            normal.Stop(TimeSpan.FromSeconds(5));
+        }
+    }
+
     [Theory]
     [InlineData(ClientType.Codex, "Authorization", "Bearer sk-upstream")]
     [InlineData(ClientType.Claude, "Authorization", "Bearer sk-upstream")]

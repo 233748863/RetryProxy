@@ -15,6 +15,44 @@ namespace RetryProxy.Tests;
 [Collection("cli-environment")]
 public sealed class CliReasoningEffortTests
 {
+    [Fact]
+    public async Task TemporaryClaudeAdvertisesBuiltInToolsWithoutEnablingUserTools()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var directory = Directory.CreateTempSubdirectory("retry-proxy-tools-");
+        try
+        {
+            var script = Path.Combine(directory.FullName, "capture.ps1");
+            var capturePath = Path.Combine(directory.FullName, "capture.json");
+            File.WriteAllText(script, CaptureCli, new UTF8Encoding(true));
+            var command = new CliCommand("powershell.exe");
+            command.Arguments.AddRange(new[] { "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script });
+            command.Environment.Add(new("RETRY_PROXY_TEST_EFFORT_CAPTURE", capturePath));
+            var credential = CliCredential.Create("sk-local", "http://127.0.0.1:18081", "claude-opus-5-5[1m]");
+            using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+            using var session = await CliSession.StartAsync(KeepAliveFlavor.Claude, "tool-test", command, credential,
+                ReasoningEffort.Default, cancellation.Token);
+            while (!File.Exists(capturePath))
+            {
+                await Task.Delay(20, cancellation.Token);
+            }
+
+            var capture = JsonNode.Parse(await File.ReadAllTextAsync(capturePath, cancellation.Token))!;
+            var arguments = capture["arguments"]!.AsArray().Select(value => value!.GetValue<string>()).ToArray();
+            Assert.DoesNotContain("--tools", arguments);
+            Assert.Contains("--strict-mcp-config", arguments);
+            Assert.Contains("claude-opus-5-5[1m]", arguments);
+        }
+        finally
+        {
+            directory.Delete(recursive: true);
+        }
+    }
+
     // 捕获真正到达子进程的参数和环境；Codex 完成握手，Claude 等待输入，不调用真实供应商。
     private const string CaptureCli = """
         $utf8 = [Text.UTF8Encoding]::new($false)
@@ -85,6 +123,7 @@ public sealed class CliReasoningEffortTests
             }
             else
             {
+                Assert.Contains("--tools", arguments);
                 var settings = JsonNode.Parse(arguments[Array.IndexOf(arguments, "--settings") + 1])!;
                 if (expected is null)
                 {

@@ -258,12 +258,18 @@ internal sealed class CliSession : IDisposable
             foreach (var argument in new[]
                      {
                          "--print", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
-                         "--include-partial-messages", "--no-session-persistence", "--tools", string.Empty,
+                         "--include-partial-messages", "--no-session-persistence",
                          "--strict-mcp-config", "--mcp-config", "{\"mcpServers\":{}}", "--disable-slash-commands",
                          "--settings", settings, "--append-system-prompt", InterviewInstructions,
                      })
             {
                 start.ArgumentList.Add(argument);
+            }
+
+            if (credential is not { ApiKey.Length: > 0 })
+            {
+                start.ArgumentList.Add("--tools");
+                start.ArgumentList.Add(string.Empty);
             }
 
             if (credential is { ApiKey.Length: > 0 })

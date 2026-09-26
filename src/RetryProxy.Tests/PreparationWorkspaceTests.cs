@@ -83,6 +83,18 @@ public sealed class PreparationWorkspaceTests
         return task;
     }
 
+    [Fact]
+    public void CustomProviderUsesOnlyTheSuppliedAddressAndKey()
+    {
+        using var fixture = new Fixture();
+        fixture.Preparations.LocalProviderResolver = _ => throw new InvalidOperationException("不应读取本机供应商");
+        var credential = fixture.Preparations.ResolveCredential(Options(PrepareMode.CustomProvider, ClientType.Claude));
+
+        Assert.Equal("https://custom.example/v1", credential.BaseUrl);
+        Assert.Equal("sk-custom-fixture", credential.ApiKey);
+        Assert.Equal(ClaudeAuthMode.Bearer, credential.AuthMode);
+    }
+
     [Theory]
     [InlineData(PrepareMode.LocalProvider, ClientType.Codex)]
     [InlineData(PrepareMode.LocalProvider, ClientType.Claude)]

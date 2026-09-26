@@ -2,6 +2,7 @@ using System;
 using System.Threading;
 using System.Threading.Tasks;
 using RetryProxy.Core.Config;
+using RetryProxy.Core.Cli;
 using RetryProxy.Core.KeepAlive;
 using RetryProxy.Core.Logging;
 using RetryProxy.Core.Metrics;
@@ -37,6 +38,7 @@ public sealed class ProxyService
     private Task? _task;
     private Action? _notifier;
     private string? _upstreamApiKey;
+    private ClaudeAuthMode _upstreamAuthMode;
     private string? _localAccessKey;
     private RouteLogger? _routeLogger;
 
@@ -132,10 +134,11 @@ public sealed class ProxyService
         return this;
     }
 
-    public ProxyService WithUpstreamApiKey(string apiKey, string localAccessKey)
+    public ProxyService WithUpstreamApiKey(string apiKey, string localAccessKey, ClaudeAuthMode authMode = ClaudeAuthMode.Bearer)
     {
         _upstreamApiKey = apiKey;
         _localAccessKey = localAccessKey;
+        _upstreamAuthMode = authMode;
         return this;
     }
 
@@ -290,7 +293,7 @@ public sealed class ProxyService
             proxy = new RetryProxyPipeline(config, _logger, Metrics, cancel.Token)
                 .WithRouteLogger(logger)
                 .WithKeepAliveWatchdog(KeepAlive)
-                .WithUpstreamApiKey(_upstreamApiKey, _localAccessKey);
+                .WithUpstreamApiKey(_upstreamApiKey, _localAccessKey, _upstreamAuthMode);
         }
         catch (ConfigException error)
         {

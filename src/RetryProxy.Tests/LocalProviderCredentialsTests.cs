@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using RetryProxy.Core.Cli;
 using RetryProxy.Core.Workspace;
 using Xunit;
 
@@ -78,6 +79,13 @@ public class LocalProviderCredentialsTests
             var credential = LocalProviderCredentials.ReadClaude(directory);
             Assert.Equal("https://claude.example", credential.BaseUrl);
             Assert.Equal("sk-claude", credential.ApiKey);
+            Assert.Equal(ClaudeAuthMode.Bearer, credential.AuthMode);
+
+            File.WriteAllText(Path.Combine(directory, "settings.json"),
+                """{"env":{"ANTHROPIC_BASE_URL":"https://claude.example","ANTHROPIC_API_KEY":"sk-api-key"}}""");
+            credential = LocalProviderCredentials.ReadClaude(directory);
+            Assert.Equal("sk-api-key", credential.ApiKey);
+            Assert.Equal(ClaudeAuthMode.ApiKey, credential.AuthMode);
         }
         finally
         {

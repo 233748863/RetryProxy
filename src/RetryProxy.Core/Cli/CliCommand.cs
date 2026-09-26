@@ -105,11 +105,12 @@ public sealed class CliCommand
 /// </summary>
 public sealed class CliCredential : IEquatable<CliCredential>
 {
-    private CliCredential(string apiKey, string baseUrl, string? model)
+    private CliCredential(string apiKey, string baseUrl, string? model, ClaudeAuthMode authMode)
     {
         ApiKey = apiKey;
         BaseUrl = baseUrl;
         Model = model;
+        AuthMode = authMode;
     }
 
     public string ApiKey { get; }
@@ -119,8 +120,10 @@ public sealed class CliCredential : IEquatable<CliCredential>
 
     public string? Model { get; }
 
+    public ClaudeAuthMode AuthMode { get; }
+
     /// <summary>校验并规范化；不合法时抛 <see cref="CliException"/>，消息可直接展示。</summary>
-    public static CliCredential Create(string apiKey, string baseUrl, string? model = null)
+    public static CliCredential Create(string apiKey, string baseUrl, string? model = null, ClaudeAuthMode authMode = ClaudeAuthMode.Bearer)
     {
         apiKey = apiKey.Trim();
         if (apiKey.Length == 0)
@@ -142,10 +145,10 @@ public sealed class CliCredential : IEquatable<CliCredential>
             throw new CliException("准备入口地址不能为空");
         }
 
-        return new CliCredential(apiKey, baseUrl, model);
+        return new CliCredential(apiKey, baseUrl, model, authMode);
     }
 
-    public static CliCredential CreateLocal(string baseUrl, string? model = null)
+    public static CliCredential CreateLocal(string baseUrl, string? model = null, ClaudeAuthMode authMode = ClaudeAuthMode.Bearer)
     {
         baseUrl = baseUrl.Trim().TrimEnd('/');
         if (baseUrl.Length == 0)
@@ -153,14 +156,14 @@ public sealed class CliCredential : IEquatable<CliCredential>
             throw new CliException("准备入口地址不能为空");
         }
 
-        return new CliCredential(string.Empty, baseUrl, model);
+        return new CliCredential(string.Empty, baseUrl, model, authMode);
     }
 
-    public bool Equals(CliCredential? other) => other is not null && ApiKey == other.ApiKey && BaseUrl == other.BaseUrl && Model == other.Model;
+    public bool Equals(CliCredential? other) => other is not null && ApiKey == other.ApiKey && BaseUrl == other.BaseUrl && Model == other.Model && AuthMode == other.AuthMode;
 
     public override bool Equals(object? obj) => Equals(obj as CliCredential);
 
-    public override int GetHashCode() => HashCode.Combine(ApiKey, BaseUrl, Model);
+    public override int GetHashCode() => HashCode.Combine(ApiKey, BaseUrl, Model, AuthMode);
 
     /// <summary>调试输出绝不带出密钥。</summary>
     public override string ToString() => $"CliCredential {{ ApiKey = <redacted>, BaseUrl = {BaseUrl}, Model = {Model} }}";

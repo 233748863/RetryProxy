@@ -6,6 +6,7 @@ using System.Net.Http;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using RetryProxy.Core.Cli;
 using RetryProxy.Core.Config;
 using RetryProxy.Core.Workspace;
 using Xunit;
@@ -39,8 +40,9 @@ public class ProviderModelFetcherTests
         using var client = new HttpClient(new StubHandler(request =>
         {
             paths.Add(request.RequestUri!.AbsolutePath);
-            Assert.Equal("secret", request.Headers.GetValues("x-api-key").Single());
-            Assert.Equal("2023-06-01", request.Headers.GetValues("anthropic-version").Single());
+            Assert.Equal("Bearer secret", request.Headers.GetValues("Authorization").Single());
+            Assert.False(request.Headers.Contains("x-api-key"));
+            Assert.False(request.Headers.Contains("anthropic-version"));
             return request.RequestUri.AbsolutePath == "/models"
                 ? JsonResponse("{\"data\":[{\"id\":\"claude-chosen\"}]}")
                 : new HttpResponseMessage(HttpStatusCode.NotFound);
@@ -78,21 +80,21 @@ public class ProviderModelFetcherTests
     [Theory]
     [InlineData(HttpStatusCode.Unauthorized)]
     [InlineData(HttpStatusCode.Forbidden)]
-    public async Task ClaudeRetriesTheSameModelEndpointWithBearerWhenApiKeyAuthIsRejected(HttpStatusCode status)
+    public async Task ClaudeRetriesTheSameModelEndpointWithApiKeyWhenBearerAuthIsRejected(HttpStatusCode status)
     {
         var requests = new List<string>();
         using var client = new HttpClient(new StubHandler(request =>
         {
             requests.Add(request.RequestUri!.AbsoluteUri);
-            Assert.Equal("2023-06-01", request.Headers.GetValues("anthropic-version").Single());
+            Assert.False(request.Headers.Contains("anthropic-version"));
             if (requests.Count == 1)
             {
-                Assert.Equal("secret", request.Headers.GetValues("x-api-key").Single());
-                Assert.False(request.Headers.Contains("Authorization"));
+                Assert.Equal("Bearer secret", request.Headers.GetValues("Authorization").Single());
+                Assert.False(request.Headers.Contains("x-api-key"));
                 return new HttpResponseMessage(status);
             }
-            Assert.Equal("Bearer secret", request.Headers.GetValues("Authorization").Single());
-            Assert.False(request.Headers.Contains("x-api-key"));
+            Assert.Equal("secret", request.Headers.GetValues("x-api-key").Single());
+            Assert.False(request.Headers.Contains("Authorization"));
             return JsonResponse("{\"data\":[{\"id\":\"claude-opus-5-5\"}]}");
         }));
 
@@ -101,6 +103,72 @@ public class ProviderModelFetcherTests
 
         Assert.Equal(new[] { "claude-opus-5-5" }, models);
         Assert.Equal(new[] { "https://api.test/api/anthropic/v1/models", "https://api.test/api/anthropic/v1/models" }, requests);
+    }
+
+    [Fact]
+    public async Task ClaudeUsesConfiguredApiKeyHeaderBeforeFallback()
+    {
+        var attempts = 0;
+        using var client = new HttpClient(new StubHandler(request =>
+        {
+            attempts++;
+            Assert.Equal("secret", request.Headers.GetValues("x-api-key").Single());
+            Assert.False(request.Headers.Contains("Authorization"));
+            return JsonResponse("{\"data\":[{\"id\":\"claude-sonnet\"}]}");
+        }));
+
+        var models = await ProviderModelFetcher.FetchAsync(new ProviderEndpoint("claude", "https://api.test"),
+            "secret", ClientType.Claude, client, CancellationToken.None, ClaudeAuthMode.ApiKey);
+        Assert.Equal(new[] { "claude-sonnet" }, models);
+        Assert.Equal(1, attempts);
+    }
+
+    [Theory]
+    [InlineData(ClientType.Claude)]
+    [InlineData(ClientType.Codex)]
+    public async Task HtmlGatewayForbiddenDoesNotRetryOrChangeAuthentication(ClientType clientType)
+    {
+        var attempts = 0;
+        using var client = new HttpClient(new StubHandler(request =>
+        {
+            attempts++;
+            Assert.Equal("/v1/models", request.RequestUri!.AbsolutePath);
+            Assert.Equal("Bearer secret", request.Headers.GetValues("Authorization").Single());
+            Assert.False(request.Headers.Contains("x-api-key"));
+            return new HttpResponseMessage(HttpStatusCode.Forbidden)
+            {
+                Content = new StringContent("<html>blocked</html>", Encoding.UTF8, "text/html"),
+            };
+        }));
+
+        var error = await Assert.ThrowsAsync<WorkspaceException>(() => ProviderModelFetcher.FetchAsync(
+            new ProviderEndpoint("provider", "https://api.test"), "secret", clientType, client, CancellationToken.None));
+        Assert.Contains("网关", error.Message);
+        Assert.Equal(1, attempts);
+    }
+
+    [Fact]
+    public async Task PersistentHtmlGatewayForbiddenReportsBlockWithoutExposingResponse()
+    {
+        var attempts = 0;
+        using var client = new HttpClient(new StubHandler(request =>
+        {
+            attempts++;
+            Assert.Equal("Bearer secret", request.Headers.GetValues("Authorization").Single());
+            Assert.False(request.Headers.Contains("x-api-key"));
+            return new HttpResponseMessage(HttpStatusCode.Forbidden)
+            {
+                Content = new StringContent("<html>Denied by http_auto_ratelimit secret upstream detail</html>", Encoding.UTF8, "text/html"),
+            };
+        }));
+
+        var error = await Assert.ThrowsAsync<WorkspaceException>(() => ProviderModelFetcher.FetchAsync(
+            new ProviderEndpoint("claude", "https://api.test"), "secret", ClientType.Claude, client, CancellationToken.None));
+        Assert.Equal(1, attempts);
+        Assert.Contains("自动限流", error.Message);
+        Assert.Contains("403", error.Message);
+        Assert.DoesNotContain("secret", error.Message);
+        Assert.DoesNotContain("upstream", error.Message);
     }
 
     [Theory]

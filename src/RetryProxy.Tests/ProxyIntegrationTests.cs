@@ -8,6 +8,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
+using RetryProxy.Core.Cli;
 using RetryProxy.Core.Config;
 using RetryProxy.Core.Logging;
 using RetryProxy.Core.Service;
@@ -41,6 +42,7 @@ public class ProxyIntegrationTests
 
     [Theory]
     [InlineData(ClientType.Codex, "Authorization", "Bearer sk-upstream")]
+    [InlineData(ClientType.Claude, "Authorization", "Bearer sk-upstream")]
     [InlineData(ClientType.Claude, "x-api-key", "sk-upstream")]
     public async Task TemporaryServiceOverridesOnlyItsOwnUpstreamAuthentication(ClientType clientType, string expectedHeader, string expectedValue)
     {
@@ -55,7 +57,8 @@ public class ProxyIntegrationTests
         var normalPort = FreePort();
         var temporaryPort = FreePort();
         var normal = new ProxyService(logger, "normal");
-        var temporary = new ProxyService(logger, "prepare").WithUpstreamApiKey("sk-upstream", "local-key");
+        var temporary = new ProxyService(logger, "prepare").WithUpstreamApiKey("sk-upstream", "local-key",
+            expectedHeader == "x-api-key" ? ClaudeAuthMode.ApiKey : ClaudeAuthMode.Bearer);
         var normalConfig = ServiceConfig(upstream.BaseUrl, normalPort, 0);
         normalConfig.ClientType = clientType;
         var temporaryConfig = ServiceConfig(upstream.BaseUrl, temporaryPort, 0);
@@ -89,6 +92,50 @@ public class ProxyIntegrationTests
         {
             temporary.Stop(TimeSpan.FromSeconds(5));
             normal.Stop(TimeSpan.FromSeconds(5));
+        }
+    }
+
+    [Theory]
+    [InlineData("x-api-key", "client-key")]
+    [InlineData("Authorization", "Bearer client-key")]
+    public async Task OrdinaryClaudeChannelPreservesClientAuthenticationOnForbidden(
+        string initialHeader, string initialValue)
+    {
+        var requests = new System.Collections.Concurrent.ConcurrentQueue<(string Authorization, string ApiKey)>();
+        var attempts = 0;
+        await using var upstream = await FakeUpstream.StartAsync(async context =>
+        {
+            requests.Enqueue((context.Request.Headers.Authorization.ToString(), context.Request.Headers["x-api-key"].ToString()));
+            if (Interlocked.Increment(ref attempts) == 1)
+            {
+                await Upstream.Text(context, 403, "denied");
+                return;
+            }
+
+            await Upstream.Text(context, 200, "ok");
+        });
+
+        using var logger = ProxyLogger.Silent(TempLogDirectory());
+        var proxyPort = FreePort();
+        var service = new ProxyService(logger, "claude-auth");
+        var config = ServiceConfig(upstream.BaseUrl, proxyPort, 0);
+        config.ClientType = ClientType.Claude;
+        service.Start(config, TimeSpan.FromSeconds(5));
+        try
+        {
+            using var client = TestClient.Create();
+            using var response = await TestClient.Send(client, HttpMethod.Get, $"http://127.0.0.1:{proxyPort}/v1/models",
+                headers: new System.Collections.Generic.Dictionary<string, string> { [initialHeader] = initialValue });
+
+            Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+            var seen = requests.ToArray();
+            Assert.Single(seen);
+            Assert.Equal(initialHeader.Equals("Authorization", StringComparison.OrdinalIgnoreCase) ? initialValue : string.Empty, seen[0].Authorization);
+            Assert.Equal(initialHeader.Equals("x-api-key", StringComparison.OrdinalIgnoreCase) ? initialValue : string.Empty, seen[0].ApiKey);
+        }
+        finally
+        {
+            service.Stop(TimeSpan.FromSeconds(5));
         }
     }
 

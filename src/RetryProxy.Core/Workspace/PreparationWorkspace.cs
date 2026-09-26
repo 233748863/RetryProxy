@@ -132,7 +132,7 @@ public sealed class PreparationWorkspace
                 throw new WorkspaceException("供应商地址指向独立准备服务，请填写实际供应商地址");
             }
             runtime.Validate(true);
-            credential = CliCredential.Create(Convert.ToHexString(RandomNumberGenerator.GetBytes(24)), runtime.LocalUrl, options.SelectedModel);
+            credential = CliCredential.Create(Convert.ToHexString(RandomNumberGenerator.GetBytes(24)), runtime.LocalUrl, options.SelectedModel, upstream.AuthMode);
         }
         catch (Exception error) when (error is WorkspaceException or ConfigException or CliException or SocketException)
         {
@@ -154,7 +154,7 @@ public sealed class PreparationWorkspace
         var service = new ProxyService(_logger, marker)
             .WithKeepAliveWatchdog(watchdog)
             .WithRouteLogger(logger)
-            .WithUpstreamApiKey(upstream.ApiKey, credential.ApiKey);
+            .WithUpstreamApiKey(upstream.ApiKey, credential.ApiKey, upstream.AuthMode);
         service.SetUiNotifier(_uiNotifier);
         service.RequestStart(runtime);
         if (task is null)

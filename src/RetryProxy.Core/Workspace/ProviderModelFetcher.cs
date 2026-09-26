@@ -4,10 +4,12 @@ using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
+using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using RetryProxy.Core.Config;
+using RetryProxy.Core.Cli;
 
 namespace RetryProxy.Core.Workspace;
 
@@ -21,10 +23,12 @@ public static class ProviderModelFetcher
         "/claudecode", "/anthropic", "/step_plan", "/coding", "/claude",
     };
 
-    public static Task<IReadOnlyList<string>> FetchAsync(ProviderEndpoint provider, string apiKey, ClientType clientType, CancellationToken cancellationToken)
-        => FetchAsync(provider, apiKey, clientType, Client, cancellationToken);
+    public static Task<IReadOnlyList<string>> FetchAsync(ProviderEndpoint provider, string apiKey, ClientType clientType, CancellationToken cancellationToken,
+        ClaudeAuthMode authMode = ClaudeAuthMode.Bearer)
+        => FetchAsync(provider, apiKey, clientType, Client, cancellationToken, authMode);
 
-    internal static async Task<IReadOnlyList<string>> FetchAsync(ProviderEndpoint provider, string apiKey, ClientType clientType, HttpClient client, CancellationToken cancellationToken)
+    internal static async Task<IReadOnlyList<string>> FetchAsync(ProviderEndpoint provider, string apiKey, ClientType clientType, HttpClient client,
+        CancellationToken cancellationToken, ClaudeAuthMode authMode = ClaudeAuthMode.Bearer)
     {
         foreach (var url in UrlCandidates(provider.BaseUrl))
         {
@@ -34,13 +38,14 @@ public static class ProviderModelFetcher
             HttpResponseMessage response;
             try
             {
-                response = await SendRequestAsync(client, url, apiKey, clientType, clientType != ClientType.Claude, requestToken).ConfigureAwait(false);
-                if (clientType == ClientType.Claude && response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
+                var useBearer = clientType != ClientType.Claude || authMode == ClaudeAuthMode.Bearer;
+                response = await SendRequestAsync(client, url, apiKey, useBearer, requestToken).ConfigureAwait(false);
+                if (clientType == ClientType.Claude && response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden
+                    && !IsGatewayForbidden(response))
                 {
-                    // 部分中转站的 Claude 请求接受 x-api-key，但模型目录只接受 OpenAI 兼容的 Bearer。
-                    // 仅在同一个地址认证失败时更换格式；不跟随重定向，也不在日志中保留密钥或响应正文。
+                    // 仅在同一个地址认证失败时切换认证格式，不跟随重定向。
                     response.Dispose();
-                    response = await SendRequestAsync(client, url, apiKey, clientType, useBearer: true, requestToken).ConfigureAwait(false);
+                    response = await SendRequestAsync(client, url, apiKey, !useBearer, requestToken).ConfigureAwait(false);
                 }
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
@@ -61,6 +66,32 @@ public static class ProviderModelFetcher
 
                 if (!response.IsSuccessStatusCode)
                 {
+                    if (IsGatewayForbidden(response))
+                    {
+                        try
+                        {
+                            await using var stream = await response.Content.ReadAsStreamAsync(requestToken).ConfigureAwait(false);
+                            var sample = new byte[8192];
+                            var count = await stream.ReadAsync(sample.AsMemory(), requestToken).ConfigureAwait(false);
+                            if (Encoding.UTF8.GetString(sample, 0, count).Contains("http_auto_ratelimit", StringComparison.OrdinalIgnoreCase))
+                            {
+                                throw new WorkspaceException("获取模型失败：服务商安全网关返回 HTTP 403（触发自动限流），请检查网络出口或稍后再试");
+                            }
+                        }
+                        catch (IOException)
+                        {
+                        }
+                        catch (HttpRequestException)
+                        {
+                        }
+                        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+                        {
+                            throw new WorkspaceException("获取模型超时，请检查服务商地址及网络连接");
+                        }
+
+                        throw new WorkspaceException("获取模型失败：服务商网关返回 HTTP 403（网页拦截），请检查网络出口；可手动输入模型");
+                    }
+
                     throw new WorkspaceException($"获取模型失败：服务商返回 HTTP {(int)response.StatusCode}，请检查地址及 API Key");
                 }
 
@@ -105,15 +136,15 @@ public static class ProviderModelFetcher
         throw new WorkspaceException("服务商未提供模型列表接口（HTTP 404/405），请检查服务商地址");
     }
 
+    private static bool IsGatewayForbidden(HttpResponseMessage response) =>
+        response.StatusCode == HttpStatusCode.Forbidden
+        && string.Equals(response.Content.Headers.ContentType?.MediaType, "text/html", StringComparison.OrdinalIgnoreCase);
+
     private static async Task<HttpResponseMessage> SendRequestAsync(HttpClient client, string url, string apiKey,
-        ClientType clientType, bool useBearer, CancellationToken cancellationToken)
+        bool useBearer, CancellationToken cancellationToken)
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, url);
         request.Headers.TryAddWithoutValidation(useBearer ? "Authorization" : "x-api-key", useBearer ? $"Bearer {apiKey}" : apiKey);
-        if (clientType == ClientType.Claude)
-        {
-            request.Headers.TryAddWithoutValidation("anthropic-version", "2023-06-01");
-        }
         return await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
     }
 

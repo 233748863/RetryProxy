@@ -13,6 +13,7 @@ using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Features;
 using RetryProxy.Core.Cache;
+using RetryProxy.Core.Cli;
 using RetryProxy.Core.Config;
 using RetryProxy.Core.Internal;
 using RetryProxy.Core.KeepAlive;
@@ -49,6 +50,7 @@ public sealed class RetryProxy
     private readonly HttpClient _client;
     private readonly PromptCache _promptCache;
     private string? _upstreamApiKey;
+    private ClaudeAuthMode _upstreamAuthMode;
     private string? _localAccessKey;
     private Func<double> _randomValue = () => Random.Shared.NextDouble();
 
@@ -119,10 +121,11 @@ public sealed class RetryProxy
         return this;
     }
 
-    public RetryProxy WithUpstreamApiKey(string? apiKey, string? localAccessKey)
+    public RetryProxy WithUpstreamApiKey(string? apiKey, string? localAccessKey, ClaudeAuthMode authMode = ClaudeAuthMode.Bearer)
     {
         _upstreamApiKey = apiKey;
         _localAccessKey = localAccessKey;
+        _upstreamAuthMode = authMode;
         return this;
     }
 
@@ -656,8 +659,14 @@ public sealed class RetryProxy
             headers.Remove("authorization");
             headers.Remove("x-api-key");
             headers.Remove("api-key");
-            headers.Set(Config.ClientType == ClientType.Claude ? "x-api-key" : "authorization",
-                Config.ClientType == ClientType.Claude ? apiKey : $"Bearer {apiKey}");
+            if (Config.ClientType == ClientType.Claude && _upstreamAuthMode == ClaudeAuthMode.ApiKey)
+            {
+                headers.Set("x-api-key", apiKey);
+            }
+            else
+            {
+                headers.Set("authorization", $"Bearer {apiKey}");
+            }
         }
         var metadata = RequestMetadata.Parse(body);
         var pathAndQuery = rawQuery.Length > 0 ? $"{safePath}?{rawQuery}" : safePath;
@@ -671,6 +680,10 @@ public sealed class RetryProxy
         {
             headers.Set("accept-encoding", "identity");
         }
+        var alternateClaudeHeaders = _upstreamApiKey is not null && Config.ClientType == ClientType.Claude
+            ? ClaudeAuthenticationFallback(headers)
+            : null;
+        var usedAlternateClaudeAuthentication = false;
 
         var targetUrl = BuildTargetUrl(Config.UpstreamBaseUrl, safePath, rawQuery);
         if (!Uri.TryCreate(targetUrl, UriKind.Absolute, out var parsedTarget))
@@ -709,6 +722,26 @@ public sealed class RetryProxy
             var reader = new ChunkReader(upstream.Source);
             try
             {
+                if (status is 401 or 403 && alternateClaudeHeaders is not null && !usedAlternateClaudeAuthentication)
+                {
+                    reader.Dispose();
+                    headers = alternateClaudeHeaders;
+                    usedAlternateClaudeAuthentication = true;
+                    // 认证方式切换不受配置的重试次数限制；即使 max_retries=0，也必须给另一种格式一次机会。
+                    if (totalAttempts < ulong.MaxValue)
+                    {
+                        totalAttempts++;
+                    }
+
+                    ctx.Logger.Info($"[{requestId}] 上游 HTTP {status} 拒绝当前 Claude 鉴权，改用另一种认证格式重试一次");
+                    if (keepAliveTemplate is not null)
+                    {
+                        keepAliveTemplate = new KeepAliveTemplate(method, pathAndQuery, headers, body);
+                    }
+
+                    continue;
+                }
+
                 var retryable = IsRetryableStatus(status);
                 if (retryable && attempt < maxRetries)
                 {
@@ -1358,6 +1391,44 @@ public sealed class RetryProxy
     internal static bool IsRetryableStatus(int status)
     {
         return Array.IndexOf(RetryableStatusCodes, status) >= 0 || status is >= 500 and <= 599;
+    }
+
+    /// <summary>
+    /// Claude Code and CCSwitch default to Bearer; some compatible providers still accept only x-api-key.
+    /// Returns the other format for the current request, or null when no conversion is possible.
+    /// </summary>
+    private static HeaderList? ClaudeAuthenticationFallback(HeaderList headers)
+    {
+        var apiKey = headers.Get("x-api-key") ?? headers.Get("api-key");
+        if (!string.IsNullOrWhiteSpace(apiKey))
+        {
+            var fallback = headers.Clone();
+            fallback.Remove("authorization");
+            fallback.Remove("x-api-key");
+            fallback.Remove("api-key");
+            fallback.Set("authorization", $"Bearer {apiKey}");
+            return fallback;
+        }
+
+        var authorization = headers.Get("authorization");
+        const string bearerPrefix = "Bearer ";
+        if (authorization is null || !authorization.StartsWith(bearerPrefix, StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        var token = authorization[bearerPrefix.Length..].Trim();
+        if (token.Length == 0)
+        {
+            return null;
+        }
+
+        var alternate = headers.Clone();
+        alternate.Remove("authorization");
+        alternate.Remove("x-api-key");
+        alternate.Remove("api-key");
+        alternate.Set("x-api-key", token);
+        return alternate;
     }
 
     internal static string BuildTargetUrl(string baseUrl, string path, string query)

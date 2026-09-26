@@ -41,6 +41,10 @@ public class CliTests
         Assert.Equal("sk-test-secret", settings["env"]!["ANTHROPIC_AUTH_TOKEN"]!.GetValue<string>());
         Assert.Equal(string.Empty, settings["env"]!["ANTHROPIC_API_KEY"]!.GetValue<string>());
         Assert.Equal("http://127.0.0.1:18081", settings["env"]!["ANTHROPIC_BASE_URL"]!.GetValue<string>());
+        var apiKeyCredential = CliCredential.Create("sk-test-secret", "http://127.0.0.1:18081", authMode: ClaudeAuthMode.ApiKey);
+        settings = Json(CliSession.ClaudeCredentialSettings(apiKeyCredential));
+        Assert.Equal(string.Empty, settings["env"]!["ANTHROPIC_AUTH_TOKEN"]!.GetValue<string>());
+        Assert.Equal("sk-test-secret", settings["env"]!["ANTHROPIC_API_KEY"]!.GetValue<string>());
     }
 
     [Fact]

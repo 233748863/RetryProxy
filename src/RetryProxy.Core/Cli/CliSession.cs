@@ -150,8 +150,8 @@ internal sealed class CliSession : IDisposable
             ["disableAllHooks"] = true,
             ["env"] = new JsonObject
             {
-                ["ANTHROPIC_AUTH_TOKEN"] = credential.ApiKey,
-                ["ANTHROPIC_API_KEY"] = string.Empty,
+                ["ANTHROPIC_AUTH_TOKEN"] = credential.AuthMode == ClaudeAuthMode.Bearer ? credential.ApiKey : string.Empty,
+                ["ANTHROPIC_API_KEY"] = credential.AuthMode == ClaudeAuthMode.ApiKey ? credential.ApiKey : string.Empty,
                 ["ANTHROPIC_BASE_URL"] = credential.BaseUrl,
             },
         });
@@ -275,8 +275,17 @@ internal sealed class CliSession : IDisposable
                 }
 
                 // 进程环境与 --settings 双重覆盖：无论 CLI 以哪一层为准，都只会用本次输入的 Key 与本通道地址。
-                start.Environment["ANTHROPIC_AUTH_TOKEN"] = credential.ApiKey;
-                start.Environment.Remove("ANTHROPIC_API_KEY");
+                if (credential.AuthMode == ClaudeAuthMode.Bearer)
+                {
+                    start.Environment["ANTHROPIC_AUTH_TOKEN"] = credential.ApiKey;
+                    start.Environment.Remove("ANTHROPIC_API_KEY");
+                }
+                else
+                {
+                    start.Environment["ANTHROPIC_API_KEY"] = credential.ApiKey;
+                    start.Environment.Remove("ANTHROPIC_AUTH_TOKEN");
+                }
+
                 start.Environment["ANTHROPIC_BASE_URL"] = credential.BaseUrl;
             }
 

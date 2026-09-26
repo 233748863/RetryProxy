@@ -92,13 +92,15 @@ internal static class LocalProviderCredentials
 
             var baseUrl = ReadJsonString(environment, "ANTHROPIC_BASE_URL");
             var token = ReadJsonString(environment, "ANTHROPIC_AUTH_TOKEN");
-            var key = string.IsNullOrWhiteSpace(token) ? ReadJsonString(environment, "ANTHROPIC_API_KEY") : token;
+            var apiKey = ReadJsonString(environment, "ANTHROPIC_API_KEY");
+            var useBearer = !string.IsNullOrWhiteSpace(token);
+            var key = useBearer ? token : apiKey;
             if (string.IsNullOrWhiteSpace(baseUrl) || string.IsNullOrWhiteSpace(key))
             {
                 throw new WorkspaceException(".claude 当前供应商缺少地址或 API Key，请检查 CCC Switch 配置");
             }
 
-            return Validate(key, baseUrl);
+            return Validate(key, baseUrl, useBearer ? ClaudeAuthMode.Bearer : ClaudeAuthMode.ApiKey);
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException)
         {
@@ -141,13 +143,13 @@ internal static class LocalProviderCredentials
         return null;
     }
 
-    private static CliCredential Validate(string key, string baseUrl)
+    private static CliCredential Validate(string key, string baseUrl, ClaudeAuthMode authMode = ClaudeAuthMode.Bearer)
     {
         try
         {
             var provider = new ProviderEndpoint("本机当前供应商", baseUrl);
             provider.Validate();
-            return CliCredential.Create(key, provider.BaseUrl);
+            return CliCredential.Create(key, provider.BaseUrl, authMode: authMode);
         }
         catch (Exception error) when (error is CliException or ConfigException)
         {

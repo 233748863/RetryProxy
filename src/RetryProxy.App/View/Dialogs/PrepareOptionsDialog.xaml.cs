@@ -127,11 +127,13 @@ public partial class PrepareOptionsDialog : ContentDialog
 
         ProviderEndpoint provider;
         string apiKey;
+        ClaudeAuthMode authMode;
         try
         {
             var credential = _workspace.ResolveCredential(_state);
             provider = new ProviderEndpoint("独立准备", credential.BaseUrl);
             apiKey = credential.ApiKey;
+            authMode = credential.AuthMode;
         }
         catch (WorkspaceException error)
         {
@@ -150,7 +152,7 @@ public partial class PrepareOptionsDialog : ContentDialog
         ModelsLoadingText.Visibility = Visibility.Visible;
         try
         {
-            var models = await ProviderModelFetcher.FetchAsync(provider, apiKey, _state.ClientType, cancellation.Token);
+            var models = await ProviderModelFetcher.FetchAsync(provider, apiKey, _state.ClientType, cancellation.Token, authMode);
             if (!ReferenceEquals(_modelFetch, cancellation))
             {
                 return;

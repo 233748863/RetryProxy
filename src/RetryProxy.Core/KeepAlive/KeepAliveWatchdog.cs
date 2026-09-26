@@ -237,7 +237,7 @@ public sealed class KeepAliveWatchdog
     private readonly Queue<PreparationResult> _preparationResults = new();
     private int _runningServices;
     private Action? _notifier;
-    private Func<int> _questionPicker = () => Random.Shared.Next(JavaQuestions.Count);
+    private Func<int> _questionPicker = () => Random.Shared.Next(KeepAliveQuestions.Count);
 
     private readonly SemaphoreSlim _wake = new(0, int.MaxValue);
     private readonly object _wakeLock = new();
@@ -775,8 +775,8 @@ public sealed class KeepAliveWatchdog
                 return null;
             }
 
-            var questionIndex = ((_questionPicker() % JavaQuestions.Count) + JavaQuestions.Count) % JavaQuestions.Count;
-            var question = JavaQuestions.All[questionIndex];
+            var questionIndex = ((_questionPicker() % KeepAliveQuestions.Count) + KeepAliveQuestions.Count) % KeepAliveQuestions.Count;
+            var question = KeepAliveQuestions.All[questionIndex];
             var credential = _credential;
             if (_session is not null && (!Equals(_session.Credential, credential) || _session.ReasoningEffort != _reasoningEffort))
             {

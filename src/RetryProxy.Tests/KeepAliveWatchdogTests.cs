@@ -867,14 +867,14 @@ public class KeepAliveWatchdogTests
     }
 
     [Fact]
-    public void JavaQuestionsAreUniqueAndReadyToAsk()
+    public void KeepAliveQuestionsAreUniqueAndRequestShortRepliesWithoutTools()
     {
-        Assert.Equal(250, JavaQuestions.Count);
-        Assert.Equal(250, new HashSet<string>(JavaQuestions.All).Count);
-        Assert.All(JavaQuestions.All, question =>
+        Assert.Equal(20, KeepAliveQuestions.Count);
+        Assert.Equal(20, new HashSet<string>(KeepAliveQuestions.All).Count);
+        Assert.All(KeepAliveQuestions.All, question =>
         {
-            Assert.EndsWith("？", question);
-            Assert.True(Encoding.UTF8.GetByteCount(question) < 256);
+            Assert.Matches("^只回答“[^”]{1,3}”，不调用任何工具。$", question);
+            Assert.True(Encoding.UTF8.GetByteCount(question) < 64);
         });
     }
 }

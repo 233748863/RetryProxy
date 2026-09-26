@@ -160,7 +160,7 @@ public sealed class RetryProxy
         var configuration = _localAccessKey is not null ? "经后台临时代理转发" : probe.UsesSuppliedKey ? "使用本次输入的 Key 经本通道转发" : "沿用本机客户端配置";
         var preparing = probe.IsPreparation;
         var logger = Logger.WithActivity(preparing ? LogActivity.Preparation : LogActivity.KeepAlive);
-        logger.Info($"[会话 {sessionLabel}] 第 {probe.Turn} 轮，随机题号 {probe.QuestionIndex + 1}/250，{probe.Flavor.Label()} CLI，{configuration}，问题：{probe.Question}");
+        logger.Info($"[会话 {sessionLabel}] 第 {probe.Turn} 轮，随机题号 {probe.QuestionIndex + 1}/{KeepAliveQuestions.Count}，{probe.Flavor.Label()} CLI，{configuration}，问题：{probe.Question}");
 
         Cli.CliReply? reply = null;
         string? failure = null;

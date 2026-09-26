@@ -91,7 +91,7 @@ internal sealed class CliReply
 internal sealed class CliSession : IDisposable
 {
     private const int MaxEventBytes = 2 * 1024 * 1024;
-    internal const string InterviewInstructions = "请用中文回答当前这道初级 Java 面试题，解释准确，控制在二到五句话，不要反问，不调用工具，不读取或修改任何文件。";
+    internal const string InterviewInstructions = "只输出题目指定的内容，不解释，不调用工具。";
     internal const string CodexCredentialEnv = "RETRY_PROXY_PREPARE_KEY";
     internal const string CodexCredentialProvider = "retry_proxy_prepare";
 

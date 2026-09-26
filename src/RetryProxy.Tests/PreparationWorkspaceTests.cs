@@ -332,8 +332,11 @@ public sealed class PreparationWorkspaceTests
             Assert.Equal("Bearer sk-custom-fixture", context.Request.Headers.Authorization.ToString());
             var body = await Upstream.ReadBody(context);
             Assert.DoesNotContain("retry_proxy_keepalive", body);
-            Interlocked.Increment(ref requests);
-            await Upstream.EventStream(context, "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n");
+            var requestNumber = Interlocked.Increment(ref requests);
+            var response = requestNumber == 1
+                ? "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"usage\":{\"input_tokens\":40,\"output_tokens\":12},\"output\":[{\"content\":[{\"type\":\"output_text\",\"text\":\"准备成功\"}]}]}}\n\n"
+                : "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n";
+            await Upstream.EventStream(context, response);
         });
         var command = new CliCommand("powershell.exe");
         command.Arguments.AddRange(new[] { "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", Path.Combine(AppContext.BaseDirectory, "fixtures", "preparation-codex.ps1") });
@@ -343,7 +346,7 @@ public sealed class PreparationWorkspaceTests
         var options = Options(PrepareMode.CustomProvider);
         options.ProviderUrl = upstream.BaseUrl;
         var task = Start(fixture.Preparations, options);
-        WaitFor(fixture.Preparations, () => task.Snapshot!.Enabled);
+        WaitFor(fixture.Preparations, () => task.Snapshot!.Enabled && !task.IsPreparing);
         Assert.False(task.IsPreparing);
         Assert.Equal(1UL, task.Snapshot!.Totals.Completed);
         Assert.Equal(52UL, task.Snapshot.ContextTokens);

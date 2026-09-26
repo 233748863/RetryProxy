@@ -39,16 +39,20 @@ public class RequestLoggingTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task IndependentPreparationLogsOneDetailedWarningPerFailedRequest(bool streamError)
+    public async Task IndependentPreparationRetriesFailedResponsesUntilDeadline(bool streamError)
     {
         var watchdog = new KeepAliveWatchdog(false, TimeSpan.FromMinutes(5));
         using var registration = watchdog.RegisterService(KeepAliveFlavor.Codex);
         Assert.True(watchdog.RequestPreparation());
+        var config = LoggingConfig(5.0, 0);
+        config.TotalTimeoutSeconds = 0.5;
+        config.BaseDelaySeconds = 0.05;
+        config.MaxDelaySeconds = 0.05;
         await using var fixture = await LifecycleProxy.StartAsync(
             context => streamError
                 ? Upstream.Text(context, 500, "data: {\"type\":\"error\",\"error\":{\"code\":\"get_channel_failed\"}}\n\n", "text/event-stream")
                 : Upstream.Text(context, 500, "upstream unavailable", "text/plain"),
-            LoggingConfig(5.0, 0),
+            config,
             proxy => proxy.WithRouteLogger(proxy.Logger.Base.Preparation("准备 1 · Codex"))
                 .WithKeepAliveWatchdog(watchdog)
                 .WithUpstreamApiKey("sk-upstream", "sk-local"));
@@ -64,15 +68,15 @@ public class RequestLoggingTests
                     ["authorization"] = "Bearer sk-local",
                     ["x-retry-keepalive"] = marker,
                 });
-            Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
+            Assert.Equal(HttpStatusCode.GatewayTimeout, response.StatusCode);
             Assert.NotNull(await TestClient.TryReadAll(response));
-            var line = Assert.Single(await CompletedLogs(fixture));
-            Assert.Contains("WARNING [一键准备][准备 1 · Codex][准备][请求 ", line);
-            Assert.Contains("POST /v1/responses -> 上游 HTTP 500", line);
-            Assert.Contains("首字", line);
+            var lines = await CompletedLogs(fixture);
+            Assert.Contains(lines, line => line.Contains("WARNING [一键准备][准备 1 · Codex][准备][请求 ")
+                && line.Contains("POST /v1/responses -> 上游 HTTP 500") && line.Contains("未交给客户端"));
+            Assert.Contains(lines, line => line.Contains("HTTP 504"));
             if (streamError)
             {
-                Assert.Contains("get_channel_failed", line);
+                Assert.Contains(lines, line => line.Contains("get_channel_failed"));
             }
         }
         finally
@@ -91,12 +95,16 @@ public class RequestLoggingTests
         Assert.True(watchdog.RequestPreparation());
         var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var config = LoggingConfig(5.0, 0);
+        config.TotalTimeoutSeconds = 0.5;
+        config.BaseDelaySeconds = 0.05;
+        config.MaxDelaySeconds = 0.05;
         await using var fixture = await LifecycleProxy.StartAsync(async context =>
         {
             reached.TrySetResult();
             await release.Task.WaitAsync(TimeSpan.FromSeconds(5));
             await Upstream.Text(context, 500, "upstream unavailable");
-        }, LoggingConfig(5.0, 0), proxy => proxy
+        }, config, proxy => proxy
             .WithRouteLogger(proxy.Logger.Base.Preparation("准备 2 · Codex"))
             .WithKeepAliveWatchdog(watchdog)
             .WithUpstreamApiKey("sk-upstream", "sk-local"));
@@ -131,9 +139,9 @@ public class RequestLoggingTests
             release.TrySetResult();
             using var response = await pending;
             await response.Content.ReadAsStringAsync();
-            var first = Assert.Single(await CompletedLogs(fixture));
-            Assert.Contains("[一键准备][准备 2 · Codex][准备][请求 ", first);
-            Assert.DoesNotContain("[独立保活]", first);
+            var first = await CompletedLogs(fixture);
+            Assert.Contains(first, line => line.Contains("[一键准备][准备 2 · Codex][准备][请求 "));
+            Assert.DoesNotContain(first, line => line.Contains("[独立保活]"));
 
             using var next = await TestClient.Send(client, HttpMethod.Post, $"{fixture.Address}/v1/responses", body, headers: headers);
             await next.Content.ReadAsStringAsync();

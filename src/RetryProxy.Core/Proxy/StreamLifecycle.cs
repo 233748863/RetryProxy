@@ -182,8 +182,9 @@ internal sealed class StreamLifecycle : IDisposable
             return;
         }
 
+        var attemptText = _totalAttempts == 0 ? $"第 {_attemptNumber} 次" : $"第 {_attemptNumber}/{_totalAttempts} 次";
         _logger.Warn(
-            $"[{_requestId}] 第 {_attemptNumber}/{_totalAttempts} 次 {_method} {_safePath} -> 上游 HTTP {_status}，响应未完成，原因：{Stats.FailureSummary() ?? reason}，不再重试（已进入响应转发阶段）{Stats.FailureLogFields()}，{LogText.TimingText(Stats.FirstContentSeconds(), elapsed)}");
+            $"[{_requestId}] {attemptText} {_method} {_safePath} -> 上游 HTTP {_status}，响应未完成，原因：{Stats.FailureSummary() ?? reason}，不再重试（已进入响应转发阶段）{Stats.FailureLogFields()}，{LogText.TimingText(Stats.FirstContentSeconds(), elapsed)}");
     }
 
     /// <summary>对应 Drop：正文流没走完就被丢弃。</summary>
@@ -224,7 +225,8 @@ internal static class LogText
 
     public static string AttemptPrefix(ulong attemptNumber, ulong totalAttempts, int status)
     {
-        return attemptNumber == 1 && status == 200 ? string.Empty : $"第 {attemptNumber}/{totalAttempts} 次 ";
+        return attemptNumber == 1 && status == 200 ? string.Empty
+            : totalAttempts == 0 ? $"第 {attemptNumber} 次 " : $"第 {attemptNumber}/{totalAttempts} 次 ";
     }
 
     public static string FormatCompletedAttempt(

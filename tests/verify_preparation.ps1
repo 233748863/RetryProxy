@@ -237,7 +237,7 @@ try {
                 }
                 $record = @{ path = $path; authOk = $authOk; apiKeyOk = $apiKeyOk; effort = $effort } | ConvertTo-Json -Compress
                 [IO.File]::AppendAllText((Join-Path $Directory 'upstream-events.jsonl'), $record + "`n")
-                $body = if ($path -eq '/v1/models') { '{"data":[{"id":"preparation-test-model"}]}' } else { "data: {`"type`":`"response.completed`",`"response`":{`"status`":`"completed`"}}`n`n" }
+                $body = if ($path -eq '/v1/models') { '{"data":[{"id":"preparation-test-model"}]}' } else { "data: {`"type`":`"response.completed`",`"response`":{`"status`":`"completed`",`"usage`":{`"input_tokens`":40,`"output_tokens`":12},`"output`":[{`"content`":[{`"type`":`"output_text`",`"text`":`"准备成功`"}]}]}}`n`n" }
                 $context.Response.ContentType = if ($path -eq '/v1/models') { 'application/json' } else { 'text/event-stream' }
                 if ($path -eq '/v1/models' -and -not $authOk) {
                     $context.Response.StatusCode = 401

@@ -10,8 +10,10 @@ using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
 using RetryProxy.Core.Cli;
 using RetryProxy.Core.Config;
+using RetryProxy.Core.KeepAlive;
 using RetryProxy.Core.Logging;
 using RetryProxy.Core.Service;
+using RetryProxy.Core.Workspace;
 using RetryProxy.Tests.Support;
 using Xunit;
 
@@ -176,6 +178,169 @@ public class ProxyIntegrationTests
         Assert.True(logText.Contains("第 1/2 次 GET /hello -> 上游 HTTP 500"), logText);
         Assert.True(logText.Contains("第 2/2 次 GET /hello -> 上游 HTTP 200"), logText);
         Assert.True(service.State is ServiceState.Stopped or ServiceState.Error);
+    }
+
+    [Theory]
+    [InlineData(ClientType.Claude, "rate-limit")]
+    [InlineData(ClientType.Claude, "bad-request")]
+    [InlineData(ClientType.Claude, "stream-error")]
+    [InlineData(ClientType.Claude, "zero-context")]
+    [InlineData(ClientType.Claude, "missing-terminal")]
+    [InlineData(ClientType.Codex, "rate-limit")]
+    [InlineData(ClientType.Codex, "bad-request")]
+    [InlineData(ClientType.Codex, "stream-error")]
+    [InlineData(ClientType.Codex, "zero-context")]
+    [InlineData(ClientType.Codex, "missing-terminal")]
+    public async Task TemporaryPreparationProxyRetriesWithoutPassingInvalidContextToClient(ClientType clientType, string failure)
+    {
+        var attempts = 0;
+        var validResponse = clientType == ClientType.Claude
+            ? "data: {\"type\":\"message_start\",\"message\":{\"model\":\"test-model\",\"content\":[],\"usage\":{\"input_tokens\":40,\"output_tokens\":0}}}\n\n"
+                + "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"有效答案\"}}\n\n"
+                + "data: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":12}}\n\n"
+                + "data: {\"type\":\"message_stop\"}\n\n"
+            : "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"model\":\"test-model\",\"usage\":{\"input_tokens\":40,\"output_tokens\":12},\"output\":[{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"有效答案\"}]}]}}\n\n";
+        await using var upstream = await FakeUpstream.StartAsync(async context =>
+        {
+            if (Interlocked.Increment(ref attempts) != 1)
+            {
+                await Upstream.EventStream(context, validResponse);
+                return;
+            }
+
+            switch (failure)
+            {
+                case "rate-limit":
+                    await Upstream.Json(context, 429, "{\"type\":\"error\",\"error\":{\"type\":\"rate_limit_error\"}}");
+                    break;
+                case "bad-request":
+                    await Upstream.Json(context, 400, "{\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\"}}");
+                    break;
+                case "stream-error":
+                    await Upstream.EventStream(context, "event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"rate_limit_error\"}}\n\n");
+                    break;
+                case "missing-terminal":
+                    await Upstream.EventStream(context, clientType == ClientType.Claude
+                        ? "data: {\"type\":\"message_start\",\"message\":{\"content\":[],\"usage\":{\"input_tokens\":40,\"output_tokens\":12}}}\n\n"
+                        : "data: {\"type\":\"response.created\",\"response\":{\"usage\":{\"input_tokens\":40,\"output_tokens\":12}}\n\n");
+                    break;
+                default:
+                    await Upstream.EventStream(context, clientType == ClientType.Claude
+                        ? "data: {\"type\":\"message_start\",\"message\":{\"content\":[],\"usage\":{\"input_tokens\":0,\"output_tokens\":0}}}\n\n"
+                            + "data: {\"type\":\"content_block_delta\",\"delta\":{\"text\":\"无效答案\"}}\n\n"
+                            + "data: {\"type\":\"message_stop\"}\n\n"
+                        : "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"usage\":{\"input_tokens\":0,\"output_tokens\":0},\"output\":[{\"content\":[{\"type\":\"output_text\",\"text\":\"无效答案\"}]}]}}\n\n");
+                    break;
+            }
+        });
+
+        var logDirectory = TempLogDirectory();
+        using var logger = ProxyLogger.Silent(logDirectory);
+        var proxyPort = FreePort();
+        var config = PreparationWorkspace.CreateRuntimeConfig(upstream.BaseUrl, proxyPort, 5, clientType);
+        config.BaseDelaySeconds = 0;
+        config.MaxDelaySeconds = 0;
+        var watchdog = KeepAliveWatchdog.WithCliCommand(false, TimeSpan.FromMinutes(5), new CliCommand(Path.Combine(logDirectory, "missing-client.exe")));
+        var service = new ProxyService(logger, "prepare").WithKeepAliveWatchdog(watchdog).WithUpstreamApiKey("sk-upstream", "local-key");
+        service.Start(config, TimeSpan.FromSeconds(5));
+        Assert.True(service.RequestPreparation());
+        try
+        {
+            using var client = TestClient.Create();
+            var path = clientType == ClientType.Claude ? "/v1/messages" : "/v1/responses";
+            using var response = await TestClient.Send(client, HttpMethod.Post, $"http://127.0.0.1:{proxyPort}{path}",
+                "{\"model\":\"test-model\",\"stream\":true}", headers: new System.Collections.Generic.Dictionary<string, string>
+                {
+                    ["authorization"] = "Bearer local-key",
+                });
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            var body = await response.Content.ReadAsStringAsync();
+            Assert.Contains("有效答案", body);
+            Assert.DoesNotContain("无效答案", body);
+            Assert.Equal(2, attempts);
+            Assert.Contains("未交给客户端", LogFiles.ReadAll(logDirectory));
+        }
+        finally
+        {
+            service.Stop(TimeSpan.FromSeconds(5));
+        }
+    }
+
+    [Fact]
+    public async Task TemporaryPreparationProxyEndsCurrentRequestAtTotalDeadline()
+    {
+        var attempts = 0;
+        await using var upstream = await FakeUpstream.StartAsync(async context =>
+        {
+            Interlocked.Increment(ref attempts);
+            await Upstream.Json(context, 429, "{\"type\":\"error\",\"error\":{\"type\":\"rate_limit_error\"}}");
+        });
+        var logDirectory = TempLogDirectory();
+        using var logger = ProxyLogger.Silent(logDirectory);
+        var proxyPort = FreePort();
+        var config = PreparationWorkspace.CreateRuntimeConfig(upstream.BaseUrl, proxyPort, 5, ClientType.Claude);
+        config.TotalTimeoutSeconds = 0.5;
+        config.BaseDelaySeconds = 0.05;
+        config.MaxDelaySeconds = 0.05;
+        var watchdog = KeepAliveWatchdog.WithCliCommand(false, TimeSpan.FromMinutes(5), new CliCommand(Path.Combine(logDirectory, "missing-client.exe")));
+        var service = new ProxyService(logger, "prepare").WithKeepAliveWatchdog(watchdog).WithUpstreamApiKey("sk-upstream", "local-key");
+        service.Start(config, TimeSpan.FromSeconds(5));
+        Assert.True(service.RequestPreparation());
+        try
+        {
+            using var client = TestClient.Create();
+            using var response = await TestClient.Send(client, HttpMethod.Post, $"http://127.0.0.1:{proxyPort}/v1/messages",
+                "{\"model\":\"test-model\",\"stream\":true}", headers: new System.Collections.Generic.Dictionary<string, string>
+                {
+                    ["authorization"] = "Bearer local-key",
+                });
+            Assert.Equal(HttpStatusCode.GatewayTimeout, response.StatusCode);
+            Assert.Contains("请求超过总等待上限", await response.Content.ReadAsStringAsync());
+            Assert.True(attempts >= 2);
+            var logs = LogFiles.ReadAll(logDirectory);
+            Assert.Contains("第 1 次 POST /v1/messages", logs);
+            Assert.DoesNotContain("/10001", logs);
+        }
+        finally
+        {
+            service.Stop(TimeSpan.FromSeconds(5));
+        }
+    }
+
+    [Theory]
+    [InlineData(ClientType.Claude)]
+    [InlineData(ClientType.Codex)]
+    public async Task TemporaryProxyOutsidePreparationPreservesSingleAttempt(ClientType clientType)
+    {
+        var attempts = 0;
+        await using var upstream = await FakeUpstream.StartAsync(async context =>
+        {
+            Interlocked.Increment(ref attempts);
+            await Upstream.Json(context, 429, "{\"type\":\"error\",\"error\":{\"type\":\"rate_limit_error\"}}");
+        });
+        using var logger = ProxyLogger.Silent(TempLogDirectory());
+        var proxyPort = FreePort();
+        var config = PreparationWorkspace.CreateRuntimeConfig(upstream.BaseUrl, proxyPort, 5, clientType);
+        var service = new ProxyService(logger, "prepare").WithUpstreamApiKey("sk-upstream", "local-key");
+        service.Start(config, TimeSpan.FromSeconds(5));
+        try
+        {
+            Assert.False(service.KeepAlive.Snapshot().Preparing);
+            using var client = TestClient.Create();
+            var path = clientType == ClientType.Claude ? "/v1/messages" : "/v1/responses";
+            using var response = await TestClient.Send(client, HttpMethod.Post, $"http://127.0.0.1:{proxyPort}{path}",
+                "{\"model\":\"test-model\",\"stream\":true}", headers: new System.Collections.Generic.Dictionary<string, string>
+                {
+                    ["authorization"] = "Bearer local-key",
+                });
+            Assert.Equal(HttpStatusCode.TooManyRequests, response.StatusCode);
+            Assert.Contains("rate_limit_error", await response.Content.ReadAsStringAsync());
+            Assert.Equal(1, attempts);
+        }
+        finally
+        {
+            service.Stop(TimeSpan.FromSeconds(5));
+        }
     }
 
     [Fact]

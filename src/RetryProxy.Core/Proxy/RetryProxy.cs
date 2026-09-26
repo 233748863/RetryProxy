@@ -153,7 +153,9 @@ public sealed class RetryProxy
     {
         using var _ = probe;
         var startedAt = MonotonicInstant.Now;
-        var timeoutSeconds = Math.Min(Config.TimeoutSeconds, Config.TotalTimeoutSeconds);
+        var timeoutSeconds = probe.IsPreparation && _localAccessKey is not null
+            ? Config.TotalTimeoutSeconds + 30
+            : Math.Min(Config.TimeoutSeconds, Config.TotalTimeoutSeconds);
         var sessionLabel = probe.SessionId.Length > 8 ? probe.SessionId[..8] : probe.SessionId;
         var configuration = _localAccessKey is not null ? "经后台临时代理转发" : probe.UsesSuppliedKey ? "使用本次输入的 Key 经本通道转发" : "沿用本机客户端配置";
         var preparing = probe.IsPreparation;
@@ -692,11 +694,17 @@ public sealed class RetryProxy
         }
 
         var usingSystemProxy = ProxyResolver.Resolve(parsedTarget) is not null;
+        var requireValidContext = _localAccessKey is not null && KeepAlive.Snapshot().Preparing
+            && HttpMethods.IsPost(method) && KeepAliveFlavorExtensions.Detect(safePath) != KeepAliveFlavor.Unknown;
         var maxRetries = (ulong)Math.Max(Config.MaxRetries, 0);
-        var totalAttempts = Saturating.Add(maxRetries, 1);
+        if (_localAccessKey is not null && !requireValidContext)
+        {
+            maxRetries = 0;
+        }
+        var totalAttempts = requireValidContext ? 0UL : Saturating.Add(maxRetries, 1);
         BufferedResponse? lastResponse = null;
 
-        for (ulong attempt = 0; attempt < totalAttempts; attempt++)
+        for (ulong attempt = 0; totalAttempts == 0 || attempt < totalAttempts; attempt++)
         {
             var attemptNumber = attempt + 1;
             ctx.Metrics.RequestAttempt(requestId, attemptNumber);
@@ -728,7 +736,7 @@ public sealed class RetryProxy
                     headers = alternateClaudeHeaders;
                     usedAlternateClaudeAuthentication = true;
                     // 认证方式切换不受配置的重试次数限制；即使 max_retries=0，也必须给另一种格式一次机会。
-                    if (totalAttempts < ulong.MaxValue)
+                    if (totalAttempts is > 0 and < ulong.MaxValue)
                     {
                         totalAttempts++;
                     }
@@ -740,6 +748,61 @@ public sealed class RetryProxy
                     }
 
                     continue;
+                }
+
+                if (requireValidContext)
+                {
+                    RetryResponseBody buffered;
+                    try
+                    {
+                        buffered = expectedBodyBytes > MaxRetryResponseBodyBytes
+                            ? RetryResponseBody.Overflow(ReadOnlyMemory<byte>.Empty, ReadOnlyMemory<byte>.Empty)
+                            : await BufferUpstreamResponseAsync(reader, requestId, startedAt, ctx.Metrics, ctx.Token).ConfigureAwait(false);
+                    }
+                    catch (UpstreamException failure)
+                    {
+                        reader.Dispose();
+                        if (await HandleAttemptFailureAsync(ctx, attemptNumber, totalAttempts, status, null, startedAt, usingSystemProxy, failure).ConfigureAwait(false))
+                        {
+                            return RetryExhaustedResponse(ctx, totalAttempts, lastResponse);
+                        }
+
+                        continue;
+                    }
+
+                    var stats = new ResponseStats(responseHeaders, safePath, model).WithAnswerCapture();
+                    if (!buffered.TooLarge)
+                    {
+                        stats.Observe(buffered.Body.Span, ctx.StartedAt.ElapsedSeconds);
+                        stats.Finish(ctx.StartedAt.ElapsedSeconds);
+                    }
+
+                    if (!buffered.TooLarge && status is >= 200 and < 300
+                        && stats.Outcome is { IsFailed: false }
+                        && stats.ContextTokens(Config.ClientType == ClientType.Claude) is > 0
+                        && stats.Answer() is not null)
+                    {
+                        reader = new ChunkReader(new ReplayChunkSource(
+                            new (ReadOnlyMemory<byte>?, Exception?)[] { (buffered.Body, null) }, upstream.Source));
+                    }
+                    else
+                    {
+                        reader.Dispose();
+                        var reason = buffered.TooLarge ? $"响应超过 {MaxRetryResponseBodyBytes} 字节暂存上限"
+                            : stats.FailureSummary() ?? stats.Outcome?.Reason ?? "未返回完整回复及有效上下文";
+                        if (totalAttempts != 0 && attempt >= maxRetries)
+                        {
+                            ctx.Metrics.Failure(requestId);
+                            return RetryExhaustedResponse(ctx, totalAttempts, lastResponse);
+                        }
+
+                        var delay = RetryDelay(attempt, status, responseHeaders);
+                        ctx.Metrics.Retry(requestId, attemptNumber);
+                        ctx.Metrics.RequestPhase(requestId, RequestPhase.WaitingRetry);
+                        ctx.Logger.Warn($"[{requestId}] 第 {attemptNumber} 次 {method} {safePath} -> 上游 HTTP {status}，{reason}，未交给客户端，{delay:F3} 秒后代理重试{stats.FailureLogFields()}");
+                        await WaitDelayAsync(delay, ctx.Token).ConfigureAwait(false);
+                        continue;
+                    }
                 }
 
                 var retryable = IsRetryableStatus(status);
@@ -1296,14 +1359,14 @@ public sealed class RetryProxy
             _ => throw error,
         };
         var statusText = status is { } value ? $"上游 HTTP {value}" : "上游状态码：无";
-        double? delay = attemptNumber < totalAttempts ? RetryDelay(attemptNumber - 1, null, null) : null;
+        double? delay = totalAttempts == 0 || attemptNumber < totalAttempts ? RetryDelay(attemptNumber - 1, null, null) : null;
         var isTemporaryKeepAlive = _localAccessKey is not null && ctx.RequestId.StartsWith(ProxyMetrics.KeepAlivePrefix, StringComparison.Ordinal);
         var retryText = delay is { } seconds ? $"将在 {seconds:F3} 秒后重试" : "已达到重试上限";
         if (delay is null && isTemporaryKeepAlive)
         {
             retryText = KeepAlive.Snapshot().Preparing ? "本轮结束，后台准备将在间隔后继续" : "本轮结束，下次按保活间隔继续";
         }
-        var attemptText = isTemporaryKeepAlive ? "本轮" : $"第 {attemptNumber}/{totalAttempts} 次";
+        var attemptText = isTemporaryKeepAlive ? "本轮" : totalAttempts == 0 ? $"第 {attemptNumber} 次" : $"第 {attemptNumber}/{totalAttempts} 次";
         ctx.Logger.Warn($"[{ctx.RequestId}] {attemptText} {ctx.Method} {ctx.SafePath} -> {statusText}，{label}，{retryText}，{LogText.TimingText(firstByteSeconds, elapsed)}");
         if (delay is not { } wait)
         {

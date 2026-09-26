@@ -509,6 +509,7 @@ public sealed class ProxyWorkspace
             editor.TotalTimeout = FormatNumber(route.TotalTimeoutSeconds);
             editor.BaseDelay = FormatNumber(route.BaseDelaySeconds);
             editor.MaxDelay = FormatNumber(route.MaxDelaySeconds);
+            editor.PassThroughCompression = route.PassThroughCompression;
         }
         else
         {
@@ -597,6 +598,7 @@ public sealed class ProxyWorkspace
             KeepaliveContextLimit = existing.KeepaliveContextLimit,
             KeepaliveReasoningEffort = existing.KeepaliveReasoningEffort.IsSupportedBy(editor.ClientType!.Value)
                 ? existing.KeepaliveReasoningEffort : ReasoningEffort.Default,
+            PassThroughCompression = editor.PassThroughCompression,
         };
         route.NormalizeInPlace();
         return route;

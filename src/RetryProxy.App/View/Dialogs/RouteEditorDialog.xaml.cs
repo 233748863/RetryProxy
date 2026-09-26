@@ -43,6 +43,7 @@ public partial class RouteEditorDialog : ContentDialog
         TotalTimeoutBox.Text = editor.TotalTimeout;
         BaseDelayBox.Text = editor.BaseDelay;
         MaxDelayBox.Text = editor.MaxDelay;
+        PassThroughCompressionSwitch.IsChecked = editor.PassThroughCompression;
     }
 
     protected override void OnButtonClick(ContentDialogButton button)
@@ -60,6 +61,7 @@ public partial class RouteEditorDialog : ContentDialog
             _editor.TotalTimeout = TotalTimeoutBox.Text;
             _editor.BaseDelay = BaseDelayBox.Text;
             _editor.MaxDelay = MaxDelayBox.Text;
+            _editor.PassThroughCompression = PassThroughCompressionSwitch.IsChecked == true;
             if (_workspace.CommitRoute(_editor) is { } error)
             {
                 ErrorText.Text = error;

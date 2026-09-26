@@ -83,6 +83,8 @@
   "等待生成上限（秒）": "Generation wait limit (s)",
   "退避最小间隔（秒）": "Min backoff (s)",
   "退避最大间隔（秒）": "Max backoff (s)",
+  "透传压缩": "Pass through compression",
+  "原样转发客户端的 Accept-Encoding，上游可返回压缩流；代理边转发边解压，统计、重试与准备照常。关闭时要求上游不压缩。下次启用通道时生效。": "Forwards the client's Accept-Encoding unchanged so the upstream may compress; the proxy decompresses while forwarding, and statistics, retries and preparation keep working. When off, the upstream is asked not to compress. Takes effect the next time the channel starts.",
   "包含连接、重试等待和接收响应；到时结束本次请求，不再重试。": "Covers connecting, retry waits and receiving; the request ends when it expires and is not retried.",
   "每次收到上游成功事件流的响应头后开始计时；空消息不重置。尚未转发内容时到期可重试，总等待上限优先。": "Starts after each successful upstream stream header; empty messages do not reset it. Expiring before any content was forwarded allows a retry; the total wait limit takes precedence.",
   "开始准备": "Prepare",

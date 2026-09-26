@@ -38,10 +38,19 @@ internal static class HeaderRules
     public static HeaderList CopyRequestHeaders(HeaderList source)
     {
         var tokens = ConnectionTokens(source);
+        // 客户端声明 keep-alive 时在原位置保留该声明（与直连时的请求头一致），其余 Connection 语义仍按逐跳头丢弃。
+        var keepAlive = tokens.Contains("keep-alive");
         var output = new HeaderList();
         foreach (var (name, value) in source)
         {
             var lower = name.ToLowerInvariant();
+            if (lower == "connection" && keepAlive)
+            {
+                output.Append(name, "keep-alive");
+                keepAlive = false;
+                continue;
+            }
+
             if (HopByHop.Contains(lower)
                 || lower is "host" or "content-length" or KeepAliveMarkerHeader or PreparationIdHeader
                 || tokens.Contains(lower))

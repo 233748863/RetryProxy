@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Net.Sockets;
@@ -454,6 +455,26 @@ public class ProxyUnitTests
         Assert.Null(copied.Get("x-custom"));
         Assert.Null(copied.Get("x-retry-keepalive"));
         Assert.Null(copied.Get("x-retry-preparation-id"));
+        Assert.Null(copied.Get("connection"));
+    }
+
+    [Fact]
+    public void RequestHeadersKeepClientKeepAliveDeclarationInPlace()
+    {
+        var headers = new HeaderList();
+        headers.Append("Accept", "*/*");
+        headers.Append("Connection", "keep-alive, x-custom");
+        headers.Append("x-custom", "remove");
+        headers.Append("Connection", "keep-alive");
+        headers.Append("User-Agent", "claude-cli");
+        var copied = HeaderRules.CopyRequestHeaders(headers);
+        Assert.Equal(
+            new[] { "Accept: */*", "Connection: keep-alive", "User-Agent: claude-cli" },
+            copied.Select(entry => $"{entry.Key}: {entry.Value}").ToArray());
+
+        var closing = new HeaderList();
+        closing.Append("Connection", "close");
+        Assert.Null(HeaderRules.CopyRequestHeaders(closing).Get("connection"));
     }
 
     [Fact]

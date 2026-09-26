@@ -513,6 +513,7 @@ public class ProxyConfigTests
                 "timeout_seconds", "generation_timeout_seconds", "total_timeout_seconds",
                 "base_delay_seconds", "max_delay_seconds", "desired_running",
                 "keepalive_enabled", "keepalive_idle_minutes", "keepalive_context_limit", "keepalive_reasoning_effort",
+                "pass_through_compression",
             },
             routeKeys);
     }

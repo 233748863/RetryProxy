@@ -687,7 +687,12 @@ public sealed class RetryProxy
         ctx.Metrics.CacheKey(requestId, cacheRequest.State);
         if (streaming || model is not null)
         {
-            headers.Set("accept-encoding", "identity");
+            // 默认要求上游不压缩以便解析；开启压缩透传后保留客户端的声明（其中编码须都能由代理解压）。
+            var acceptEncoding = string.Join(",", headers.GetAll("accept-encoding"));
+            if (!Config.PassThroughCompression || (acceptEncoding.Length > 0 && !ContentDecoder.AcceptsOnlySupported(acceptEncoding)))
+            {
+                headers.Set("accept-encoding", "identity");
+            }
         }
         var alternateClaudeHeaders = _upstreamApiKey is not null && Config.ClientType == ClientType.Claude
             ? ClaudeAuthenticationFallback(headers)
@@ -975,17 +980,16 @@ public sealed class RetryProxy
             var contentType = response.Headers.Get("content-type");
             var jsonError = contentType is null || IsJsonMime(contentType);
             var encoding = response.Headers.Get("content-encoding");
-            var encoded = encoding is not null && !string.Equals(encoding, "identity", StringComparison.OrdinalIgnoreCase);
             if (request.IsAmended
                 && response.Status is 400 or 422
                 && jsonError
-                && !encoded
+                && (!ContentDecoder.IsEncoded(encoding) || ContentDecoder.IsSupported(encoding))
                 && (response.ExpectedBodyBytes is null || response.ExpectedBodyBytes <= PromptCache.MaxCacheErrorBytes))
             {
                 List<(ReadOnlyMemory<byte>?, Exception?)>? replay;
                 try
                 {
-                    replay = await ProbeCacheErrorAsync(response.Source, ctx.Token).ConfigureAwait(false);
+                    replay = await ProbeCacheErrorAsync(response.Source, encoding, ctx.Token).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException)
                 {
@@ -1016,8 +1020,8 @@ public sealed class RetryProxy
         return mime == "application/json" || mime.EndsWith("+json", StringComparison.Ordinal);
     }
 
-    /// <summary>读完上游的小错误正文；返回 null 表示上游拒绝了缓存标识，否则返回要重放的前缀。</summary>
-    private static async Task<List<(ReadOnlyMemory<byte>?, Exception?)>?> ProbeCacheErrorAsync(IChunkSource source, CancellationToken token)
+    /// <summary>读完上游的小错误正文；返回 null 表示上游拒绝了缓存标识，否则返回要重放的前缀（原始字节，压缩的也原样重放）。</summary>
+    private static async Task<List<(ReadOnlyMemory<byte>?, Exception?)>?> ProbeCacheErrorAsync(IChunkSource source, string? contentEncoding, CancellationToken token)
     {
         var prefix = new ByteBuffer();
         var reader = new ChunkReader(source);
@@ -1037,7 +1041,7 @@ public sealed class RetryProxy
 
             if (chunk is null)
             {
-                return PromptCache.RejectsCacheKey(prefix.Span)
+                return ContentDecoder.DecodeAll(contentEncoding, prefix.Span) is { } plain && PromptCache.RejectsCacheKey(plain)
                     ? null
                     : new List<(ReadOnlyMemory<byte>?, Exception?)> { (prefix.ToArray(), null) };
             }
@@ -1141,7 +1145,9 @@ public sealed class RetryProxy
     {
         var requestId = ctx.RequestId;
         var stats = new ResponseStats(responseHeaders, ctx.SafePath, model).WithCacheKeyState(cacheKeyState);
-        var generationGate = status is >= 200 and < 300 && stats.IsApiEventStream ? new GenerationGate() : null;
+        var generationGate = status is >= 200 and < 300 && stats.IsApiEventStream
+            ? new GenerationGate(ContentDecoder.Create(responseHeaders.Get("content-encoding")))
+            : null;
         var generationDeadline = Deadline.AfterSeconds(Config.GenerationTimeoutSeconds);
         var prefix = new ByteBuffer();
         ulong receivedBodyBytes = 0;
@@ -1287,7 +1293,8 @@ public sealed class RetryProxy
         }
 
         Task? deliveryCancelled = null;
-        while (!upstreamFinished && (!lifecycle.Completed || status >= 400))
+        // 完成事件之后若压缩流尚未收尾（gzip/zlib 尾部、br/zstd 结束块），继续转发到收尾为止，否则客户端解压会报流被截断。
+        while (!upstreamFinished && (!lifecycle.Completed || status >= 400 || lifecycle.Stats.AwaitingEncodedEnd))
         {
             var readTask = reader.Peek();
             if (!readTask.IsCompleted)

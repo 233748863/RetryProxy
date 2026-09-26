@@ -42,6 +42,8 @@ public sealed class RouteEditor
 
     public string MaxDelay { get; set; } = string.Empty;
 
+    public bool PassThroughCompression { get; set; }
+
     public bool IsEditing => Index is not null;
 }
 

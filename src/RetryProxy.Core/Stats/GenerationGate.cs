@@ -11,10 +11,38 @@ namespace RetryProxy.Core.Stats;
 internal sealed class GenerationGate
 {
     private readonly EventDecoder _events = new();
+    private readonly ContentDecoder? _decoder;
     private bool _ready;
 
-    /// <summary>观察一块上游数据；返回 true 表示已可以开始向客户端转发。</summary>
+    /// <param name="decoder">上游正文已压缩时的解码器；门只在开始转发前使用它。</param>
+    public GenerationGate(ContentDecoder? decoder = null)
+    {
+        _decoder = decoder;
+    }
+
+    /// <summary>观察一块上游原始数据；返回 true 表示已可以开始向客户端转发。</summary>
     public bool Observe(ReadOnlySpan<byte> chunk)
+    {
+        if (_ready || _decoder is null)
+        {
+            return ObserveDecoded(chunk);
+        }
+
+        var decoded = _decoder.Push(chunk);
+        if (_decoder.Failed)
+        {
+            // 无法解压就无法判断是否仍在等待，按不支持的内容立即放行。
+            _ready = true;
+            return true;
+        }
+
+        return ObserveDecoded(decoded);
+    }
+
+    /// <summary>上游结束：补一个事件分隔符冲出最后一条事件（不经过解码器）。</summary>
+    public bool Finish() => ObserveDecoded("\n\n"u8);
+
+    private bool ObserveDecoded(ReadOnlySpan<byte> chunk)
     {
         if (!_ready)
         {
@@ -29,12 +57,14 @@ internal sealed class GenerationGate
             }
 
             _ready = any || _events.Unsupported || !_events.PendingLineIsSupported();
+            if (_ready)
+            {
+                _decoder?.Dispose();
+            }
         }
 
         return _ready;
     }
-
-    public bool Finish() => Observe("\n\n"u8);
 
     private static bool EmptyText(JsonElement? value)
     {

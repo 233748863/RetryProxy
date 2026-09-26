@@ -318,6 +318,7 @@ public static class ProxyConfigJson
             WriteDouble(writer, "keepalive_idle_minutes", route.KeepaliveIdleMinutes);
             writer.WriteNumber("keepalive_context_limit", route.KeepaliveContextLimit);
             writer.WriteString("keepalive_reasoning_effort", route.KeepaliveReasoningEffort.AsStr());
+            writer.WriteBoolean("pass_through_compression", route.PassThroughCompression);
             writer.WriteEndObject();
         }
 
@@ -406,6 +407,7 @@ public static class ProxyConfigJson
             KeepaliveIdleMinutes = Number(value, "keepalive_idle_minutes", ConfigDefaults.KeepaliveIdleMinutes, $"{label} keepalive_idle_minutes"),
             KeepaliveContextLimit = ToLong(Integer(value, "keepalive_context_limit", (ulong)ConfigDefaults.KeepaliveContextLimit, $"{label} keepalive_context_limit"), $"{label} keepalive_context_limit必须是整数"),
             KeepaliveReasoningEffort = ReasoningEffortExtensions.Parse(OptionalString(value, "keepalive_reasoning_effort", "default")),
+            PassThroughCompression = Boolean(value, "pass_through_compression", false, $"{label} pass_through_compression"),
         };
         route.NormalizeInPlace();
         return route;

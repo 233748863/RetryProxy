@@ -39,6 +39,9 @@ public sealed class ProxyRoute : IEquatable<ProxyRoute>
 
     public ReasoningEffort KeepaliveReasoningEffort { get; set; }
 
+    /// <summary>原样转发客户端的 Accept-Encoding，代理边转发压缩流边解压解析；关闭时要求上游不压缩。</summary>
+    public bool PassThroughCompression { get; set; }
+
     public string LocalUrl => $"http://{ConfigDefaults.ListenHost}:{ListenPort}";
 
     internal void NormalizeInPlace()
@@ -113,7 +116,8 @@ public sealed class ProxyRoute : IEquatable<ProxyRoute>
             && KeepaliveEnabled == other.KeepaliveEnabled
             && KeepaliveIdleMinutes == other.KeepaliveIdleMinutes
             && KeepaliveReasoningEffort == other.KeepaliveReasoningEffort
-            && KeepaliveContextLimit == other.KeepaliveContextLimit;
+            && KeepaliveContextLimit == other.KeepaliveContextLimit
+            && PassThroughCompression == other.PassThroughCompression;
     }
 
     public override bool Equals(object? obj) => Equals(obj as ProxyRoute);

@@ -69,13 +69,17 @@ internal sealed class ResponseStats
     private readonly List<(string Label, string Value)> _errorFields = new();
     private readonly string? _upstreamRequestId;
     private string? _lastEventType;
+    private readonly ContentDecoder? _decoder;
+    private readonly string? _contentEncoding;
 
     public ResponseStats(HeaderList headers, string path, string? model)
     {
         var contentType = (headers.Get("content-type") ?? string.Empty).Split(';')[0].Trim().ToLowerInvariant();
         var encoding = headers.Get("content-encoding");
-        var encoded = encoding is not null && !string.Equals(encoding, "identity", StringComparison.OrdinalIgnoreCase);
-        _format = encoded ? BodyFormat.Opaque
+        // 可解压的编码边收边解压后再解析；不支持的编码只转发不解析。
+        _decoder = ContentDecoder.Create(encoding);
+        _contentEncoding = ContentDecoder.IsEncoded(encoding) ? encoding!.Trim().ToLowerInvariant() : null;
+        _format = _contentEncoding is not null && _decoder is null ? BodyFormat.Opaque
             : contentType == "text/event-stream" ? BodyFormat.EventStream
             : contentType == "application/json" || contentType.EndsWith("+json", StringComparison.Ordinal) ? BodyFormat.Json
             : BodyFormat.Detect;
@@ -281,7 +285,38 @@ internal sealed class ResponseStats
 
     public void Observe(ReadOnlySpan<byte> chunk, double elapsed)
     {
-        if (chunk.IsEmpty || _outcome is not null)
+        if (chunk.IsEmpty)
+        {
+            return;
+        }
+
+        if (_decoder is not null && _format != BodyFormat.Opaque)
+        {
+            // 得出结果后仍继续解压：转发层要据此判断压缩流是否已完整结束。
+            var decoded = _decoder.Push(chunk);
+            if (_decoder.Failed)
+            {
+                if (_outcome is null)
+                {
+                    // 解压失败后已解析的部分不可信：按无法解析的正文处理，不再据此判断完成与否。
+                    _format = BodyFormat.Opaque;
+                }
+
+                return;
+            }
+
+            if (_outcome is not null)
+            {
+                return;
+            }
+
+            chunk = decoded;
+            if (chunk.IsEmpty)
+            {
+                return;
+            }
+        }
+        else if (_outcome is not null)
         {
             return;
         }
@@ -373,6 +408,12 @@ internal sealed class ResponseStats
     }
 
     public bool IsApiEventStream => _isApiResponse && _format == BodyFormat.EventStream;
+
+    /// <summary>压缩正文已能解析但尚未收到压缩结束标记：此时切断会让客户端收到不完整的压缩流。</summary>
+    public bool AwaitingEncodedEnd => _decoder is { Failed: false, Ended: false, EndDetectable: true } && _format != BodyFormat.Opaque;
+
+    /// <summary>响应声明的内容编码（小写）；未压缩为 null。</summary>
+    public string? ContentEncoding => _contentEncoding;
 
     public string LogFields() => FormatLogFields(_outcome is { IsFailed: true });
 
@@ -481,6 +522,19 @@ internal sealed class ResponseStats
         if (_cacheKeyState.Label() is { } keyLabel)
         {
             fields.Append("，缓存标识：").Append(keyLabel);
+        }
+
+        if (_contentEncoding is not null)
+        {
+            fields.Append("，响应压缩 ").Append(_contentEncoding);
+            if (_decoder is null)
+            {
+                fields.Append("（不支持解压，未解析）");
+            }
+            else if (_decoder.Failed)
+            {
+                fields.Append("（解压失败，未解析）");
+            }
         }
 
         return fields.ToString();

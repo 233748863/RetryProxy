@@ -41,6 +41,9 @@ public sealed class ProxyConfig : IEquatable<ProxyConfig>
 
     public ReasoningEffort KeepaliveReasoningEffort { get; set; }
 
+    /// <summary>见 <see cref="ProxyRoute.PassThroughCompression"/>。</summary>
+    public bool PassThroughCompression { get; set; }
+
     public List<ProviderEndpoint> Providers { get; set; } = new();
 
     public List<ProxyRoute> Routes { get; set; } = new();
@@ -122,6 +125,7 @@ public sealed class ProxyConfig : IEquatable<ProxyConfig>
         KeepaliveIdleMinutes = route.KeepaliveIdleMinutes;
         KeepaliveContextLimit = route.KeepaliveContextLimit;
         KeepaliveReasoningEffort = route.KeepaliveReasoningEffort;
+        PassThroughCompression = route.PassThroughCompression;
         var provider = ProviderByName(route.ProviderName);
         if (provider is not null)
         {
@@ -214,6 +218,7 @@ public sealed class ProxyConfig : IEquatable<ProxyConfig>
             KeepaliveIdleMinutes = route.KeepaliveIdleMinutes,
             KeepaliveContextLimit = route.KeepaliveContextLimit,
             KeepaliveReasoningEffort = route.KeepaliveReasoningEffort,
+            PassThroughCompression = route.PassThroughCompression,
             Providers = Providers.Select(item => item.Clone()).ToList(),
             Routes = new List<ProxyRoute>(),
             SelectedRouteId = string.Empty,
@@ -442,6 +447,7 @@ public sealed class ProxyConfig : IEquatable<ProxyConfig>
             && KeepaliveIdleMinutes == other.KeepaliveIdleMinutes
             && KeepaliveContextLimit == other.KeepaliveContextLimit
             && KeepaliveReasoningEffort == other.KeepaliveReasoningEffort
+            && PassThroughCompression == other.PassThroughCompression
             && Providers.SequenceEqual(other.Providers)
             && Routes.SequenceEqual(other.Routes)
             && SelectedRouteId == other.SelectedRouteId

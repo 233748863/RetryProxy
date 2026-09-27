@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using RetryProxy.Core.Internal;
+using RetryProxy.Core.Tls;
 
 namespace RetryProxy.Core.Proxy;
 
@@ -52,7 +53,7 @@ internal static class HeaderRules
             }
 
             if (HopByHop.Contains(lower)
-                || lower is "host" or "content-length" or KeepAliveMarkerHeader or PreparationIdHeader
+                || lower is "host" or "content-length" or KeepAliveMarkerHeader or PreparationIdHeader or HeaderOrderStream.PlanHeader
                 || tokens.Contains(lower))
             {
                 continue;

@@ -30,7 +30,7 @@ public class CompressionPassThroughTests
         "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
     };
 
-    /// <summary>按片段逐��压缩并刷新，模拟上游流式压缩；最后一段含压缩尾。</summary>
+    /// <summary>按片段逐段压缩并刷新，模拟上游流式压缩；最后一段含压缩尾。</summary>
     internal static List<byte[]> CompressSegments(string coding, IEnumerable<string> parts, bool rawDeflate = false)
     {
         var output = new MemoryStream();

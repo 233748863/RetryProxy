@@ -15,7 +15,8 @@ namespace RetryProxy.Core.Tls;
 
 /// <summary>
 /// SocketsHttpHandler 的 ConnectCallback：自行连通上游（直连或经系统代理的 CONNECT / SOCKS5 隧道），
-/// 再用指纹 TLS 握手。请求地址须改写成 http://主机:端口，HttpClient 才不会再套一层系统 TLS。
+/// 再用指纹 TLS 握手，外面再套一层 <see cref="HeaderOrderStream"/> 按客户端原顺序重排请求头。
+/// 请求地址须改写成 http://主机:端口，HttpClient 才不会再套一层系统 TLS。
 /// </summary>
 internal sealed class TlsFingerprintConnector
 {
@@ -39,8 +40,9 @@ internal sealed class TlsFingerprintConnector
         var transport = await UpstreamDialer.ConnectAsync(host, port, proxy?.ProxyUrl, cancellationToken).ConfigureAwait(false);
         try
         {
-            return await FingerprintTlsStream.ConnectAsync(transport, host, _fingerprint(), CreateAuthentication(host), cancellationToken)
+            var tls = await FingerprintTlsStream.ConnectAsync(transport, host, _fingerprint(), CreateAuthentication(host), cancellationToken)
                 .ConfigureAwait(false);
+            return new HeaderOrderStream(tls);
         }
         catch
         {

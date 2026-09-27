@@ -322,8 +322,10 @@ public sealed class RetryProxy
     {
         private Task? _cancelled;
 
-        public RequestContext(ProxyMetrics metrics, RouteLogger logger, CancellationToken cancel, CancellationToken token, string requestId, string method, string safePath, Deadline deadline, MonotonicInstant startedAt)
+        public RequestContext(ProxyMetrics metrics, RouteLogger logger, CancellationToken cancel, CancellationToken token, string requestId, string method, string safePath, Deadline deadline, MonotonicInstant startedAt,
+            IReadOnlyList<string> headerOrder)
         {
+            HeaderOrder = headerOrder;
             Metrics = metrics;
             Logger = logger;
             Cancel = cancel;
@@ -357,6 +359,9 @@ public sealed class RetryProxy
         public MonotonicInstant StartedAt { get; }
 
         public Task Cancelled => _cancelled ??= Task.Delay(Timeout.Infinite, Token);
+
+        /// <summary>客户端请求头的原顺序（含 Host、Content-Length），指纹连接按它重排上游请求头。</summary>
+        public IReadOnlyList<string> HeaderOrder { get; }
     }
 
     /// <summary>健康检查：返回当前统计快照。</summary>
@@ -467,7 +472,7 @@ public sealed class RetryProxy
                 body = HeaderRules.StripInternalRequestMetadata(body);
             }
 
-            ctx = new RequestContext(metrics, requestLogger, cancel, token, requestId, method, safePath, deadline, startedAt);
+            ctx = new RequestContext(metrics, requestLogger, cancel, token, requestId, method, safePath, deadline, startedAt, HeaderOrder(requestHeaders));
             response = await HandleRequestInnerAsync(ctx, requestHeaders, rawQuery, body).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
@@ -635,6 +640,25 @@ public sealed class RetryProxy
         var path = context.Request.Path.ToUriComponent();
         var query = context.Request.QueryString.Value ?? string.Empty;
         return (path.Length == 0 ? "/" : path, query.TrimStart('?'));
+    }
+
+    /// <summary>
+    /// 请求头名按首次出现的顺序去重，保留原大小写。
+    /// 例：<c>Accept, Authorization, x-a, x-a, Host</c> → <c>Accept, Authorization, x-a, Host</c>。
+    /// </summary>
+    private static IReadOnlyList<string> HeaderOrder(HeaderList headers)
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var order = new List<string>();
+        foreach (var (name, _) in headers)
+        {
+            if (seen.Add(name))
+            {
+                order.Add(name);
+            }
+        }
+
+        return order;
     }
 
     private static HeaderList ToHeaderList(IHeaderDictionary headers)
@@ -983,6 +1007,11 @@ public sealed class RetryProxy
         if (hostHeader is not null)
         {
             request.Headers.Host = hostHeader;
+            // 指纹连接的 HeaderOrderStream 读取并删掉这个内部头，按其顺序重排请求头（HttpClient 自己会把 Host 放最前、Content-* 放最后）。
+            if (ctx.HeaderOrder.Count > 0)
+            {
+                request.Headers.TryAddWithoutValidation(HeaderOrderStream.PlanHeader, string.Join(",", ctx.HeaderOrder));
+            }
         }
 
         // 非流式请求整体受单次超时约束；流式请求只在等响应头与每次读取上各自计时。

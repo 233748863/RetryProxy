@@ -372,6 +372,49 @@ public class TlsFingerprintTests
     }
 
     [Fact]
+    public async Task SendsRequestHeadersInClientOrderOverFingerprintConnection()
+    {
+        await using var upstream = await RawHttpsUpstream.StartAsync();
+        await using var proxy = await TlsProxy.StartAsync(upstream.BaseUrl, upstream.Certificate);
+        var port = new Uri(proxy.Address).Port;
+        // Claude Code 2.1.283 直连时的请求头顺序（抓包所得，值做了简化）。
+        var clientOrder = new[]
+        {
+            "Accept: application/json",
+            "Authorization: Bearer sk-order-test",
+            "Content-Type: application/json",
+            "User-Agent: claude-cli/2.1.283 (external, cli)",
+            "X-Stainless-Lang: js",
+            "anthropic-version: 2023-06-01",
+            "x-app: cli",
+            "Connection: keep-alive",
+            $"Host: 127.0.0.1:{port}",
+            "Accept-Encoding: gzip, deflate, br, zstd",
+            "Content-Length: 2",
+        };
+        var request = "POST /v1/messages?beta=true HTTP/1.1\r\n" + string.Join("\r\n", clientOrder) + "\r\n\r\n{}";
+
+        Assert.StartsWith("HTTP/1.1 200", await RawHttp.ExchangeAsync(port, request));
+
+        var head = Assert.Single(upstream.Heads);
+        var lines = head.Split("\r\n", StringSplitOptions.RemoveEmptyEntries);
+        Assert.Equal("POST /v1/messages?beta=true HTTP/1.1", lines[0]);
+        Assert.DoesNotContain(lines, line => line.StartsWith(HeaderOrderStream.PlanHeader, StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(string.Join(", ", ExpectedUpstreamOrder), string.Join(", ", lines.Skip(1).Select(line => line[..line.IndexOf(':')])));
+        Assert.Contains($"Host: localhost:{upstream.Port}", lines);
+    }
+
+    /// <summary>
+    /// 上游收到的请求头顺序＝代理收到的顺序（Kestrel 先按内部固定顺序列出常见头，再列其余头），
+    /// 而不是 HttpClient 自己的顺序（Host 最前、Content-Type / Content-Length 最后）。
+    /// </summary>
+    private static readonly string[] ExpectedUpstreamOrder =
+    {
+        "Accept", "Connection", "Host", "User-Agent", "Accept-Encoding", "Authorization", "Content-Type", "Content-Length",
+        "X-Stainless-Lang", "anthropic-version", "x-app",
+    };
+
+    [Fact]
     public void ClaudeTlsFingerprintIsPerRouteAndRoundTrips()
     {
         var config = ProxyConfig.Builtin();
@@ -569,7 +612,7 @@ public class TlsFingerprintTests
             return new HttpsUpstream(app, new Uri(address).Port, certificate);
         }
 
-        private static X509Certificate2 CreateCertificate()
+        internal static X509Certificate2 CreateCertificate()
         {
             using var key = RSA.Create(2048);
             var request = new CertificateRequest("CN=localhost", key, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
@@ -594,6 +637,137 @@ public class TlsFingerprintTests
 
             await _app.DisposeAsync();
             Certificate.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// 记录原始请求字节的本机 HTTPS 假上游：Kestrel 会重排请求头，这里直接读 TLS 解密后的请求头原文。
+    /// 每个请求都回 200 <c>{}</c>，连接保持复用。
+    /// </summary>
+    private sealed class RawHttpsUpstream : IAsyncDisposable
+    {
+        private readonly TcpListener _listener;
+        private readonly CancellationTokenSource _cancel = new();
+        private readonly Task _loop;
+
+        private RawHttpsUpstream()
+        {
+            Certificate = HttpsUpstream.CreateCertificate();
+            _listener = new TcpListener(IPAddress.Loopback, 0);
+            _listener.Start();
+            _loop = Task.Run(AcceptLoopAsync);
+        }
+
+        public int Port => ((IPEndPoint)_listener.LocalEndpoint).Port;
+
+        public string BaseUrl => $"https://localhost:{Port}";
+
+        public X509Certificate2 Certificate { get; }
+
+        /// <summary>收到的请求头原文（不含正文），按到达顺序。</summary>
+        public ConcurrentQueue<string> Heads { get; } = new();
+
+        public static Task<RawHttpsUpstream> StartAsync() => Task.FromResult(new RawHttpsUpstream());
+
+        private async Task AcceptLoopAsync()
+        {
+            while (!_cancel.IsCancellationRequested)
+            {
+                TcpClient client;
+                try
+                {
+                    client = await _listener.AcceptTcpClientAsync(_cancel.Token);
+                }
+                catch (Exception)
+                {
+                    return;
+                }
+
+                _ = Task.Run(() => ServeAsync(client));
+            }
+        }
+
+        private async Task ServeAsync(TcpClient client)
+        {
+            using var _ = client;
+            try
+            {
+                await using var tls = new System.Net.Security.SslStream(client.GetStream());
+                await tls.AuthenticateAsServerAsync(Certificate);
+                while (!_cancel.IsCancellationRequested)
+                {
+                    var head = await RawHttp.ReadHeadAsync(tls, _cancel.Token);
+                    if (head is null)
+                    {
+                        return;
+                    }
+
+                    Heads.Enqueue(head);
+                    await RawHttp.ReadBodyAsync(tls, head, _cancel.Token);
+                    await tls.WriteAsync(Encoding.ASCII.GetBytes("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}"), _cancel.Token);
+                }
+            }
+            catch (Exception)
+            {
+            }
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            _cancel.Cancel();
+            _listener.Stop();
+            try
+            {
+                await _loop;
+            }
+            catch (Exception)
+            {
+            }
+
+            Certificate.Dispose();
+        }
+    }
+
+    /// <summary>按原始字节收发 HTTP/1.1：用来构造 HttpClient 无法控制头顺序的请求，并读取对端收到的原文。</summary>
+    private static class RawHttp
+    {
+        public static async Task<string> ExchangeAsync(int port, string request)
+        {
+            using var client = new TcpClient();
+            await client.ConnectAsync(IPAddress.Loopback, port);
+            var stream = client.GetStream();
+            await stream.WriteAsync(Encoding.Latin1.GetBytes(request));
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            var head = await ReadHeadAsync(stream, timeout.Token) ?? throw new IOException("代理没有返回响应");
+            await ReadBodyAsync(stream, head, timeout.Token);
+            return head;
+        }
+
+        /// <summary>读到空行为止，返回请求头 / 响应头原文；对端在开头就关闭连接时返回 null。</summary>
+        public static async Task<string?> ReadHeadAsync(Stream stream, CancellationToken cancellationToken)
+        {
+            var head = new StringBuilder();
+            var one = new byte[1];
+            while (!head.ToString().EndsWith("\r\n\r\n", StringComparison.Ordinal))
+            {
+                if (await stream.ReadAsync(one, cancellationToken) == 0)
+                {
+                    return head.Length == 0 ? null : throw new IOException("请求头中途断开");
+                }
+
+                head.Append((char)one[0]);
+            }
+
+            return head.ToString();
+        }
+
+        public static async Task ReadBodyAsync(Stream stream, string head, CancellationToken cancellationToken)
+        {
+            var line = head.Split("\r\n").FirstOrDefault(item => item.StartsWith("Content-Length:", StringComparison.OrdinalIgnoreCase));
+            if (line is not null && int.TryParse(line["Content-Length:".Length..].Trim(), out var length) && length > 0)
+            {
+                await stream.ReadExactlyAsync(new byte[length], cancellationToken);
+            }
         }
     }
 

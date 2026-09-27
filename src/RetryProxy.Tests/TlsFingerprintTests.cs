@@ -232,14 +232,14 @@ public class TlsFingerprintTests
     public void OnlyClaudeHttpsChannelsUseFingerprint()
     {
         using var logger = ProxyLogger.Silent(TempDirectory());
-        bool Uses(ClientType client, string upstream, bool enabled) => new Core.Proxy.RetryProxy(
-            new ProxyConfig { ClientType = client, UpstreamBaseUrl = upstream, ClaudeTlsFingerprint = enabled },
+        bool Uses(ClientType client, string upstream) => new Core.Proxy.RetryProxy(
+            new ProxyConfig { ClientType = client, UpstreamBaseUrl = upstream },
             logger, new ProxyMetrics(), CancellationToken.None).UsesTlsFingerprint;
 
-        Assert.True(Uses(ClientType.Claude, "https://api.example.com", true));
-        Assert.False(Uses(ClientType.Claude, "https://api.example.com", false));
-        Assert.False(Uses(ClientType.Claude, "http://127.0.0.1:1", true));
-        Assert.False(Uses(ClientType.Codex, "https://api.example.com", true));
+        // 不再有开关：Claude 通道连 https 上游默认使用指纹。
+        Assert.True(Uses(ClientType.Claude, "https://api.example.com"));
+        Assert.False(Uses(ClientType.Claude, "http://127.0.0.1:1"));
+        Assert.False(Uses(ClientType.Codex, "https://api.example.com"));
     }
 
     [Fact]
@@ -415,27 +415,18 @@ public class TlsFingerprintTests
     }
 
     [Fact]
-    public void ClaudeTlsFingerprintIsPerRouteAndRoundTrips()
+    public void LegacyFingerprintSwitchInConfigIsIgnoredAndDropped()
     {
-        var config = ProxyConfig.Builtin();
-        config.Routes[1].ClaudeTlsFingerprint = true;
-        var json = ProxyConfigJson.ToCanonicalJson(config);
-        var (loaded, _) = ProxyConfigJson.Parse(json);
-        Assert.False(loaded.Routes[0].ClaudeTlsFingerprint);
-        Assert.True(loaded.Routes[1].ClaudeTlsFingerprint);
-        Assert.True(loaded.RuntimeConfigFor(loaded.Routes[1].Id).ClaudeTlsFingerprint);
-        var toggled = loaded.Routes[0].Clone();
-        toggled.ClaudeTlsFingerprint = true;
-        Assert.NotEqual(loaded.Routes[0], toggled);
-
-        var stripped = System.Text.Json.Nodes.JsonNode.Parse(json)!;
-        foreach (var route in stripped["routes"]!.AsArray())
+        // 早先版本在通道上保存过 claude_tls_fingerprint 开关；现在读取时忽略，保存时不再写出。
+        var json = System.Text.Json.Nodes.JsonNode.Parse(ProxyConfigJson.ToCanonicalJson(ProxyConfig.Builtin()))!;
+        foreach (var route in json["routes"]!.AsArray())
         {
-            route!.AsObject().Remove("claude_tls_fingerprint");
+            route!["claude_tls_fingerprint"] = false;
         }
 
-        var (legacy, _) = ProxyConfigJson.Parse(stripped.ToJsonString());
-        Assert.All(legacy.Routes, route => Assert.False(route.ClaudeTlsFingerprint));
+        var (loaded, _) = ProxyConfigJson.Parse(json.ToJsonString());
+        Assert.Equal(ProxyConfig.Builtin().Routes, loaded.Routes);
+        Assert.DoesNotContain("claude_tls_fingerprint", ProxyConfigJson.ToCanonicalJson(loaded), StringComparison.Ordinal);
     }
 
     // ------------------------------------------------------------------ 辅助
@@ -541,7 +532,6 @@ public class TlsFingerprintTests
             var config = new ProxyConfig
             {
                 ClientType = ClientType.Claude,
-                ClaudeTlsFingerprint = true,
                 UpstreamBaseUrl = upstream,
                 ListenPort = 18080,
                 MaxRetries = 0,

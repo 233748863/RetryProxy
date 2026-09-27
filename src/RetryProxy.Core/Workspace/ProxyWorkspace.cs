@@ -510,7 +510,6 @@ public sealed class ProxyWorkspace
             editor.BaseDelay = FormatNumber(route.BaseDelaySeconds);
             editor.MaxDelay = FormatNumber(route.MaxDelaySeconds);
             editor.PassThroughCompression = route.PassThroughCompression;
-            editor.ClaudeTlsFingerprint = route.ClaudeTlsFingerprint;
         }
         else
         {
@@ -600,7 +599,6 @@ public sealed class ProxyWorkspace
             KeepaliveReasoningEffort = existing.KeepaliveReasoningEffort.IsSupportedBy(editor.ClientType!.Value)
                 ? existing.KeepaliveReasoningEffort : ReasoningEffort.Default,
             PassThroughCompression = editor.PassThroughCompression,
-            ClaudeTlsFingerprint = editor.ClaudeTlsFingerprint && editor.ClientType == ClientType.Claude,
         };
         route.NormalizeInPlace();
         return route;

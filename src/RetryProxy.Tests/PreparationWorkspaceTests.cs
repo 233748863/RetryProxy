@@ -144,31 +144,17 @@ public sealed class PreparationWorkspaceTests
     }
 
     [Theory]
-    [InlineData(ClientType.Claude, true, true)]
-    [InlineData(ClientType.Claude, false, false)]
-    [InlineData(ClientType.Codex, true, false)]
-    public void ClaudeTlsFingerprintOptionReachesTheBackgroundProxy(ClientType client, bool enabled, bool expected)
+    [InlineData(ClientType.Claude, true)]
+    [InlineData(ClientType.Codex, false)]
+    public void ClaudePreparationUsesFingerprintByDefault(ClientType client, bool expected)
     {
-        // 抓取本机指纹的 CLI 指向不存在的路径：只验证开关是否传到后台代理，不启动真实 Claude Code。
-        var previous = Environment.GetEnvironmentVariable("RETRY_PROXY_CLAUDE_CLI");
-        Environment.SetEnvironmentVariable("RETRY_PROXY_CLAUDE_CLI", Path.Combine(Path.GetTempPath(), "missing-claude-for-tls-test.exe"));
-        try
-        {
-            using var fixture = new Fixture();
-            var options = Options(PrepareMode.CustomProvider, client);
-            options.ClaudeTlsFingerprint = enabled;
-            var task = Start(fixture.Preparations, options);
-            // 后台代理启动后才会提交准备，准备因客户端缺失而报错时启动日志一定已经写完。
-            WaitFor(fixture.Preparations, () => task.LastError is not null);
+        // 测试进程的全局指纹库不抓取本机 Claude Code（见 TestFingerprintStore），这里只看后台代理是否用了指纹。
+        using var fixture = new Fixture();
+        var task = Start(fixture.Preparations, Options(PrepareMode.CustomProvider, client));
+        // 后台代理启动后才会提交准备，准备因客户端缺失而报错时启动日志一定已经写完。
+        WaitFor(fixture.Preparations, () => task.LastError is not null);
 
-            Assert.Equal(enabled, fixture.Preparations.OpenPrepareDialog(task.Id).ClaudeTlsFingerprint);
-            Assert.Equal(expected, PreparationWorkspace.CreateRuntimeConfig(task.ProviderUrl, 1, 5, client, claudeTlsFingerprint: enabled).ClaudeTlsFingerprint);
-            Assert.Equal(expected, fixture.DrainLogs().Contains("上游握手使用 Claude Code TLS 指纹", StringComparison.Ordinal));
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable("RETRY_PROXY_CLAUDE_CLI", previous);
-        }
+        Assert.Equal(expected, fixture.DrainLogs().Contains("上游握手使用 Claude Code TLS 指纹", StringComparison.Ordinal));
     }
 
     [Fact]

@@ -43,8 +43,8 @@ public sealed class TlsFingerprintStore
         Source = "内置";
     }
 
-    /// <summary>应用内所有通道共用的实例；启动时由界面层指定保存目录。</summary>
-    public static TlsFingerprintStore Shared { get; } = new();
+    /// <summary>应用内所有通道共用的实例；启动时由界面层指定保存目录。测试程序集启动时换成不抓取本机 Claude Code 的实例。</summary>
+    public static TlsFingerprintStore Shared { get; internal set; } = new();
 
     /// <summary>随程序发布的指纹（Claude Code 2.1.283，Bun / BoringSSL）。</summary>
     public static ClientHelloFingerprint Builtin => BuiltinFingerprint.Value;

@@ -46,7 +46,7 @@ public sealed class ProxyHost : IAsyncDisposable
             options.Limits.MaxResponseBufferSize = 0;
             options.Listen(IPAddress.Loopback, port, listen =>
             {
-                // 模拟 Claude Code 指纹的通道要按客户端原顺序转发请求头，先在连接层记下原始顺序（Kestrel 会重排）。
+                // 使用 Claude Code 指纹的通道要按客户端原顺序转发请求头，先在连接层记下原始顺序（Kestrel 会重排）。
                 if (proxy.UsesTlsFingerprint)
                 {
                     listen.Use(InboundHeaderRecorder.Middleware);

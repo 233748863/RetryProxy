@@ -44,17 +44,6 @@ public partial class RouteEditorDialog : ContentDialog
         BaseDelayBox.Text = editor.BaseDelay;
         MaxDelayBox.Text = editor.MaxDelay;
         PassThroughCompressionSwitch.IsChecked = editor.PassThroughCompression;
-        TlsFingerprintSwitch.IsChecked = editor.ClaudeTlsFingerprint;
-        ClientBox.SelectionChanged += (_, _) => UpdateTlsFingerprintVisibility();
-        UpdateTlsFingerprintVisibility();
-    }
-
-    /// <summary>TLS 指纹只对 Claude 通道有意义（Codex 在 Windows 上本就用系统 TLS）。</summary>
-    private void UpdateTlsFingerprintVisibility()
-    {
-        TlsFingerprintPanel.Visibility = ClientBox.SelectedItem is PickerItem { Key: var key } && key == ClientType.Claude.AsStr()
-            ? Visibility.Visible
-            : Visibility.Collapsed;
     }
 
     protected override void OnButtonClick(ContentDialogButton button)
@@ -73,7 +62,6 @@ public partial class RouteEditorDialog : ContentDialog
             _editor.BaseDelay = BaseDelayBox.Text;
             _editor.MaxDelay = MaxDelayBox.Text;
             _editor.PassThroughCompression = PassThroughCompressionSwitch.IsChecked == true;
-            _editor.ClaudeTlsFingerprint = TlsFingerprintSwitch.IsChecked == true;
             if (_workspace.CommitRoute(_editor) is { } error)
             {
                 ErrorText.Text = error;

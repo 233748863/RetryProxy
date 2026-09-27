@@ -52,7 +52,7 @@ public sealed class RetryProxy
     private readonly HttpClient _client;
     private readonly PromptCache _promptCache;
     private readonly TlsFingerprintConnector? _tlsConnector;
-    /// <summary>只在开启 TLS 指纹时赋值（默认全应用共用 <see cref="TlsFingerprintStore.Shared"/>），关闭时不触碰指纹组件。</summary>
+    /// <summary>只在 Claude 通道连 https 上游时赋值（默认全应用共用 <see cref="TlsFingerprintStore.Shared"/>），其他通道不触碰指纹组件。</summary>
     private TlsFingerprintStore? _tlsFingerprints;
     private string? _upstreamApiKey;
     private ClaudeAuthMode _upstreamAuthMode;
@@ -80,7 +80,8 @@ public sealed class RetryProxy
                 Proxy = new ResolverWebProxy(ProxyResolver),
                 PooledConnectionIdleTimeout = TimeSpan.FromSeconds(90),
             };
-            if (config.ClaudeTlsFingerprint && config.ClientType == ClientType.Claude
+            // Claude 通道默认模拟 Claude Code 指纹（TLS 握手 + 请求头原顺序）；供应商都是 https，本机 http 上游（测试）不套 TLS。
+            if (config.ClientType == ClientType.Claude
                 && config.UpstreamBaseUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
             {
                 // 连接器自行处理系统代理与 TLS；请求改写成 http:// 后 HttpClient 只负责 HTTP/1.1。
@@ -153,7 +154,7 @@ public sealed class RetryProxy
     }
 
     /// <summary>
-    /// 开启 TLS 指纹时在通道运行期间定期核对本机 Claude Code 的指纹（多个通道共用一次抓取）。
+    /// 使用 TLS 指纹的通道在运行期间定期核对本机 Claude Code 的指纹（多个通道共用一次抓取）。
     /// </summary>
     public async Task RefreshTlsFingerprintLoopAsync(CancellationToken cancel)
     {

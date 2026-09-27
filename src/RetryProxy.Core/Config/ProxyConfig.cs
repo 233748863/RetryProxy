@@ -44,9 +44,6 @@ public sealed class ProxyConfig : IEquatable<ProxyConfig>
     /// <summary>见 <see cref="ProxyRoute.PassThroughCompression"/>。</summary>
     public bool PassThroughCompression { get; set; }
 
-    /// <summary>见 <see cref="ProxyRoute.ClaudeTlsFingerprint"/>。</summary>
-    public bool ClaudeTlsFingerprint { get; set; }
-
     public List<ProviderEndpoint> Providers { get; set; } = new();
 
     public List<ProxyRoute> Routes { get; set; } = new();
@@ -129,7 +126,6 @@ public sealed class ProxyConfig : IEquatable<ProxyConfig>
         KeepaliveContextLimit = route.KeepaliveContextLimit;
         KeepaliveReasoningEffort = route.KeepaliveReasoningEffort;
         PassThroughCompression = route.PassThroughCompression;
-        ClaudeTlsFingerprint = route.ClaudeTlsFingerprint;
         var provider = ProviderByName(route.ProviderName);
         if (provider is not null)
         {
@@ -223,7 +219,6 @@ public sealed class ProxyConfig : IEquatable<ProxyConfig>
             KeepaliveContextLimit = route.KeepaliveContextLimit,
             KeepaliveReasoningEffort = route.KeepaliveReasoningEffort,
             PassThroughCompression = route.PassThroughCompression,
-            ClaudeTlsFingerprint = route.ClaudeTlsFingerprint,
             Providers = Providers.Select(item => item.Clone()).ToList(),
             Routes = new List<ProxyRoute>(),
             SelectedRouteId = string.Empty,
@@ -453,7 +448,6 @@ public sealed class ProxyConfig : IEquatable<ProxyConfig>
             && KeepaliveContextLimit == other.KeepaliveContextLimit
             && KeepaliveReasoningEffort == other.KeepaliveReasoningEffort
             && PassThroughCompression == other.PassThroughCompression
-            && ClaudeTlsFingerprint == other.ClaudeTlsFingerprint
             && Providers.SequenceEqual(other.Providers)
             && Routes.SequenceEqual(other.Routes)
             && SelectedRouteId == other.SelectedRouteId

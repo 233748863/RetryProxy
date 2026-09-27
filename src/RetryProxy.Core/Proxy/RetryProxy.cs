@@ -52,6 +52,9 @@ public sealed class RetryProxy
     private readonly HttpClient _client;
     private readonly PromptCache _promptCache;
     private readonly TlsFingerprintConnector? _tlsConnector;
+    /// <summary>连接外层套了 <see cref="HeaderOrderStream"/>：https 的 Claude / Codex 通道。</summary>
+    private readonly bool _reorderHeaders;
+    private X509Certificate2? _trustedTestCertificate;
     /// <summary>只在 Claude 通道连 https 上游时赋值（默认全应用共用 <see cref="TlsFingerprintStore.Shared"/>），其他通道不触碰指纹组件。</summary>
     private TlsFingerprintStore? _tlsFingerprints;
     private string? _upstreamApiKey;
@@ -90,6 +93,17 @@ public sealed class RetryProxy
                 handler.UseProxy = false;
                 handler.Proxy = null;
                 handler.ConnectCallback = _tlsConnector.ConnectAsync;
+                _reorderHeaders = true;
+            }
+            else if (config.ClientType == ClientType.Codex
+                && config.UpstreamBaseUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+            {
+                // Codex 在 Windows 上走 SChannel，TLS 握手与 .NET 默认一致，只需在系统 TLS 之上按 Codex 原顺序重排请求头。
+                handler.PlaintextStreamFilter = (context, _) => ValueTask.FromResult<Stream>(new HeaderOrderStream(context.PlaintextStream));
+                handler.SslOptions.RemoteCertificateValidationCallback = (_, certificate, _, errors) =>
+                    errors == System.Net.Security.SslPolicyErrors.None
+                    || (_trustedTestCertificate is not null && certificate is not null && certificate.GetCertHashString() == _trustedTestCertificate.Thumbprint);
+                _reorderHeaders = true;
             }
 
             _client = new HttpClient(handler, disposeHandler: true)
@@ -141,7 +155,17 @@ public sealed class RetryProxy
     /// <summary>是否用 Claude Code 的 TLS 指纹连上游。</summary>
     public bool UsesTlsFingerprint => _tlsConnector is not null;
 
+    /// <summary>是否按客户端原顺序与大小写转发请求头（https 的 Claude / Codex 通道）。</summary>
+    public bool ReordersHeaders => _reorderHeaders;
+
     /// <summary>仅供测试：替换指纹来源，并额外信任测试证书。</summary>
+    /// <summary>仅供测试：Codex 通道的系统 TLS 额外信任这张自签证书。</summary>
+    internal RetryProxy WithTrustedTestCertificate(X509Certificate2 certificate)
+    {
+        _trustedTestCertificate = certificate;
+        return this;
+    }
+
     internal RetryProxy WithTlsFingerprint(TlsFingerprintStore store, X509Certificate2? trustedRoot)
     {
         if (_tlsConnector is not null)
@@ -794,9 +818,10 @@ public sealed class RetryProxy
         ctx.Metrics.CacheKey(requestId, cacheRequest.State);
         if (streaming || model is not null)
         {
-            // 默认要求上游不压缩以便解析；开启压缩透传后保留客户端的声明（其中编码须都能由代理解压）。
+            // 客户端声明了压缩时默认改成要求上游不压缩以便解析；开启压缩透传后保留客户端的声明（其中编码须都能由代理解压）。
+            // 客户端没发这个头（如 Codex）时也不补，与直连一致；上游若仍压缩，响应按 Content-Encoding 解压解析。
             var acceptEncoding = string.Join(",", headers.GetAll("accept-encoding"));
-            if (!Config.PassThroughCompression || (acceptEncoding.Length > 0 && !ContentDecoder.AcceptsOnlySupported(acceptEncoding)))
+            if (acceptEncoding.Length > 0 && (!Config.PassThroughCompression || !ContentDecoder.AcceptsOnlySupported(acceptEncoding)))
             {
                 headers.Set("accept-encoding", "identity");
             }
@@ -1033,11 +1058,12 @@ public sealed class RetryProxy
         if (hostHeader is not null)
         {
             request.Headers.Host = hostHeader;
-            // 指纹连接的 HeaderOrderStream 读取并删掉这个内部头，按其顺序重排请求头（HttpClient 自己会把 Host 放最前、Content-* 放最后）。
-            if (ctx.HeaderOrder.Count > 0)
-            {
-                request.Headers.TryAddWithoutValidation(HeaderOrderStream.PlanHeader, string.Join(",", ctx.HeaderOrder));
-            }
+        }
+
+        // 连接外层的 HeaderOrderStream 读取并删掉这个内部头，按其顺序重排请求头（HttpClient 自己会把 Host 放最前、Content-* 放最后）。
+        if (_reorderHeaders && ctx.HeaderOrder.Count > 0)
+        {
+            request.Headers.TryAddWithoutValidation(HeaderOrderStream.PlanHeader, string.Join(",", ctx.HeaderOrder));
         }
 
         // 非流式请求整体受单次超时约束；流式请求只在等响应头与每次读取上各自计时。

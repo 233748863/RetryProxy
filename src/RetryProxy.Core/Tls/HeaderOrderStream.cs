@@ -9,7 +9,7 @@ using RetryProxy.Core.Internal;
 namespace RetryProxy.Core.Tls;
 
 /// <summary>
-/// 套在指纹 TLS 连接外面的明文层：把 HttpClient 写出的 HTTP/1.1 请求头按客户端原顺序重排后再加密发出。
+/// 套在 TLS 连接外面的明文层（Claude 指纹 TLS 或 Codex 的系统 TLS）：把 HttpClient 写出的 HTTP/1.1 请求头按客户端原顺序重排后再加密发出。
 /// HttpClient 固定把 Content-Type / Content-Length 写在最后，这一层按请求里附带的内部头
 /// <see cref="PlanHeader"/> 给出的顺序与大小写重写请求头，并删掉这个内部头；正文逐字节原样透传。
 /// 例：HttpClient 写 <c>Host, Accept, User-Agent, Authorization, Content-Type, Content-Length</c>，

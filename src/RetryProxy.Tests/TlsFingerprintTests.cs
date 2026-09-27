@@ -415,6 +415,36 @@ public class TlsFingerprintTests
     }
 
     [Fact]
+    public async Task SendsRequestHeadersInClientOrderOverCodexConnection()
+    {
+        await using var upstream = await RawHttpsUpstream.StartAsync();
+        await using var proxy = await TlsProxy.StartAsync(upstream.BaseUrl, upstream.Certificate, client: ClientType.Codex);
+        var port = new Uri(proxy.Address).Port;
+        // Codex 0.154 直连时的请求头顺序（值做了简化）；Codex 不发 Accept-Encoding，代理也不补。
+        var clientOrder = new[]
+        {
+            "authorization: Bearer sk-order-test",
+            "originator: codex_cli_rs",
+            "user-agent: codex_cli_rs/0.154.0 (Windows 10.0.19045; x86_64)",
+            "session_id: 0199-order",
+            "accept: text/event-stream",
+            "content-type: application/json",
+            $"host: 127.0.0.1:{port}",
+            "content-length: 2",
+        };
+        var heads = await RawHttp.ExchangeAsync(port, "POST /v1/responses HTTP/1.1\r\n" + string.Join("\r\n", clientOrder) + "\r\n\r\n{}");
+        Assert.All(heads, head => Assert.StartsWith("HTTP/1.1 200", head));
+
+        var received = upstream.Heads.Single().Split("\r\n", StringSplitOptions.RemoveEmptyEntries);
+        Assert.Equal("POST /v1/responses HTTP/1.1", received[0]);
+        Assert.DoesNotContain(received, line => line.StartsWith(HeaderOrderStream.PlanHeader, StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(Names(clientOrder), Names(received.Skip(1)));
+        Assert.Contains($"host: localhost:{upstream.Port}", received);
+
+        static string Names(IEnumerable<string> lines) => string.Join(", ", lines.Select(line => line[..line.IndexOf(':')]));
+    }
+
+    [Fact]
     public void LegacyFingerprintSwitchInConfigIsIgnoredAndDropped()
     {
         // 早先版本在通道上保存过 claude_tls_fingerprint 开关；现在读取时忽略，保存时不再写出。
@@ -503,7 +533,7 @@ public class TlsFingerprintTests
         public ProxyDecision Resolve(Uri target) => new(proxyUrl, true);
     }
 
-    /// <summary>开启 TLS 指纹的 Claude 通道，不重试；指纹来源为内置、不抓取。</summary>
+    /// <summary>https 上游的 Claude（TLS 指纹）或 Codex 通道，不重试；指纹来源为内置、不抓取。</summary>
     private sealed class TlsProxy : IAsyncDisposable
     {
         private readonly CancellationTokenSource _cancel;
@@ -525,13 +555,13 @@ public class TlsFingerprintTests
 
         public Core.Proxy.RetryProxy Proxy { get; }
 
-        public static async Task<TlsProxy> StartAsync(string upstream, X509Certificate2? trustedRoot, IProxyResolver? resolver = null)
+        public static async Task<TlsProxy> StartAsync(string upstream, X509Certificate2? trustedRoot, IProxyResolver? resolver = null, ClientType client = ClientType.Claude)
         {
             var logDirectory = TempDirectory();
             var logger = ProxyLogger.Silent(logDirectory);
             var config = new ProxyConfig
             {
-                ClientType = ClientType.Claude,
+                ClientType = client,
                 UpstreamBaseUrl = upstream,
                 ListenPort = 18080,
                 MaxRetries = 0,
@@ -540,6 +570,11 @@ public class TlsFingerprintTests
             var cancel = new CancellationTokenSource();
             var proxy = new Core.Proxy.RetryProxy(config, logger, new ProxyMetrics(), cancel.Token, resolver)
                 .WithTlsFingerprint(new TlsFingerprintStore(_ => throw new InvalidOperationException()), trustedRoot);
+            if (trustedRoot is not null)
+            {
+                proxy.WithTrustedTestCertificate(trustedRoot);
+            }
+
             var host = await ProxyHost.StartAsync(proxy, 0);
             return new TlsProxy(host, proxy, logger, logDirectory, cancel);
         }

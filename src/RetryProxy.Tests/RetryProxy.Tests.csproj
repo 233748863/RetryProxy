@@ -19,6 +19,7 @@
 	<ItemGroup>
 		<ProjectReference Include="..\RetryProxy.Core\RetryProxy.Core.csproj" />
 		<None Include="..\..\tests\fixtures\preparation-codex.ps1" Link="fixtures\preparation-codex.ps1" CopyToOutputDirectory="PreserveNewest" />
+		<None Include="..\..\tests\fixtures\tls-capture-claude.ps1" Link="fixtures\tls-capture-claude.ps1" CopyToOutputDirectory="PreserveNewest" />
 	</ItemGroup>
 
 </Project>

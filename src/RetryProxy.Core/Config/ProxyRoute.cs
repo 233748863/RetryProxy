@@ -42,6 +42,9 @@ public sealed class ProxyRoute : IEquatable<ProxyRoute>
     /// <summary>原样转发客户端的 Accept-Encoding，代理边转发压缩流边解压解析；关闭时要求上游不压缩。</summary>
     public bool PassThroughCompression { get; set; }
 
+    /// <summary>Claude 通道连 https 上游时用 Claude Code 的 TLS 指纹握手（BouncyCastle），不走系统 TLS。</summary>
+    public bool ClaudeTlsFingerprint { get; set; }
+
     public string LocalUrl => $"http://{ConfigDefaults.ListenHost}:{ListenPort}";
 
     internal void NormalizeInPlace()
@@ -117,7 +120,8 @@ public sealed class ProxyRoute : IEquatable<ProxyRoute>
             && KeepaliveIdleMinutes == other.KeepaliveIdleMinutes
             && KeepaliveReasoningEffort == other.KeepaliveReasoningEffort
             && KeepaliveContextLimit == other.KeepaliveContextLimit
-            && PassThroughCompression == other.PassThroughCompression;
+            && PassThroughCompression == other.PassThroughCompression
+            && ClaudeTlsFingerprint == other.ClaudeTlsFingerprint;
     }
 
     public override bool Equals(object? obj) => Equals(obj as ProxyRoute);

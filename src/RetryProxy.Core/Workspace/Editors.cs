@@ -44,6 +44,8 @@ public sealed class RouteEditor
 
     public bool PassThroughCompression { get; set; }
 
+    public bool ClaudeTlsFingerprint { get; set; }
+
     public bool IsEditing => Index is not null;
 }
 

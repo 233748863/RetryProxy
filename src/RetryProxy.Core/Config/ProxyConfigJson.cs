@@ -319,6 +319,7 @@ public static class ProxyConfigJson
             writer.WriteNumber("keepalive_context_limit", route.KeepaliveContextLimit);
             writer.WriteString("keepalive_reasoning_effort", route.KeepaliveReasoningEffort.AsStr());
             writer.WriteBoolean("pass_through_compression", route.PassThroughCompression);
+            writer.WriteBoolean("claude_tls_fingerprint", route.ClaudeTlsFingerprint);
             writer.WriteEndObject();
         }
 
@@ -408,6 +409,7 @@ public static class ProxyConfigJson
             KeepaliveContextLimit = ToLong(Integer(value, "keepalive_context_limit", (ulong)ConfigDefaults.KeepaliveContextLimit, $"{label} keepalive_context_limit"), $"{label} keepalive_context_limit必须是整数"),
             KeepaliveReasoningEffort = ReasoningEffortExtensions.Parse(OptionalString(value, "keepalive_reasoning_effort", "default")),
             PassThroughCompression = Boolean(value, "pass_through_compression", false, $"{label} pass_through_compression"),
+            ClaudeTlsFingerprint = Boolean(value, "claude_tls_fingerprint", false, $"{label} claude_tls_fingerprint"),
         };
         route.NormalizeInPlace();
         return route;

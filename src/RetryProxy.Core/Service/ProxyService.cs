@@ -318,6 +318,7 @@ public sealed class ProxyService
             SetState(ServiceState.Running);
             serviceLogger.Info($"代理服务已启动：{config.LocalUrl}（上游请求跟随系统代理）");
             var keepAliveTask = KeepAlivePollLoopAsync(proxy, cancel.Token);
+            var fingerprintTask = proxy.RefreshTlsFingerprintLoopAsync(cancel.Token);
             // 停用通道要立刻放弃在处理中的请求：先读「处理中」，再取消，再硬停 Kestrel。
             await Task.WhenAny(stopSignal, Task.Delay(Timeout.Infinite, cancel.Token)).ConfigureAwait(false);
             discarded = Metrics.Snapshot().ActiveRequests;
@@ -327,6 +328,7 @@ public sealed class ProxyService
             try
             {
                 await keepAliveTask.ConfigureAwait(false);
+                await fingerprintTask.ConfigureAwait(false);
             }
             catch (Exception)
             {

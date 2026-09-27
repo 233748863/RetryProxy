@@ -196,8 +196,10 @@ internal static class NetworkErrorLabel
         Win32Exception? win32 = null;
         var tlsFailure = false;
         var cancelled = false;
+        Tls.FingerprintConnectException? described = null;
         foreach (var item in chain)
         {
+            described ??= item as Tls.FingerprintConnectException;
             if (item is SocketException || item is IOException)
             {
                 cause = item;
@@ -217,17 +219,20 @@ internal static class NetworkErrorLabel
             cancelled |= item is OperationCanceledException;
         }
 
-        var plain = cause is not null
-            ? DescribeCause(cause)
-            : tlsFailure
-                ? DescribeCategory(HttpRequestError.SecureConnectionError)
-                : category is { } known
-                    ? DescribeCategory(known)
-                    : cancelled
-                        ? "这次操作被取消了"
-                        : chain.Count == 0
-                            ? "没有更具体的原因"
-                            : "原因程序认不出来";
+        // 指纹 TLS 连接器给出的失败说明最具体（证书、代理认证等），优先采用。
+        var plain = described is not null
+            ? described.Plain
+            : cause is not null
+                ? DescribeCause(cause)
+                : tlsFailure
+                    ? DescribeCategory(HttpRequestError.SecureConnectionError)
+                    : category is { } known
+                        ? DescribeCategory(known)
+                        : cancelled
+                            ? "这次操作被取消了"
+                            : chain.Count == 0
+                                ? "没有更具体的原因"
+                                : "原因程序认不出来";
         int? code = cause is SocketException socket ? socket.NativeErrorCode : win32?.NativeErrorCode;
         return new Diagnosis(plain, category, code, chain.Select(item => item.GetType().Name).ToList());
     }

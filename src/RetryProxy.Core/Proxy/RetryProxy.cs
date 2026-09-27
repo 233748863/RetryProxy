@@ -6,6 +6,7 @@ using System.Net;
 using System.Net.Http;
 using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
@@ -21,6 +22,7 @@ using RetryProxy.Core.Logging;
 using RetryProxy.Core.Metrics;
 using RetryProxy.Core.Service;
 using RetryProxy.Core.Stats;
+using RetryProxy.Core.Tls;
 
 namespace RetryProxy.Core.Proxy;
 
@@ -49,6 +51,9 @@ public sealed class RetryProxy
 
     private readonly HttpClient _client;
     private readonly PromptCache _promptCache;
+    private readonly TlsFingerprintConnector? _tlsConnector;
+    /// <summary>只在开启 TLS 指纹时赋值（默认全应用共用 <see cref="TlsFingerprintStore.Shared"/>），关闭时不触碰指纹组件。</summary>
+    private TlsFingerprintStore? _tlsFingerprints;
     private string? _upstreamApiKey;
     private ClaudeAuthMode _upstreamAuthMode;
     private string? _localAccessKey;
@@ -75,6 +80,17 @@ public sealed class RetryProxy
                 Proxy = new ResolverWebProxy(ProxyResolver),
                 PooledConnectionIdleTimeout = TimeSpan.FromSeconds(90),
             };
+            if (config.ClaudeTlsFingerprint && config.ClientType == ClientType.Claude
+                && config.UpstreamBaseUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+            {
+                // 连接器自行处理系统代理与 TLS；请求改写成 http:// 后 HttpClient 只负责 HTTP/1.1。
+                _tlsFingerprints = TlsFingerprintStore.Shared;
+                _tlsConnector = new TlsFingerprintConnector(ProxyResolver, () => _tlsFingerprints!.Current);
+                handler.UseProxy = false;
+                handler.Proxy = null;
+                handler.ConnectCallback = _tlsConnector.ConnectAsync;
+            }
+
             _client = new HttpClient(handler, disposeHandler: true)
             {
                 Timeout = Timeout.InfiniteTimeSpan,
@@ -119,6 +135,47 @@ public sealed class RetryProxy
     {
         KeepAlive = watchdog;
         return this;
+    }
+
+    /// <summary>是否用 Claude Code 的 TLS 指纹连上游。</summary>
+    public bool UsesTlsFingerprint => _tlsConnector is not null;
+
+    /// <summary>仅供测试：替换指纹来源，并额外信任测试证书。</summary>
+    internal RetryProxy WithTlsFingerprint(TlsFingerprintStore store, X509Certificate2? trustedRoot)
+    {
+        if (_tlsConnector is not null)
+        {
+            _tlsFingerprints = store;
+            _tlsConnector.TrustedRoot = trustedRoot;
+        }
+
+        return this;
+    }
+
+    /// <summary>
+    /// 开启 TLS 指纹时在通道运行期间定期核对本机 Claude Code 的指纹（多个通道共用一次抓取）。
+    /// </summary>
+    public async Task RefreshTlsFingerprintLoopAsync(CancellationToken cancel)
+    {
+        if (_tlsConnector is null || _tlsFingerprints is null)
+        {
+            return;
+        }
+
+        var logger = Logger.WithActivity(LogActivity.Service);
+        logger.Info($"上游握手使用 Claude Code TLS 指纹（{_tlsFingerprints.Source}，JA4 {_tlsFingerprints.Current.Ja4}）");
+        while (!cancel.IsCancellationRequested)
+        {
+            try
+            {
+                await _tlsFingerprints.RefreshAsync(logger, cancel).ConfigureAwait(false);
+                await Task.Delay(TlsFingerprintStore.RefreshInterval, cancel).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+        }
     }
 
     public RetryProxy WithUpstreamApiKey(string? apiKey, string? localAccessKey, ClaudeAuthMode authMode = ClaudeAuthMode.Bearer)
@@ -895,7 +952,15 @@ public sealed class RetryProxy
     private async Task<UpstreamResponse> SendUpstreamAsync(RequestContext ctx, string method, string targetUrl, HeaderList headers, ReadOnlyMemory<byte> body, bool streaming)
     {
         var timeout = TimeSpan.FromSeconds(Config.TimeoutSeconds);
-        var request = new HttpRequestMessage(new HttpMethod(method), targetUrl)
+        var requestUri = new Uri(targetUrl);
+        string? hostHeader = null;
+        if (_tlsConnector is not null && requestUri.Scheme == Uri.UriSchemeHttps)
+        {
+            hostHeader = TlsFingerprintConnector.HostHeader(requestUri);
+            requestUri = TlsFingerprintConnector.PlainRequestUri(requestUri);
+        }
+
+        var request = new HttpRequestMessage(new HttpMethod(method), requestUri)
         {
             Version = HttpVersion.Version11,
             VersionPolicy = HttpVersionPolicy.RequestVersionOrLower,
@@ -913,6 +978,11 @@ public sealed class RetryProxy
             {
                 content?.Headers.TryAddWithoutValidation(name, value);
             }
+        }
+
+        if (hostHeader is not null)
+        {
+            request.Headers.Host = hostHeader;
         }
 
         // 非流式请求整体受单次超时约束；流式请求只在等响应头与每次读取上各自计时。

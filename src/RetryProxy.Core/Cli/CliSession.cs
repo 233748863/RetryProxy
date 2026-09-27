@@ -410,7 +410,7 @@ internal sealed class CliSession : IDisposable
         return session;
     }
 
-    private static string IoKind(Win32Exception error) => error.NativeErrorCode switch
+    internal static string IoKind(Win32Exception error) => error.NativeErrorCode switch
     {
         2 or 3 => "NotFound",
         5 => "PermissionDenied",
@@ -718,7 +718,7 @@ internal sealed class CliSession : IDisposable
         return node is JsonObject obj && obj.TryGetPropertyValue(name, out var value) && value is JsonValue jsonValue && jsonValue.TryGetValue<string>(out var text) ? text : null;
     }
 
-    private static void TryKill(Process child)
+    internal static void TryKill(Process child)
     {
         try
         {
@@ -729,7 +729,7 @@ internal sealed class CliSession : IDisposable
         }
     }
 
-    private static void TryDeleteDirectory(string directory)
+    internal static void TryDeleteDirectory(string directory)
     {
         try
         {

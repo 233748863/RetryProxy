@@ -83,6 +83,24 @@
                              AutomationProperties.Name="{i18n:T 透传压缩}" />
         </Grid>
 
+        <Grid x:Name="TlsFingerprintPanel" Margin="0,14,0,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <StackPanel Margin="0,0,16,0">
+                <ui:TextBlock Text="{i18n:T 模拟 Claude Code TLS 指纹}" />
+                <ui:TextBlock Margin="0,4,0,0"
+                              Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
+                              Text="{i18n:T 连接 https 上游时按 Claude Code 的握手特征建立 TLS，而不是用 Windows 系统 TLS；运行期间每 12 小时从本机 Claude Code 核对一次指纹。仅支持直连或 HTTP / SOCKS5 代理。下次启用通道时生效。}"
+                              TextWrapping="Wrap" />
+            </StackPanel>
+            <ui:ToggleSwitch x:Name="TlsFingerprintSwitch"
+                             Grid.Column="1"
+                             VerticalAlignment="Center"
+                             AutomationProperties.Name="{i18n:T 模拟 Claude Code TLS 指纹}" />
+        </Grid>
+
         <ui:TextBlock x:Name="ErrorText"
                       Margin="0,10,0,0"
                       Foreground="{ui:ThemeResource SystemFillColorCriticalBrush}"

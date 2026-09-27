@@ -6,6 +6,7 @@ using RetryProxy.Helpers.Extensions;
 using RetryProxy.Helpers.Win32;
 using RetryProxy.Core.Config;
 using RetryProxy.Core.Logging;
+using RetryProxy.Core.Tls;
 using RetryProxy.Service;
 using RetryProxy.Service.I18n;
 using RetryProxy.Service.Interface;
@@ -54,6 +55,8 @@ public partial class App : Application
             var configService = new ConfigService(proxyLogger);
             services.AddSingleton<IConfigService>(sp => configService);
             var all = configService.Get();
+            // 上次从本机 Claude Code 抓到的 TLS 指纹（没有则用内置）。
+            TlsFingerprintStore.Shared.Configure(Global.Absolute("User"));
 
             var i18nService = I18nService.Instance;
             i18nService.ChangeLanguage(all.OtherConfig.UiCultureInfoName);

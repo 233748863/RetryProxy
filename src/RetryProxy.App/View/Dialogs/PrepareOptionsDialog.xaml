@@ -133,7 +133,7 @@
                     <ui:TextBlock Margin="0,2,0,0"
                                   FontTypography="Caption"
                                   Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
-                                  Text="{i18n:T 后台准备按 Claude Code 的握手特征连接供应商，而不是用 Windows 系统 TLS。}"
+                                  Text="{i18n:T 后台准备按 Claude Code 的握手特征连接供应商（而不是 Windows 系统 TLS），并按原顺序转发请求头。}"
                                   TextWrapping="Wrap" />
                 </StackPanel>
                 <ui:ToggleSwitch x:Name="TlsFingerprintSwitch"

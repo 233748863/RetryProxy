@@ -92,7 +92,7 @@
                 <ui:TextBlock Text="{i18n:T 模拟 Claude Code TLS 指纹}" />
                 <ui:TextBlock Margin="0,4,0,0"
                               Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
-                              Text="{i18n:T 连接 https 上游时按 Claude Code 的握手特征建立 TLS，而不是用 Windows 系统 TLS；运行期间每 12 小时从本机 Claude Code 核对一次指纹。仅支持直连或 HTTP / SOCKS5 代理。下次启用通道时生效。}"
+                              Text="{i18n:T 按 Claude Code 的握手特征建立 TLS（而不是 Windows 系统 TLS），并按客户端发来的原顺序与大小写转发请求头；运行期间每 12 小时从本机 Claude Code 核对一次指纹。仅支持直连或 HTTP / SOCKS5 代理。下次启用通道时生效。}"
                               TextWrapping="Wrap" />
             </StackPanel>
             <ui:ToggleSwitch x:Name="TlsFingerprintSwitch"

@@ -392,27 +392,27 @@ public class TlsFingerprintTests
             "Accept-Encoding: gzip, deflate, br, zstd",
             "Content-Length: 2",
         };
-        var request = "POST /v1/messages?beta=true HTTP/1.1\r\n" + string.Join("\r\n", clientOrder) + "\r\n\r\n{}";
+        // 同一条连接上先发一个不经转发的健康检查（会留下一条用不上的记录），再发两个转发请求；
+        // 第二个请求头名全小写，检验大小写也按客户端原样转发。
+        var modelsOrder = new[] { $"host: 127.0.0.1:{port}", "user-agent: claude-cli/2.1.283", "x-app: cli", "accept: */*" };
+        var heads = await RawHttp.ExchangeAsync(port,
+            $"GET /_retry/health HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n",
+            "POST /v1/messages?beta=true HTTP/1.1\r\n" + string.Join("\r\n", clientOrder) + "\r\n\r\n{}",
+            "GET /v1/models HTTP/1.1\r\n" + string.Join("\r\n", modelsOrder) + "\r\n\r\n");
+        Assert.All(heads, head => Assert.StartsWith("HTTP/1.1 200", head));
 
-        Assert.StartsWith("HTTP/1.1 200", await RawHttp.ExchangeAsync(port, request));
+        var received = upstream.Heads.Select(head => head.Split("\r\n", StringSplitOptions.RemoveEmptyEntries)).ToArray();
+        Assert.Equal(2, received.Length);
+        Assert.Equal("POST /v1/messages?beta=true HTTP/1.1", received[0][0]);
+        Assert.Equal("GET /v1/models HTTP/1.1", received[1][0]);
+        Assert.All(received, lines => Assert.DoesNotContain(lines, line => line.StartsWith(HeaderOrderStream.PlanHeader, StringComparison.OrdinalIgnoreCase)));
+        Assert.Equal(Names(clientOrder), Names(received[0].Skip(1)));
+        Assert.Equal(Names(modelsOrder), Names(received[1].Skip(1)));
+        Assert.Contains($"Host: localhost:{upstream.Port}", received[0]);
+        Assert.Contains($"host: localhost:{upstream.Port}", received[1]);
 
-        var head = Assert.Single(upstream.Heads);
-        var lines = head.Split("\r\n", StringSplitOptions.RemoveEmptyEntries);
-        Assert.Equal("POST /v1/messages?beta=true HTTP/1.1", lines[0]);
-        Assert.DoesNotContain(lines, line => line.StartsWith(HeaderOrderStream.PlanHeader, StringComparison.OrdinalIgnoreCase));
-        Assert.Equal(string.Join(", ", ExpectedUpstreamOrder), string.Join(", ", lines.Skip(1).Select(line => line[..line.IndexOf(':')])));
-        Assert.Contains($"Host: localhost:{upstream.Port}", lines);
+        static string Names(IEnumerable<string> lines) => string.Join(", ", lines.Select(line => line[..line.IndexOf(':')]));
     }
-
-    /// <summary>
-    /// 上游收到的请求头顺序＝代理收到的顺序（Kestrel 先按内部固定顺序列出常见头，再列其余头），
-    /// 而不是 HttpClient 自己的顺序（Host 最前、Content-Type / Content-Length 最后）。
-    /// </summary>
-    private static readonly string[] ExpectedUpstreamOrder =
-    {
-        "Accept", "Connection", "Host", "User-Agent", "Accept-Encoding", "Authorization", "Content-Type", "Content-Length",
-        "X-Stainless-Lang", "anthropic-version", "x-app",
-    };
 
     [Fact]
     public void ClaudeTlsFingerprintIsPerRouteAndRoundTrips()
@@ -731,16 +731,23 @@ public class TlsFingerprintTests
     /// <summary>按原始字节收发 HTTP/1.1：用来构造 HttpClient 无法控制头顺序的请求，并读取对端收到的原文。</summary>
     private static class RawHttp
     {
-        public static async Task<string> ExchangeAsync(int port, string request)
+        /// <summary>在同一条连接上依次发送请求，返回每个响应头原文。</summary>
+        public static async Task<List<string>> ExchangeAsync(int port, params string[] requests)
         {
             using var client = new TcpClient();
             await client.ConnectAsync(IPAddress.Loopback, port);
             var stream = client.GetStream();
-            await stream.WriteAsync(Encoding.Latin1.GetBytes(request));
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-            var head = await ReadHeadAsync(stream, timeout.Token) ?? throw new IOException("代理没有返回响应");
-            await ReadBodyAsync(stream, head, timeout.Token);
-            return head;
+            var heads = new List<string>();
+            foreach (var request in requests)
+            {
+                await stream.WriteAsync(Encoding.Latin1.GetBytes(request), timeout.Token);
+                var head = await ReadHeadAsync(stream, timeout.Token) ?? throw new IOException("代理没有返回响应");
+                await ReadBodyAsync(stream, head, timeout.Token);
+                heads.Add(head);
+            }
+
+            return heads;
         }
 
         /// <summary>读到空行为止，返回请求头 / 响应头原文；对端在开头就关闭连接时返回 null。</summary>
@@ -763,11 +770,41 @@ public class TlsFingerprintTests
 
         public static async Task ReadBodyAsync(Stream stream, string head, CancellationToken cancellationToken)
         {
+            if (head.Contains("Transfer-Encoding: chunked", StringComparison.OrdinalIgnoreCase))
+            {
+                // 逐块读：长度行 → 数据 + CRLF；长度 0 之后读到空行结束（测试里没有尾部字段）。
+                while (true)
+                {
+                    var sizeLine = await ReadLineAsync(stream, cancellationToken);
+                    var size = Convert.ToInt32(sizeLine.Split(';')[0].Trim(), 16);
+                    if (size == 0)
+                    {
+                        await ReadLineAsync(stream, cancellationToken);
+                        return;
+                    }
+
+                    await stream.ReadExactlyAsync(new byte[size + 2], cancellationToken);
+                }
+            }
+
             var line = head.Split("\r\n").FirstOrDefault(item => item.StartsWith("Content-Length:", StringComparison.OrdinalIgnoreCase));
             if (line is not null && int.TryParse(line["Content-Length:".Length..].Trim(), out var length) && length > 0)
             {
                 await stream.ReadExactlyAsync(new byte[length], cancellationToken);
             }
+        }
+
+        private static async Task<string> ReadLineAsync(Stream stream, CancellationToken cancellationToken)
+        {
+            var line = new StringBuilder();
+            var one = new byte[1];
+            while (!line.ToString().EndsWith("\r\n", StringComparison.Ordinal))
+            {
+                await stream.ReadExactlyAsync(one, cancellationToken);
+                line.Append((char)one[0]);
+            }
+
+            return line.ToString(0, line.Length - 2);
         }
     }
 

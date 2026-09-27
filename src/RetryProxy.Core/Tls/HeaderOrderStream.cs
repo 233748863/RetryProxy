@@ -1,10 +1,10 @@
 using System;
 using System.Collections.Generic;
-using System.Globalization;
 using System.IO;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using RetryProxy.Core.Internal;
 
 namespace RetryProxy.Core.Tls;
 
@@ -96,261 +96,69 @@ internal sealed class HeaderOrderStream : Stream
 }
 
 /// <summary>
-/// 请求方向的分帧与重排状态机（不涉及网络，便于单测）。
-/// 请求头 → 攒到空行后重排输出；正文 → 按 Content-Length 计数或按 chunked 分块透传；结束后回到下一个请求头。
-/// 分帧信息缺失或格式不对时抛 <see cref="IOException"/> 让本次请求失败，绝不把内部顺序头漏给上游。
+/// 按顺序头重排请求头：分帧交给 <see cref="Http1RequestFramer"/>，这里只改写请求头。
+/// 分帧无法识别时抛 <see cref="IOException"/> 让本次请求失败，绝不把内部顺序头漏给上游。
 /// </summary>
-internal sealed class RequestHeadReorderer
+internal sealed class RequestHeadReorderer : Http1RequestFramer
 {
-    /// <summary>请求头上限；HttpClient 写出的请求头远小于此值，超出说明分帧已错乱。</summary>
-    private const int MaxHeadBytes = 1024 * 1024;
-    /// <summary>chunked 分块长度行或尾部字段的单行上限。</summary>
-    private const int MaxChunkLineBytes = 8 * 1024;
     /// <summary>重排后的请求头与紧随其后的一小段正文合并成一次写入，避免多拆出一个 TLS 记录。</summary>
     private const int CoalesceBytes = 64 * 1024;
 
-    private enum State
-    {
-        Head,
-        Body,
-        ChunkSize,
-        ChunkData,
-        ChunkDataEnd,
-        ChunkTrailer,
-    }
-
-    private State _state = State.Head;
-    private readonly MemoryStream _line = new();
-    private long _remaining;
-
     /// <summary>处理一段写入，返回应依次写给下层的数据段。</summary>
-    public IReadOnlyList<ReadOnlyMemory<byte>> Process(ReadOnlyMemory<byte> input)
-    {
-        var output = new List<ReadOnlyMemory<byte>>();
-        while (!input.IsEmpty)
-        {
-            var consumed = _state switch
-            {
-                State.Head => ConsumeHead(input.Span, output),
-                State.Body => PassThrough(input, output),
-                State.ChunkData => PassThrough(input, output),
-                State.ChunkDataEnd => PassThrough(input, output),
-                _ => ConsumeChunkLine(input, output),
-            };
-            input = input[consumed..];
-        }
-
-        return Coalesce(output);
-    }
-
-    private int ConsumeHead(ReadOnlySpan<byte> input, List<ReadOnlyMemory<byte>> output)
-    {
-        // 逐字节找 "\r\n\r\n"：请求头已缓存的部分可能以 "\r\n\r" 结尾，所以连同缓存一起判断。
-        for (var index = 0; index < input.Length; index++)
-        {
-            _line.WriteByte(input[index]);
-            if (_line.Length > MaxHeadBytes)
-            {
-                throw new IOException("请求头过长，无法按原顺序发送");
-            }
-
-            if (input[index] == (byte)'\n' && EndsWithBlankLine(_line))
-            {
-                var head = _line.ToArray();
-                _line.SetLength(0);
-                output.Add(Rewrite(head));
-                return index + 1;
-            }
-        }
-
-        return input.Length;
-    }
-
-    private static bool EndsWithBlankLine(MemoryStream line)
-    {
-        if (line.Length < 4)
-        {
-            return false;
-        }
-
-        var buffer = line.GetBuffer();
-        var end = (int)line.Length;
-        return buffer[end - 4] == '\r' && buffer[end - 3] == '\n' && buffer[end - 2] == '\r' && buffer[end - 1] == '\n';
-    }
+    public IReadOnlyList<ReadOnlyMemory<byte>> Process(ReadOnlyMemory<byte> input) => Coalesce(Frame(input));
 
     /// <summary>
-    /// 重排一个完整请求头，并据此决定正文的分帧方式。
     /// 顺序头里列出的头按其顺序、用其大小写输出；没列出的头（例如代理自己加的）保持原相对顺序排在最后。
+    /// 没有顺序头的请求原样输出。
     /// </summary>
-    private byte[] Rewrite(byte[] head)
+    protected override ReadOnlyMemory<byte> OnHead(byte[] head, string requestLine, IReadOnlyList<HeadField> fields)
     {
-        var text = Encoding.Latin1.GetString(head, 0, head.Length - 4);
-        var lines = text.Split("\r\n");
-        var fields = new List<(string Name, string Line)>(lines.Length);
         string[]? plan = null;
-        long? contentLength = null;
-        var chunked = false;
-        for (var index = 1; index < lines.Length; index++)
+        var others = new List<HeadField>(fields.Count);
+        foreach (var field in fields)
         {
-            var line = lines[index];
-            var colon = line.IndexOf(':');
-            if (colon <= 0)
+            if (field.Name.Equals(HeaderOrderStream.PlanHeader, StringComparison.OrdinalIgnoreCase))
             {
-                throw new IOException("请求头格式无法识别，无法按原顺序发送");
+                plan = field.Line[(field.Name.Length + 1)..].Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
             }
-
-            var name = line[..colon];
-            var value = line[(colon + 1)..].Trim();
-            if (name.Equals(HeaderOrderStream.PlanHeader, StringComparison.OrdinalIgnoreCase))
+            else
             {
-                plan = value.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
-                continue;
+                others.Add(field);
             }
+        }
 
-            if (name.Equals("Content-Length", StringComparison.OrdinalIgnoreCase))
+        if (plan is null)
+        {
+            return head;
+        }
+
+        var builder = new StringBuilder(head.Length);
+        builder.Append(requestLine).Append("\r\n");
+        var used = new bool[others.Count];
+        foreach (var planned in plan)
+        {
+            for (var index = 0; index < others.Count; index++)
             {
-                if (!long.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var length))
+                if (!used[index] && others[index].Name.Equals(planned, StringComparison.OrdinalIgnoreCase))
                 {
-                    throw new IOException("请求头 Content-Length 无效，无法按原顺序发送");
-                }
-
-                contentLength = length;
-            }
-            else if (name.Equals("Transfer-Encoding", StringComparison.OrdinalIgnoreCase)
-                     && value.Contains("chunked", StringComparison.OrdinalIgnoreCase))
-            {
-                chunked = true;
-            }
-
-            fields.Add((name, line));
-        }
-
-        // 请求没有 Content-Length / chunked 就没有正文（RFC 9112 §6.3）；两者都有时以 chunked 为准。
-        if (chunked)
-        {
-            _state = State.ChunkSize;
-        }
-        else if (contentLength is > 0)
-        {
-            _state = State.Body;
-            _remaining = contentLength.Value;
-        }
-        else
-        {
-            _state = State.Head;
-        }
-
-        var builder = new StringBuilder(text.Length + 4);
-        builder.Append(lines[0]).Append("\r\n");
-        if (plan is not null)
-        {
-            var used = new bool[fields.Count];
-            foreach (var planned in plan)
-            {
-                for (var index = 0; index < fields.Count; index++)
-                {
-                    if (!used[index] && fields[index].Name.Equals(planned, StringComparison.OrdinalIgnoreCase))
-                    {
-                        used[index] = true;
-                        // 头名换成客户端原来的大小写，值原样保留。例：accept-encoding: gzip → Accept-Encoding: gzip。
-                        builder.Append(planned).Append(fields[index].Line, fields[index].Name.Length, fields[index].Line.Length - fields[index].Name.Length).Append("\r\n");
-                    }
-                }
-            }
-
-            for (var index = 0; index < fields.Count; index++)
-            {
-                if (!used[index])
-                {
-                    builder.Append(fields[index].Line).Append("\r\n");
+                    used[index] = true;
+                    // 头名换成客户端原来的大小写，值原样保留。例：accept-encoding: gzip → Accept-Encoding: gzip。
+                    var line = others[index].Line;
+                    builder.Append(planned).Append(line, others[index].Name.Length, line.Length - others[index].Name.Length).Append("\r\n");
                 }
             }
         }
-        else
+
+        for (var index = 0; index < others.Count; index++)
         {
-            foreach (var field in fields)
+            if (!used[index])
             {
-                builder.Append(field.Line).Append("\r\n");
+                builder.Append(others[index].Line).Append("\r\n");
             }
         }
 
         builder.Append("\r\n");
         return Encoding.Latin1.GetBytes(builder.ToString());
-    }
-
-    private int PassThrough(ReadOnlyMemory<byte> input, List<ReadOnlyMemory<byte>> output)
-    {
-        var count = (int)Math.Min(input.Length, _remaining);
-        output.Add(input[..count]);
-        _remaining -= count;
-        if (_remaining == 0)
-        {
-            _state = _state switch
-            {
-                State.Body => State.Head,
-                State.ChunkData => State.ChunkDataEnd,
-                _ => State.ChunkSize,
-            };
-            if (_state == State.ChunkDataEnd)
-            {
-                _remaining = 2;
-            }
-        }
-
-        return count;
-    }
-
-    /// <summary>
-    /// chunked 的长度行与尾部字段：原样透传，同时读出分块长度。
-    /// 例：<c>1a;ext=x\r\n</c> → 后面 26 字节是数据；<c>0\r\n</c> → 进入尾部，读到空行算本请求结束。
-    /// </summary>
-    private int ConsumeChunkLine(ReadOnlyMemory<byte> input, List<ReadOnlyMemory<byte>> output)
-    {
-        var span = input.Span;
-        var newline = span.IndexOf((byte)'\n');
-        var count = newline < 0 ? span.Length : newline + 1;
-        _line.Write(span[..count]);
-        output.Add(input[..count]);
-        if (_line.Length > MaxChunkLineBytes)
-        {
-            throw new IOException("分块长度行过长，无法按原顺序发送");
-        }
-
-        if (newline < 0)
-        {
-            return count;
-        }
-
-        var line = Encoding.Latin1.GetString(_line.GetBuffer(), 0, (int)_line.Length).TrimEnd('\r', '\n');
-        _line.SetLength(0);
-        if (_state == State.ChunkTrailer)
-        {
-            if (line.Length == 0)
-            {
-                _state = State.Head;
-            }
-
-            return count;
-        }
-
-        var extension = line.IndexOf(';');
-        var sizeText = (extension < 0 ? line : line[..extension]).Trim();
-        if (!long.TryParse(sizeText, NumberStyles.AllowHexSpecifier, CultureInfo.InvariantCulture, out var size) || size < 0)
-        {
-            throw new IOException("分块长度无效，无法按原顺序发送");
-        }
-
-        if (size == 0)
-        {
-            _state = State.ChunkTrailer;
-        }
-        else
-        {
-            _state = State.ChunkData;
-            _remaining = size;
-        }
-
-        return count;
     }
 
     private static IReadOnlyList<ReadOnlyMemory<byte>> Coalesce(List<ReadOnlyMemory<byte>> output)

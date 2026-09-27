@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
+using RetryProxy.Core.Proxy;
 using RetryProxy.Core.Tls;
 using Xunit;
 
@@ -111,4 +112,61 @@ public class HeaderOrderTests
 
     private static string Run(RequestHeadReorderer reorderer, string input) =>
         Encoding.Latin1.GetString(reorderer.Process(Encoding.Latin1.GetBytes(input)).SelectMany(segment => segment.ToArray()).ToArray());
+
+    // ------------------------------------------------------------------ 入站记录
+
+    [Fact]
+    public void RecorderKeepsRawOrderPerRequestAcrossReadBoundaries()
+    {
+        // 正文里放一段像请求行的文本，检验按 Content-Length 跳过正文。
+        const string body = "{\"a\":\"GET / HTTP/1.1\\r\\n\\r\\n\"}";
+        var input = Encoding.Latin1.GetBytes(
+            "GET /_retry/health HTTP/1.1\r\nHost: h\r\n\r\n"
+            + $"POST /v1/messages?beta=true HTTP/1.1\r\nAccept: */*\r\nhost: h\r\nContent-Length: {body.Length}\r\nx-app: cli\r\n\r\n"
+            + body
+            + "HEAD /api/hello HTTP/1.1\r\nUser-Agent: Bun\r\nHost: h\r\n\r\n");
+        foreach (var size in new[] { 1, 5, input.Length })
+        {
+            var recorder = new InboundHeaderRecorder();
+            for (var offset = 0; offset < input.Length; offset += size)
+            {
+                recorder.Observe(input.AsMemory(offset, Math.Min(size, input.Length - offset)));
+            }
+
+            // 健康检查不经转发、没人取，下一次按请求行对号时被跳过。
+            Assert.Equal(new[] { "Accept", "host", "Content-Length", "x-app" }, recorder.Take("POST", "/v1/messages?beta=true"));
+            Assert.Equal(new[] { "User-Agent", "Host" }, recorder.Take("HEAD", "/api/hello"));
+            Assert.Null(recorder.Take("GET", "/v1/models"));
+        }
+    }
+
+    [Fact]
+    public void RecorderStopsInsteadOfGuessingOnMalformedInput()
+    {
+        var recorder = new InboundHeaderRecorder();
+        recorder.Observe(Encoding.Latin1.GetBytes("GET /a HTTP/1.1\r\nHost: h\r\n\r\nPOST /b HTTP/1.1\r\nContent-Length: x\r\n\r\n"));
+        recorder.Observe(Encoding.Latin1.GetBytes("GET /c HTTP/1.1\r\nHost: h\r\n\r\n"));
+
+        Assert.Null(recorder.Take("GET", "/a"));
+        Assert.Null(recorder.Take("GET", "/c"));
+    }
+
+    [Fact]
+    public void RecorderKeepsOnlyRecentUnclaimedRequests()
+    {
+        static InboundHeaderRecorder Filled()
+        {
+            var recorder = new InboundHeaderRecorder();
+            for (var index = 0; index < 20; index++)
+            {
+                recorder.Observe(Encoding.Latin1.GetBytes($"GET /{index} HTTP/1.1\r\nHost: h\r\n\r\n"));
+            }
+
+            return recorder;
+        }
+
+        // 只留最近 16 条：/0～/3 已被丢弃，/4 是保留下来最旧的一条。
+        Assert.Null(Filled().Take("GET", "/3"));
+        Assert.Equal(new[] { "Host" }, Filled().Take("GET", "/4"));
+    }
 }

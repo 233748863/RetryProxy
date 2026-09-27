@@ -419,7 +419,7 @@ public sealed class RetryProxy
         var requestId = Guid.NewGuid().ToString("N");
         var method = context.Request.Method;
         var (safePath, rawQuery) = RawTarget(context);
-        var requestHeaders = ToHeaderList(context.Request.Headers);
+        var requestHeaders = ToHeaderList(context.Request.Headers, InboundHeaderRecorder.Take(context));
         var internalCancel = InternalSessions.RequestCancel(requestHeaders);
         // HEAD 不可能是用户对话（Claude Code 会先发不带自定义头的 HEAD /api/hello 探测连通性）；
         // 把它算作真实请求会误伤正经本通道转发的后台准备。
@@ -661,21 +661,46 @@ public sealed class RetryProxy
         return order;
     }
 
-    private static HeaderList ToHeaderList(IHeaderDictionary headers)
+    /// <summary>
+    /// Kestrel 的请求头转成保序列表。有原始头名记录（<see cref="InboundHeaderRecorder"/>）时按客户端原顺序与大小写排列。
+    /// 例：Kestrel 给出 <c>Accept, Connection, Host</c>、原始为 <c>Host, accept, Connection</c> → 列表为 <c>Host, accept, Connection</c>；
+    /// 记录里没有的头（正常不会出现）按 Kestrel 的顺序排在最后。
+    /// </summary>
+    private static HeaderList ToHeaderList(IHeaderDictionary headers, IReadOnlyList<string>? rawNames = null)
     {
         var list = new HeaderList();
-        foreach (var (name, values) in headers)
+        var added = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (rawNames is not null)
         {
-            foreach (var value in values)
+            foreach (var name in rawNames)
             {
-                if (value is not null)
+                if (added.Add(name) && headers.TryGetValue(name, out var values))
                 {
-                    list.Append(name, value);
+                    AppendValues(list, name, values);
                 }
             }
         }
 
+        foreach (var (name, values) in headers)
+        {
+            if (!added.Contains(name))
+            {
+                AppendValues(list, name, values);
+            }
+        }
+
         return list;
+    }
+
+    private static void AppendValues(HeaderList list, string name, Microsoft.Extensions.Primitives.StringValues values)
+    {
+        foreach (var value in values)
+        {
+            if (value is not null)
+            {
+                list.Append(name, value);
+            }
+        }
     }
 
     private static async Task<ReadOnlyMemory<byte>> ReadRequestBodyAsync(HttpContext context, CancellationToken token)

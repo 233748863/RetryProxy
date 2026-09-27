@@ -44,7 +44,14 @@ public sealed class ProxyHost : IAsyncDisposable
             // 不在管道里缓冲响应：写入只有在数据真正交给 socket 后才完成，
             // 这样中途切断连接时客户端已经拿到之前的全部字节（对应 hyper 的行为）。
             options.Limits.MaxResponseBufferSize = 0;
-            options.Listen(IPAddress.Loopback, port);
+            options.Listen(IPAddress.Loopback, port, listen =>
+            {
+                // 模拟 Claude Code 指纹的通道要按客户端原顺序转发请求头，先在连接层记下原始顺序（Kestrel 会重排）。
+                if (proxy.UsesTlsFingerprint)
+                {
+                    listen.Use(InboundHeaderRecorder.Middleware);
+                }
+            });
         });
         var app = builder.Build();
         app.MapGet("/_retry/health", (RequestDelegate)proxy.HealthAsync);

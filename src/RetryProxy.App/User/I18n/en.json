@@ -96,6 +96,7 @@
   "新供应商地址": "New provider URL",
   "开始后台准备": "Start background preparation",
   "独立保活间隔": "Independent keep-alive interval",
+  "后台准备按 Claude Code 的握手特征连接供应商，而不是用 Windows 系统 TLS。": "Background preparation connects to the provider with Claude Code's TLS handshake instead of Windows system TLS.",
   "允许输入 0.5～1440 分钟": "Enter 0.5–1440 minutes",
   "准备成功后按此间隔保活；仅在本次运行有效": "After preparation succeeds, keep alive at this interval; applies only during this run",
   "开新通道准备": "Prepare via new channel",

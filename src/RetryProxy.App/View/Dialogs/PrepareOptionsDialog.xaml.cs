@@ -36,6 +36,7 @@ public partial class PrepareOptionsDialog : ContentDialog
         NewRadio.IsChecked = state.Mode == PrepareMode.CustomProvider;
         CodexRadio.IsChecked = state.ClientType == ClientType.Codex;
         ClaudeRadio.IsChecked = state.ClientType == ClientType.Claude;
+        TlsFingerprintSwitch.IsChecked = state.ClaudeTlsFingerprint;
         _initialized = true;
         Unloaded += (_, _) => ResetModels();
         UpdateMode();
@@ -69,6 +70,8 @@ public partial class PrepareOptionsDialog : ContentDialog
         FetchModelsButton.Visibility = Visibility.Visible;
         ModelsLoadingText.Visibility = Visibility.Collapsed;
         ModelBox.ItemsSource = _state.Models.Count > 0 ? _state.Models : null;
+        // TLS 指纹只对 Claude Code 有意义（Codex 在 Windows 上本就用系统 TLS）。
+        TlsFingerprintPanel.Visibility = _state.ClientType == ClientType.Claude ? Visibility.Visible : Visibility.Collapsed;
         PlanText.Text = _workspace.PlanText(_state);
     }
 
@@ -253,6 +256,7 @@ public partial class PrepareOptionsDialog : ContentDialog
             }
             _state.SelectedModel = ModelBox.Text;
             _state.IdleMinutes = IdleMinutesBox.Text;
+            _state.ClaudeTlsFingerprint = TlsFingerprintSwitch.IsChecked == true;
             if (!_workspace.SubmitPrepareDialog(_state))
             {
                 ShowError(_state.Error ?? string.Empty);

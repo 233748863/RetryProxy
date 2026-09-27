@@ -31,6 +31,9 @@ public sealed class PreparationDialogState
 
     public string IdleMinutes { get; set; } = "5";
 
+    /// <summary>Claude Code 准备时按 Claude Code 的 TLS 指纹连供应商；Codex 忽略此项。</summary>
+    public bool ClaudeTlsFingerprint { get; set; }
+
     public string? Error { get; set; }
 
     public void ClearModels()
@@ -49,5 +52,6 @@ public sealed class PreparationDialogState
         SelectedModel = SelectedModel,
         ReasoningEffort = ReasoningEffort,
         IdleMinutes = IdleMinutes,
+        ClaudeTlsFingerprint = ClaudeTlsFingerprint,
     };
 }

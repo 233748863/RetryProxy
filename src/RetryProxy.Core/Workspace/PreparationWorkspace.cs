@@ -78,9 +78,11 @@ public sealed class PreparationWorkspace
         : $"使用 {options.ClientType.Label()} 为填写的供应商准备，地址、密钥与会话仅在本次运行有效。";
 
     internal static ProxyConfig CreateRuntimeConfig(string baseUrl, int port, double idleMinutes, ClientType clientType,
-        ReasoningEffort reasoningEffort = ReasoningEffort.Default) => new()
+        ReasoningEffort reasoningEffort = ReasoningEffort.Default, bool claudeTlsFingerprint = false) => new()
     {
         ClientType = clientType,
+        // 与通道一致：只有 Claude 客户端才模拟指纹（供应商均为 https；本机 http 测试上游不套 TLS）。
+        ClaudeTlsFingerprint = claudeTlsFingerprint && clientType == ClientType.Claude,
         ListenPort = port,
         MaxRetries = 0,
         KeepaliveEnabled = false,
@@ -125,7 +127,7 @@ public sealed class PreparationWorkspace
             using var listener = new TcpListener(IPAddress.Loopback, 0);
             listener.Start();
             var port = ((IPEndPoint)listener.LocalEndpoint).Port;
-            runtime = CreateRuntimeConfig(upstream.BaseUrl, port, idle.Value, options.ClientType, options.ReasoningEffort);
+            runtime = CreateRuntimeConfig(upstream.BaseUrl, port, idle.Value, options.ClientType, options.ReasoningEffort, options.ClaudeTlsFingerprint);
             var address = new Uri(upstream.BaseUrl);
             if (address.IsLoopback && (address.Port == port || _tasks.Values.Any(item => !item.CanStart && item.ListenPort == address.Port)))
             {

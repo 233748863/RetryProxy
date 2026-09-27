@@ -123,6 +123,25 @@
                           Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
                           Text="{i18n:T 准备及后续保活均使用所选强度；仅在本次运行有效}"
                           TextWrapping="Wrap" />
+            <Grid x:Name="TlsFingerprintPanel" Margin="0,10,0,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <StackPanel Margin="0,0,16,0">
+                    <ui:TextBlock FontTypography="Body" Text="{i18n:T 模拟 Claude Code TLS 指纹}" />
+                    <ui:TextBlock Margin="0,2,0,0"
+                                  FontTypography="Caption"
+                                  Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
+                                  Text="{i18n:T 后台准备按 Claude Code 的握手特征连接供应商，而不是用 Windows 系统 TLS。}"
+                                  TextWrapping="Wrap" />
+                </StackPanel>
+                <ui:ToggleSwitch x:Name="TlsFingerprintSwitch"
+                                 Grid.Column="1"
+                                 VerticalAlignment="Center"
+                                 AutomationProperties.AutomationId="PreparationTlsFingerprint"
+                                 AutomationProperties.Name="{i18n:T 模拟 Claude Code TLS 指纹}" />
+            </Grid>
             <ui:TextBlock x:Name="PlanText"
                           Margin="0,8,0,0"
                           FontTypography="Caption"

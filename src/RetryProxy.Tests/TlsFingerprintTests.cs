@@ -344,14 +344,19 @@ public class TlsFingerprintTests
     }
 
     [Theory]
-    [InlineData("http")]
-    [InlineData("socks5")]
-    public async Task TunnelsThroughSystemProxy(string scheme)
+    [InlineData("http", ClientType.Claude)]
+    [InlineData("socks5", ClientType.Claude)]
+    [InlineData("http", ClientType.Codex)]
+    [InlineData("socks5", ClientType.Codex)]
+    public async Task TunnelsThroughSystemProxy(string scheme, ClientType client)
     {
         await using var upstream = await HttpsUpstream.StartAsync(context => Upstream.Json(context, 200, $"{{\"host\":\"{context.Request.Host.Value}\"}}"));
-        await using var tunnel = await TunnelProxy.StartAsync(scheme, "user", "p@ss");
-        var resolver = new FixedProxyResolver(new Uri($"{scheme}://user:p%40ss@127.0.0.1:{tunnel.Port}"));
-        await using var proxy = await TlsProxy.StartAsync(upstream.BaseUrl, upstream.Certificate, resolver);
+        // Claude 指纹连接器自己建隧道并带代理账号；Codex 走 HttpClient 自带的代理逻辑，这里用不需要账号的代理（与本机常见的 127.0.0.1:7897 一致）。
+        var withAccount = client == ClientType.Claude;
+        await using var tunnel = await TunnelProxy.StartAsync(scheme, withAccount ? "user" : string.Empty, withAccount ? "p@ss" : string.Empty);
+        var account = withAccount ? "user:p%40ss@" : string.Empty;
+        var resolver = new FixedProxyResolver(new Uri($"{scheme}://{account}127.0.0.1:{tunnel.Port}"));
+        await using var proxy = await TlsProxy.StartAsync(upstream.BaseUrl, upstream.Certificate, resolver, client);
         using var http = TestClient.Create(10);
         using var response = await TestClient.Send(http, HttpMethod.Post, $"{proxy.Address}/v1/messages", "{}", "application/json");
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
@@ -912,7 +917,7 @@ public class TlsFingerprintTests
 
             var lines = head.ToString().Split("\r\n");
             var expected = "Proxy-Authorization: Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes($"{_user}:{_password}"));
-            if (!lines.Contains(expected))
+            if (_user.Length > 0 && !lines.Contains(expected))
             {
                 await stream.WriteAsync(Encoding.ASCII.GetBytes("HTTP/1.1 407 Proxy Authentication Required\r\nContent-Length: 0\r\n\r\n"));
                 return null;
@@ -930,6 +935,12 @@ public class TlsFingerprintTests
             await stream.ReadExactlyAsync(greeting);
             var methods = new byte[greeting[1]];
             await stream.ReadExactlyAsync(methods);
+            if (_user.Length == 0 && methods.Contains((byte)0))
+            {
+                await stream.WriteAsync(new byte[] { 5, 0 });
+                return await Socks5ConnectRequestAsync(stream);
+            }
+
             if (!methods.Contains((byte)2))
             {
                 await stream.WriteAsync(new byte[] { 5, 0xff });
@@ -952,6 +963,11 @@ public class TlsFingerprintTests
                 return null;
             }
 
+            return await Socks5ConnectRequestAsync(stream);
+        }
+
+        private static async Task<(string Host, int Port)?> Socks5ConnectRequestAsync(NetworkStream stream)
+        {
             var request = new byte[5];
             await stream.ReadExactlyAsync(request);
             if (request[3] != 3)

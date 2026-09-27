@@ -99,7 +99,10 @@ public sealed class RetryProxy
                 && config.UpstreamBaseUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
             {
                 // Codex 在 Windows 上走 SChannel，TLS 握手与 .NET 默认一致，只需在系统 TLS 之上按 Codex 原顺序重排请求头。
-                handler.PlaintextStreamFilter = (context, _) => ValueTask.FromResult<Stream>(new HeaderOrderStream(context.PlaintextStream));
+                // 经 HTTP 系统代理时，到代理的 CONNECT 连接也会经过这里，隧道建好后其上跑的是 TLS 握手字节，不能套重排层。
+                handler.PlaintextStreamFilter = (context, _) => ValueTask.FromResult(context.InitialRequestMessage.Method == HttpMethod.Connect
+                    ? context.PlaintextStream
+                    : new HeaderOrderStream(context.PlaintextStream));
                 handler.SslOptions.RemoteCertificateValidationCallback = (_, certificate, _, errors) =>
                     errors == System.Net.Security.SslPolicyErrors.None
                     || (_trustedTestCertificate is not null && certificate is not null && certificate.GetCertHashString() == _trustedTestCertificate.Thumbprint);

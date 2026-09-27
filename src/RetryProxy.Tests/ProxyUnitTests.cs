@@ -320,7 +320,7 @@ public class ProxyUnitTests
                      (1, 1, 200, "[request-1] POST /v1/responses -> 上游 HTTP 200"),
                      (2, 101, 200, "[request-1] 第 2/101 次 POST /v1/responses -> 上游 HTTP 200"),
                      (101, 101, 200, "[request-1] 第 101/101 次 POST /v1/responses -> 上游 HTTP 200"),
-                     (1, 101, 503, "[request-1] 第 1/101 次 POST /v1/responses -> 上游 HTTP 503"),
+                     (1, 101, 503, "[request-1] 第 1/101 次 POST /v1/responses -> 上游 HTTP 503（上游服务暂不可用），"),
                  })
         {
             var line = LogText.FormatCompletedAttempt("request-1", attempt, total, "POST", "/v1/responses", status, 0.25, 1.5, "，模型 gpt-test，输入 8 / 输出 2 token");
@@ -329,6 +329,17 @@ public class ProxyUnitTests
             Assert.Contains("首字 0.25 秒", line);
             Assert.Contains("耗时 1.50 秒", line);
         }
+    }
+
+    [Fact]
+    public void UpstreamStatusExplainsKnownErrorCodes()
+    {
+        Assert.Equal("上游 HTTP 200", LogText.UpstreamStatus(200));
+        Assert.Equal("上游 HTTP 200", LogText.UpstreamStatus(200, "上游请求超限"));
+        Assert.Equal("上游 HTTP 429（请求过于频繁）", LogText.UpstreamStatus(429));
+        Assert.Equal("上游 HTTP 524（上游响应超时）", LogText.UpstreamStatus(524));
+        Assert.Equal("上游 HTTP 500（当前需求量高，模型负载已达上限）", LogText.UpstreamStatus(500, "当前需求量高，模型负载已达上限"));
+        Assert.Equal("上游 HTTP 599", LogText.UpstreamStatus(599));
     }
 
     [Fact]

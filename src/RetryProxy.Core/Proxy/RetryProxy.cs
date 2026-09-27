@@ -888,7 +888,7 @@ public sealed class RetryProxy
                         totalAttempts++;
                     }
 
-                    ctx.Logger.Info($"[{requestId}] 上游 HTTP {status} 拒绝当前 Claude 鉴权，改用另一种认证格式重试一次");
+                    ctx.Logger.Info($"[{requestId}] {LogText.UpstreamStatus(status)} 拒绝当前 Claude 鉴权，改用另一种认证格式重试一次");
                     if (keepAliveTemplate is not null)
                     {
                         keepAliveTemplate = new KeepAliveTemplate(method, pathAndQuery, headers, body);
@@ -935,8 +935,9 @@ public sealed class RetryProxy
                     else
                     {
                         reader.Dispose();
+                        var summary = buffered.TooLarge ? null : stats.FailureSummary();
                         var reason = buffered.TooLarge ? $"响应超过 {MaxRetryResponseBodyBytes} 字节暂存上限"
-                            : stats.FailureSummary() ?? stats.Outcome?.Reason ?? "未返回完整回复及有效上下文";
+                            : summary ?? stats.Outcome?.Reason ?? "未返回完整回复及有效上下文";
                         if (totalAttempts != 0 && attempt >= maxRetries)
                         {
                             ctx.Metrics.Failure(requestId);
@@ -946,7 +947,7 @@ public sealed class RetryProxy
                         var delay = RetryDelay(attempt, status, responseHeaders);
                         ctx.Metrics.Retry(requestId, attemptNumber);
                         ctx.Metrics.RequestPhase(requestId, RequestPhase.WaitingRetry);
-                        ctx.Logger.Warn($"[{requestId}] 第 {attemptNumber} 次 {method} {safePath} -> 上游 HTTP {status}，{reason}，未交给客户端，{delay:F3} 秒后代理重试{stats.FailureLogFields()}");
+                        ctx.Logger.Warn($"[{requestId}] 第 {attemptNumber} 次 {method} {safePath} -> {(summary is not null && status is < 200 or >= 300 ? LogText.UpstreamStatus(status, summary) : $"{LogText.UpstreamStatus(status)}，{reason}")}，未交给客户端，{delay:F3} 秒后代理重试{stats.FailureLogFields()}");
                         await WaitDelayAsync(delay, ctx.Token).ConfigureAwait(false);
                         continue;
                     }
@@ -983,7 +984,7 @@ public sealed class RetryProxy
                             var delay = RetryDelay(attempt, status, response.Headers);
                             ctx.Metrics.Retry(requestId, attemptNumber);
                             ctx.Metrics.RequestPhase(requestId, RequestPhase.WaitingRetry);
-                            ctx.Logger.Warn($"[{requestId}] 上游 HTTP {status} 可重试，{delay:F3} 秒后再次请求");
+                            ctx.Logger.Warn($"[{requestId}] {LogText.UpstreamStatus(status)} 可重试，{delay:F3} 秒后再次请求");
                             await WaitDelayAsync(delay, ctx.Token).ConfigureAwait(false);
                             continue;
                         }
@@ -993,7 +994,7 @@ public sealed class RetryProxy
                             upstream.Source));
                     }
 
-                    ctx.Logger.Warn($"[{requestId}] 上游 HTTP {status} 错误正文超过 {MaxRetryResponseBodyBytes} 字节暂存上限，改为完整流式转发，不再因本次状态码重试");
+                    ctx.Logger.Warn($"[{requestId}] {LogText.UpstreamStatus(status)} 错误正文超过 {MaxRetryResponseBodyBytes} 字节暂存上限，改为完整流式转发，不再因本次状态码重试");
                 }
                 else if (retryable)
                 {
@@ -1526,7 +1527,7 @@ public sealed class RetryProxy
             NoGenerationException generation => generation.Message,
             _ => throw error,
         };
-        var statusText = status is { } value ? $"上游 HTTP {value}" : "上游状态码：无";
+        var statusText = status is { } value ? LogText.UpstreamStatus(value) : "上游状态码：无";
         double? delay = totalAttempts == 0 || attemptNumber < totalAttempts ? RetryDelay(attemptNumber - 1, null, null) : null;
         var isTemporaryKeepAlive = _localAccessKey is not null && ctx.RequestId.StartsWith(ProxyMetrics.KeepAlivePrefix, StringComparison.Ordinal);
         var retryText = delay is { } seconds ? $"将在 {seconds:F3} 秒后重试" : "已达到重试上限";

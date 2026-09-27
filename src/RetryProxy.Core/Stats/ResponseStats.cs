@@ -446,6 +446,35 @@ internal sealed class ResponseStats
                         case "server_error":
                         case "api_error":
                             return "上游服务内部错误";
+                        // new-api / one-api 系中转站：当前分组没有可用渠道，多为该模型负载已满。
+                        case "get_channel_failed":
+                            return "当前需求量高，模型负载已达上限";
+                        case "model_not_found":
+                            return "上游没有这个模型";
+                        case "insufficient_user_quota":
+                        case "pre_consume_token_quota_failed":
+                        case "quota_exceeded":
+                            return "上游可用额度不足";
+                        case "invalid_request_error":
+                        case "invalid_request":
+                            return "请求参数有误";
+                        case "permission_error":
+                        case "permission_denied":
+                        case "access_denied":
+                            return "没有访问权限";
+                        case "not_found_error":
+                            return "地址或模型不存在";
+                        case "request_too_large":
+                            return "请求内容过大";
+                        case "billing_error":
+                            return "上游账户计费异常";
+                        case "service_unavailable":
+                            return "上游服务暂不可用";
+                        case "timeout_error":
+                            return "上游处理超时";
+                        case "bad_response_status_code":
+                        case "do_request_failed":
+                            return "中转站连不上它的上游渠道";
                     }
 
                     break;

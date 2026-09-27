@@ -389,6 +389,10 @@ public class ResponseStatsTests
             ("""{"code":"context_length_exceeded"}""", "请求内容超过上游长度限制"),
             ("""{"code":"invalid_api_key"}""", "上游身份验证失败"),
             ("""{"code":"server_error"}""", "上游服务内部错误"),
+            ("""{"code":"get_channel_failed","type":"new_api_error"}""", "当前需求量高，模型负载已达上限"),
+            ("""{"code":"model_not_found","type":"new_api_error"}""", "上游没有这个模型"),
+            ("""{"type":"invalid_request_error"}""", "请求参数有误"),
+            ("""{"code":"novel_error","type":"new_api_error"}""", null),
             ("""{"code":"novel_error","param":"rate_limit_exceeded","message":"rate_limit_exceeded private-message"}""", null),
         };
         foreach (var (error, expected) in cases)

@@ -183,8 +183,11 @@ internal sealed class StreamLifecycle : IDisposable
         }
 
         var attemptText = _totalAttempts == 0 ? $"第 {_attemptNumber} 次" : $"第 {_attemptNumber}/{_totalAttempts} 次";
+        // 能从上游错误码认出原因且状态码非 2xx 时，原因已写在状态后的括号里，不再重复。
+        var summary = Stats.FailureSummary();
+        var reasonText = summary is not null && _status is < 200 or >= 300 ? string.Empty : $"，原因：{summary ?? reason}";
         _logger.Warn(
-            $"[{_requestId}] {attemptText} {_method} {_safePath} -> 上游 HTTP {_status}，响应未完成，原因：{Stats.FailureSummary() ?? reason}，不再重试（已进入响应转发阶段）{Stats.FailureLogFields()}，{LogText.TimingText(Stats.FirstContentSeconds(), elapsed)}");
+            $"[{_requestId}] {attemptText} {_method} {_safePath} -> {LogText.UpstreamStatus(_status, summary)}，响应未完成{reasonText}，不再重试（已进入响应转发阶段）{Stats.FailureLogFields()}，{LogText.TimingText(Stats.FirstContentSeconds(), elapsed)}");
     }
 
     /// <summary>对应 Drop：正文流没走完就被丢弃。</summary>
@@ -240,6 +243,48 @@ internal static class LogText
         double elapsed,
         string details)
     {
-        return $"[{requestId}] {AttemptPrefix(attemptNumber, totalAttempts, status)}{method} {safePath} -> 上游 HTTP {status}{details}，{TimingText(firstByteSeconds, elapsed)}";
+        return $"[{requestId}] {AttemptPrefix(attemptNumber, totalAttempts, status)}{method} {safePath} -> {UpstreamStatus(status)}{details}，{TimingText(firstByteSeconds, elapsed)}";
     }
+
+    /// <summary>
+    /// 日志里的上游状态：非 2xx 时在括号里写明含义，优先用上游错误码翻译出的具体原因，其次是状态码的通用含义；都不认识时只写状态码。
+    /// 例：<c>500</c> + 错误码 get_channel_failed → <c>上游 HTTP 500（当前需求量高，模型负载已达上限）</c>；<c>502</c> → <c>上游 HTTP 502（上游网关错误）</c>；<c>200</c> / <c>599</c> → <c>上游 HTTP 200</c> / <c>上游 HTTP 599</c>。
+    /// </summary>
+    public static string UpstreamStatus(int status, string? summary = null)
+    {
+        var meaning = status is >= 200 and < 300 ? null : summary ?? StatusMeaning(status);
+        return meaning is null ? $"上游 HTTP {status}" : $"上游 HTTP {status}（{meaning}）";
+    }
+
+    /// <summary>常见 HTTP 状态码的大白话含义（含 Cloudflare 的 52x）；不认识的返回 null。</summary>
+    public static string? StatusMeaning(int status) => status switch
+    {
+        400 => "请求参数有误",
+        401 => "身份验证失败",
+        402 => "余额不足或需要付费",
+        403 => "没有访问权限",
+        404 => "地址或模型不存在",
+        405 => "请求方法不被允许",
+        408 => "上游等待请求超时",
+        409 => "请求冲突",
+        413 => "请求内容过大",
+        415 => "不支持的内容类型",
+        422 => "请求内容无法处理",
+        429 => "请求过于频繁",
+        499 => "请求被提前关闭",
+        500 => "上游服务内部错误",
+        501 => "上游不支持该功能",
+        502 => "上游网关错误",
+        503 => "上游服务暂不可用",
+        504 => "上游网关超时",
+        520 => "上游返回了未知错误",
+        521 => "上游服务器已关闭",
+        522 => "连接上游超时",
+        523 => "上游不可达",
+        524 => "上游响应超时",
+        525 => "上游 TLS 握手失败",
+        526 => "上游证书无效",
+        529 => "上游服务过载",
+        _ => null,
+    };
 }

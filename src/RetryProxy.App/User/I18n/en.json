@@ -161,7 +161,7 @@
   "打开": "Open",
   "新增准备": "Add preparation",
   "独立选择客户端、供应商与模型，准备成功后自动保活。": "Choose a client, provider and model. Keep-alive starts after preparation succeeds.",
-  "每项准备单独启停，设置与会话在关闭软件后清空。": "Each task starts and stops independently. Settings and sessions are cleared when the app closes.",
+  "每项准备单独启停，设置会保存；重启软件后需手动重新开始。": "Each task starts and stops independently. Settings are saved; after the app restarts, start tasks again manually.",
   "尚未添加准备任务": "No preparation tasks yet",
   "点击“新增准备”选择客户端和供应商。": "Choose Add preparation to select a client and provider.",
   "修改设置": "Edit settings",

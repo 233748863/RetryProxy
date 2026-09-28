@@ -14,16 +14,23 @@ namespace RetryProxy.Core.Workspace;
 
 /// <summary>
 /// 独立准备功能：自行管理任务、配置、临时代理及保活会话；不读取或修改代理通道配置。
+/// 任务设置经保存回调写入配置文件，服务与会话只在本次运行有效。
 /// 和 ProxyWorkspace 一样只在界面线程访问，后台变化通过通知请求刷新。
 /// </summary>
 public sealed class PreparationWorkspace
 {
     private readonly ProxyLogger _logger;
+    private readonly Action<List<SavedPreparation>>? _save;
     private readonly Dictionary<string, PreparationTask> _tasks = new();
     private Action? _uiNotifier;
     private int _nextNumber;
 
-    public PreparationWorkspace(ProxyLogger logger) => _logger = logger;
+    public PreparationWorkspace(ProxyLogger logger, IEnumerable<SavedPreparation?>? saved = null, Action<List<SavedPreparation>>? save = null)
+    {
+        _logger = logger;
+        _save = save;
+        Restore(saved ?? []);
+    }
 
     internal CliCommand? TestCliCommand { get; set; }
     internal Func<ClientType, CliCredential> LocalProviderResolver { get; set; } = LocalProviderCredentials.Read;
@@ -75,7 +82,7 @@ public sealed class PreparationWorkspace
 
     public string PlanText(PreparationDialogState options) => options.Mode == PrepareMode.LocalProvider
         ? $"开始时读取 {options.ClientType.Label()} 当前供应商的地址与密钥，运行中的任务沿用开始时的配置。"
-        : $"使用 {options.ClientType.Label()} 为填写的供应商准备，地址、密钥与会话仅在本次运行有效。";
+        : $"使用 {options.ClientType.Label()} 为填写的供应商准备，地址与密钥随任务保存。";
 
     internal static ProxyConfig CreateRuntimeConfig(string baseUrl, int port, double idleMinutes, ClientType clientType,
         ReasoningEffort reasoningEffort = ReasoningEffort.Default) => new()
@@ -171,6 +178,7 @@ public sealed class PreparationWorkspace
         task.Pending = true;
         dialog.Error = null;
         logger.WithActivity(LogActivity.Preparation).Info($"已提交准备 · 模型 {options.SelectedModel} · 思考强度 {options.ReasoningEffort.Label()}");
+        Save();
         Poll();
         _uiNotifier?.Invoke();
         return true;
@@ -210,6 +218,7 @@ public sealed class PreparationWorkspace
         {
             task.Service?.SetUiNotifier(null);
             _tasks.Remove(taskId);
+            Save();
             _uiNotifier?.Invoke();
         }
     }
@@ -283,6 +292,7 @@ public sealed class PreparationWorkspace
 
     public bool HintChangesOverTime() => _tasks.Values.Any(task => task.CanStop);
 
+    /// <summary>退出时结束全部服务并清空内存；不写配置，已保存的任务下次启动照常恢复。</summary>
     public void Shutdown()
     {
         foreach (var task in _tasks.Values)
@@ -295,5 +305,91 @@ public sealed class PreparationWorkspace
             task.Service?.SetUiNotifier(null);
         }
         _tasks.Clear();
+    }
+
+    /// <summary>
+    /// 按配置文件恢复任务：一律以“已停止”出现，不启动服务、不读取本机供应商，等用户点“开始准备”。
+    /// 客户端或供应商来源无法识别的条目跳过；ID 缺失或重复时换新 ID；编号无效或与前面重复时顺延，
+    /// 例如保存的编号依次为 2、2、1 → 恢复为 2、3、1。
+    /// </summary>
+    private void Restore(IEnumerable<SavedPreparation?> saved)
+    {
+        var skipped = 0;
+        foreach (var entry in saved)
+        {
+            ClientType? client = entry?.ClientType switch
+            {
+                "codex" => ClientType.Codex,
+                "claude" => ClientType.Claude,
+                _ => null,
+            };
+            PrepareMode? mode = entry?.ProviderSource switch
+            {
+                SavedPreparation.LocalSource => PrepareMode.LocalProvider,
+                SavedPreparation.CustomSource => PrepareMode.CustomProvider,
+                _ => null,
+            };
+            if (entry is null || client is null || mode is null)
+            {
+                skipped++;
+                continue;
+            }
+            var custom = mode == PrepareMode.CustomProvider;
+            // 不认识或该客户端不支持的思考强度回到默认，与对话框切换客户端时的处理一致。
+            var effort = Enum.GetValues<ReasoningEffort>().FirstOrDefault(value => value.AsStr() == entry.ReasoningEffort);
+            var options = new PreparationDialogState
+            {
+                TaskId = string.IsNullOrWhiteSpace(entry.Id) || _tasks.ContainsKey(entry.Id) ? Guid.NewGuid().ToString("N") : entry.Id,
+                Mode = mode.Value,
+                ClientType = client.Value,
+                ProviderUrl = custom ? entry.ProviderUrl ?? string.Empty : string.Empty,
+                ApiKey = custom ? entry.ApiKey ?? string.Empty : string.Empty,
+                SelectedModel = entry.Model,
+                ReasoningEffort = effort.IsSupportedBy(client.Value) ? effort : ReasoningEffort.Default,
+                IdleMinutes = entry.IdleMinutes ?? string.Empty,
+            };
+            var number = entry.Number > 0 && _tasks.Values.All(task => task.Number != entry.Number) ? entry.Number : _nextNumber + 1;
+            _nextNumber = Math.Max(_nextNumber, number);
+            var task = new PreparationTask(options, number) { ProviderUrl = entry.ProviderUrl ?? string.Empty };
+            _tasks.Add(task.Id, task);
+        }
+        if (skipped > 0)
+        {
+            _logger.Warn($"一键准备有 {skipped} 项已保存的设置无法识别，已跳过");
+        }
+    }
+
+    /// <summary>任务新增、改设置或删除后整体写回配置；只写设置，不含服务、端口与会话。</summary>
+    private void Save()
+    {
+        if (_save is null)
+        {
+            return;
+        }
+        try
+        {
+            _save(_tasks.Values.OrderBy(task => task.Number).Select(ToSaved).ToList());
+        }
+        catch (Exception error)
+        {
+            NoticePosted?.Invoke($"保存失败：{error.Message}");
+        }
+    }
+
+    private static SavedPreparation ToSaved(PreparationTask task)
+    {
+        var custom = task.Options.Mode == PrepareMode.CustomProvider;
+        return new SavedPreparation
+        {
+            Id = task.Id,
+            Number = task.Number,
+            ClientType = task.ClientType.AsStr(),
+            ProviderSource = custom ? SavedPreparation.CustomSource : SavedPreparation.LocalSource,
+            ProviderUrl = task.ProviderUrl,
+            ApiKey = custom ? task.Options.ApiKey : string.Empty,
+            Model = task.Model,
+            ReasoningEffort = task.ReasoningEffort.AsStr(),
+            IdleMinutes = task.IdleMinutes,
+        };
     }
 }

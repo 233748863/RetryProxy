@@ -47,7 +47,11 @@ public sealed class WorkspaceService
             configService.Save();
         });
         Workspace.NoticePosted += OnNoticePosted;
-        Preparations = new PreparationWorkspace(proxyLogger);
+        Preparations = new PreparationWorkspace(proxyLogger, all.Preparations, preparations =>
+        {
+            all.Preparations = preparations;
+            configService.Save();
+        });
         Preparations.NoticePosted += ShowNotice;
         _refreshTimer = new DispatcherTimer(DispatcherPriority.Background) { Interval = NotifyRepaintDelay };
         _refreshTimer.Tick += (_, _) => Flush();

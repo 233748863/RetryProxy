@@ -22,20 +22,33 @@ public sealed class PreparationWorkspaceTests
 {
     private sealed class Fixture : IDisposable
     {
+        private readonly List<PreparationWorkspace> _opened = new();
+
         public Fixture()
         {
             Directory = Path.Combine(Path.GetTempPath(), "retry-proxy-tests", Guid.NewGuid().ToString("N"));
             Logger = ProxyLogger.Create(Directory);
-            Preparations = new PreparationWorkspace(Logger)
-            {
-                TestCliCommand = new CliCommand(Path.Combine(Directory, "missing-client.exe")),
-                LocalProviderResolver = client => CliCredential.Create("sk-local-fixture", $"https://{client.ToString().ToLowerInvariant()}.example"),
-            };
+            Preparations = Open(null);
         }
 
         public string Directory { get; }
         public ProxyLogger Logger { get; }
         public PreparationWorkspace Preparations { get; }
+
+        /// <summary>最近一次写回配置的任务设置。</summary>
+        public List<SavedPreparation> Saved { get; private set; } = new();
+
+        /// <summary>按已保存的设置新建工作区（模拟重启软件），与首个工作区共用日志和测试客户端。</summary>
+        public PreparationWorkspace Open(IEnumerable<SavedPreparation?>? saved)
+        {
+            var workspace = new PreparationWorkspace(Logger, saved, list => Saved = list)
+            {
+                TestCliCommand = new CliCommand(Path.Combine(Directory, "missing-client.exe")),
+                LocalProviderResolver = client => CliCredential.Create("sk-local-fixture", $"https://{client.ToString().ToLowerInvariant()}.example"),
+            };
+            _opened.Add(workspace);
+            return workspace;
+        }
 
         public string DrainLogs()
         {
@@ -46,7 +59,7 @@ public sealed class PreparationWorkspaceTests
 
         public void Dispose()
         {
-            Preparations.Shutdown();
+            foreach (var workspace in _opened) { workspace.Shutdown(); }
             Logger.Dispose();
             try { System.IO.Directory.Delete(Directory, true); }
             catch (IOException) { }
@@ -415,5 +428,88 @@ public sealed class PreparationWorkspaceTests
         Assert.Contains(lines, line => line.Contains("[独立保活][请求 "));
         Assert.DoesNotContain("[保活-", logs);
         Assert.DoesNotContain("sk-custom-fixture", logs);
+    }
+
+    [Fact]
+    public void SavedSettingsComeBackAsStoppedTasksAfterRestart()
+    {
+        using var fixture = new Fixture();
+        var customOptions = Options(PrepareMode.CustomProvider, ClientType.Claude);
+        customOptions.IdleMinutes = "7.50";
+        customOptions.ReasoningEffort = ReasoningEffort.Max;
+        var custom = Start(fixture.Preparations, customOptions);
+        var local = Start(fixture.Preparations, Options());
+        var removed = Start(fixture.Preparations, Options());
+        fixture.Preparations.Stop(removed.Id);
+        WaitFor(fixture.Preparations, () => removed.CanStart);
+        fixture.Preparations.Remove(removed.Id);
+
+        // 手填供应商连同 Key 一起保存；本机供应商只留上次读到的地址用于显示，不保存本机密钥。
+        Assert.Equal(2, fixture.Saved.Count);
+        var savedCustom = fixture.Saved[0];
+        Assert.Equal((custom.Id, 1, "claude", SavedPreparation.CustomSource), (savedCustom.Id, savedCustom.Number, savedCustom.ClientType, savedCustom.ProviderSource));
+        Assert.Equal(("https://custom.example/v1", "sk-custom-fixture"), (savedCustom.ProviderUrl, savedCustom.ApiKey));
+        Assert.Equal(("preparation-test-model", "max", "7.5"), (savedCustom.Model, savedCustom.ReasoningEffort, savedCustom.IdleMinutes));
+        var savedLocal = fixture.Saved[1];
+        Assert.Equal((local.Id, 2, "codex", SavedPreparation.LocalSource), (savedLocal.Id, savedLocal.Number, savedLocal.ClientType, savedLocal.ProviderSource));
+        Assert.Equal(("https://codex.example", string.Empty), (savedLocal.ProviderUrl, savedLocal.ApiKey));
+        Assert.Equal(("preparation-test-model", "default", "5"), (savedLocal.Model, savedLocal.ReasoningEffort, savedLocal.IdleMinutes));
+
+        // 退出只结束服务，不能把已保存的任务写成空列表。
+        fixture.Preparations.Shutdown();
+        Assert.Equal(new[] { custom.Id, local.Id }, fixture.Saved.Select(item => item.Id));
+
+        var restarted = fixture.Open(fixture.Saved);
+        Assert.Equal(new[] { custom.Id, local.Id }, restarted.Tasks.OrderBy(task => task.Number).Select(task => task.Id));
+        var restored = restarted.Find(custom.Id)!;
+        Assert.Equal("准备 1 · Claude Code", restored.Title);
+        Assert.Equal((ServiceState.Stopped, "已停止", "可按当前设置重新开始"), (restored.State, restored.Status, restored.Hint));
+        Assert.True(restored.CanStart);
+        Assert.Null(restored.ListenPort);
+        Assert.Null(restored.LastError);
+        Assert.Equal("https://custom.example/v1", restored.ProviderUrl);
+        Assert.Equal(("preparation-test-model", ReasoningEffort.Max, "7.5"), (restored.Model, restored.ReasoningEffort, restored.IdleMinutes));
+        var dialog = restarted.OpenPrepareDialog(custom.Id);
+        Assert.Equal((PrepareMode.CustomProvider, ClientType.Claude), (dialog.Mode, dialog.ClientType));
+        Assert.Equal(("https://custom.example/v1", "sk-custom-fixture"), (dialog.ProviderUrl, dialog.ApiKey));
+        Assert.Equal("https://codex.example", restarted.Find(local.Id)!.ProviderUrl);
+        var localDialog = restarted.OpenPrepareDialog(local.Id);
+        Assert.Equal((PrepareMode.LocalProvider, string.Empty, string.Empty), (localDialog.Mode, localDialog.ProviderUrl, localDialog.ApiKey));
+        Assert.False(restarted.HintChangesOverTime());
+
+        // 恢复的任务按保存的设置直接开始；新任务的编号接在已有任务之后。
+        restarted.Start(custom.Id);
+        WaitFor(restarted, () => !restored.Pending);
+        Assert.Equal(ServiceState.Running, restored.State);
+        Assert.Equal(ReasoningEffort.Max, restored.Snapshot!.ReasoningEffort);
+        Assert.Equal(TimeSpan.FromMinutes(7.5), restored.Snapshot.Idle);
+        Assert.Equal("准备 3 · Codex", Start(restarted, Options()).Title);
+        Assert.Equal(new[] { 1, 2, 3 }, fixture.Saved.Select(item => item.Number));
+        Assert.DoesNotContain("sk-custom-fixture", fixture.DrainLogs());
+    }
+
+    [Fact]
+    public void UnrecognizedSavedEntriesAreSkippedAndConflictsAreRepaired()
+    {
+        using var fixture = new Fixture();
+        var restarted = fixture.Open(new SavedPreparation?[]
+        {
+            new() { Id = "first", Number = 2, ClientType = "codex", ProviderSource = SavedPreparation.LocalSource, Model = "m", ReasoningEffort = "ultra", IdleMinutes = "5" },
+            new() { Id = "first", Number = 2, ClientType = "claude", ProviderSource = SavedPreparation.CustomSource, ProviderUrl = "https://custom.example", ApiKey = "sk-custom-fixture", Model = "m", ReasoningEffort = "ultra", IdleMinutes = "5" },
+            new() { Id = "unknown-client", Number = 1, ClientType = "gemini", ProviderSource = SavedPreparation.LocalSource },
+            new() { Id = "unknown-source", Number = 1, ClientType = "codex", ProviderSource = "remote" },
+            null,
+        });
+
+        var tasks = restarted.Tasks.OrderBy(task => task.Number).ToList();
+        Assert.Equal(2, tasks.Count);
+        Assert.Equal(("first", "准备 2 · Codex", ReasoningEffort.Ultra), (tasks[0].Id, tasks[0].Title, tasks[0].ReasoningEffort));
+        // 重复的 ID 换新、重复的编号顺延；Claude 不支持 ultra，回到默认。
+        Assert.NotEqual("first", tasks[1].Id);
+        Assert.Equal(("准备 3 · Claude Code", ReasoningEffort.Default), (tasks[1].Title, tasks[1].ReasoningEffort));
+        Assert.Equal("sk-custom-fixture", restarted.OpenPrepareDialog(tasks[1].Id).ApiKey);
+        Assert.Contains("一键准备有 3 项已保存的设置无法识别，已跳过", fixture.DrainLogs());
+        // 恢复本身不写配置，等用户下次改动任务时才整体写回。
+        Assert.Empty(fixture.Saved);
     }
 }

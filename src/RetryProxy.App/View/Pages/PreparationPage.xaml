@@ -43,7 +43,7 @@
             <TextBlock Margin="0,0,0,12"
                        Style="{StaticResource CaptionTextBlockStyle}"
                        Foreground="{DynamicResource TextFillColorTertiaryBrush}"
-                       Text="{i18n:T 每项准备单独启停，设置与会话在关闭软件后清空。}"
+                       Text="{i18n:T 每项准备单独启停，设置会保存；重启软件后需手动重新开始。}"
                        TextWrapping="Wrap" />
 
             <Border Style="{StaticResource PreparationCard}"

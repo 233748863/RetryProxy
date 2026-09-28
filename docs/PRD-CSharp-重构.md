@@ -287,7 +287,7 @@ D:\RetryProxy\
 |---|---|
 | 性能 | 空闲主线程 CPU < 2%；日志 2000 行渲染不卡顿；流式转发零拷贝（`PipeReader`/`Stream.CopyToAsync` 分块 ≥ 16 KiB）。 |
 | 内存 | 常驻 < 150 MB（WPF 基线）；错误/前缀暂存严格 1 MiB 上限。 |
-| 安全 | API Key 只驻留内存；日志/统计/配置不含 Key、请求正文、会话编号；标识过滤规则同 Rust。 |
+| 安全 | API Key 只驻留内存；日志/统计/配置不含 Key、请求正文、会话编号；标识过滤规则同 Rust。**例外（2026-09-28 用户确认）**：一键准备“手动配置供应商”的 API Key 随任务明文保存在 `config.json` 的 `preparations` 节点，重启后可直接开始；日志仍不含 Key。 |
 | 兼容 | jsonl v1、日志格式、`/_retry/health` 与 Rust 2.0.0 完全互换；配置 schema 6 语义一致但存储位置不同（config.json），仅支持从注册表单向导入。 |
 | 可测 | Core 不依赖 WPF；随机数、时钟、CLI 命令可注入。 |
 | 稳定 | 未处理异常走 `ExceptionReport`；通道异常不影响其他通道。 |

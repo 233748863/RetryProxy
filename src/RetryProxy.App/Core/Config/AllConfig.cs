@@ -1,5 +1,7 @@
 using CommunityToolkit.Mvvm.ComponentModel;
+using RetryProxy.Core.Workspace;
 using System;
+using System.Collections.Generic;
 using System.Text.Json.Serialization;
 
 namespace RetryProxy.Core.Config;
@@ -33,6 +35,12 @@ public partial class AllConfig : ObservableObject
     /// </summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public ProxyConfig? Proxy { get; set; }
+
+    /// <summary>
+    /// 一键准备任务的设置（不含服务与会话，重启后以“已停止”恢复）。
+    /// 列表本身不触发自动保存；PreparationWorkspace 的保存回调整体替换它后显式调用 IConfigService.Save()。
+    /// </summary>
+    public List<SavedPreparation>? Preparations { get; set; } = new();
 
     public void InitEvent()
     {

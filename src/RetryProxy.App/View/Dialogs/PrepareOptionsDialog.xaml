@@ -63,7 +63,7 @@
                                 PasswordChanged="OnFieldChanged"
                                 PlaceholderText="sk-…"
                                 RevealButtonEnabled="True"
-                                ToolTip="{i18n:T 密钥只保留在本次运行的内存中，重启后清空。}" />
+                                ToolTip="{i18n:T 密钥随任务保存在本机配置文件中，未加密。}" />
             </StackPanel>
             <ui:TextBlock Margin="0,8,0,4" FontTypography="Body" Text="{i18n:T 准备模型}" />
             <Grid>
@@ -121,7 +121,7 @@
             <ui:TextBlock Margin="0,4,0,0"
                           FontTypography="Caption"
                           Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
-                          Text="{i18n:T 准备及后续保活均使用所选强度；仅在本次运行有效}"
+                          Text="{i18n:T 准备及后续保活均使用所选强度}"
                           TextWrapping="Wrap" />
             <ui:TextBlock x:Name="PlanText"
                           Margin="0,8,0,0"

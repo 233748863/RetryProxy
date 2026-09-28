@@ -10,7 +10,7 @@ public enum PrepareMode
     CustomProvider,
 }
 
-/// <summary>独立准备任务的编辑副本；只保存在本次运行的内存中。</summary>
+/// <summary>独立准备任务的编辑副本；提交成功后随任务写入配置文件（见 <see cref="SavedPreparation"/>）。</summary>
 public sealed class PreparationDialogState
 {
     public string TaskId { get; init; } = Guid.NewGuid().ToString("N");

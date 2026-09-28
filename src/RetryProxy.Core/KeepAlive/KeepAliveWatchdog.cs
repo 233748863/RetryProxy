@@ -1063,19 +1063,11 @@ public sealed class KeepAliveProbe : IDisposable
     internal async Task<CliReply> ExecuteAsync(CancellationToken cancellationToken)
     {
         var conversation = _conversation ?? throw new ObjectDisposedException(nameof(KeepAliveProbe));
-        var started = Stopwatch.StartNew();
         await conversation.ProcessLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             conversation.Process ??= await CliSession.StartAsync(Flavor, SessionId, _watchdog.Command, Credential, ReasoningEffort, cancellationToken).ConfigureAwait(false);
-            var setupSeconds = started.Elapsed.TotalSeconds;
-            var reply = await conversation.Process.AskAsync(Question, SessionId, cancellationToken).ConfigureAwait(false);
-            if (reply.FirstContentSeconds is { } seconds)
-            {
-                reply.FirstContentSeconds = seconds + setupSeconds;
-            }
-
-            return reply;
+            return await conversation.Process.AskAsync(Question, SessionId, cancellationToken).ConfigureAwait(false);
         }
         finally
         {

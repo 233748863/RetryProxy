@@ -263,7 +263,8 @@ D:\RetryProxy\
 - 会话阈值：`context_tokens > limit`（严格大于）或缺用量 → 清理，文案两条。
 - 准备重试 1500–2500 ms 随机；`cancel_preparation` 保留 credential；结果队列供 UI 弹通知。
 - 5 秒轮询 + 准备唤醒；单轮超时 `min(timeout, total_timeout)`。
-- 日志文案（`供应商保活 [会话 xxxxxxxx] 第 N 轮，随机题号 i/250，…`、完整回复/响应未完成/本轮已中断三类）逐字沿用。
+- 日志文案（`供应商保活 [会话 xxxxxxxx] 第 N 轮，随机题号 i/250，…`、响应未完成/本轮已中断两类）逐字沿用。
+- （2026-09-28 用户要求）本轮成功改为 `第 N 轮 {CLI} CLI 完成，当前会话 x/y token，耗时 z 秒，回答：…`：模型、token、首字只记在代理的请求行，避免一次请求看似两次；准备转入保活只由“准备完成”一行说明。
 - 内部请求识别：`x-retry-keepalive` 头、`x-codex-turn-metadata` 头/正文中的 `retry_proxy_keepalive`，全局会话表登记；内部请求用独立空 metrics、`保活-` 前缀 id，不计统计。
 
 ### 6.10 CLI 驱动（Core/Cli）

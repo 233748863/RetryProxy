@@ -335,11 +335,9 @@ public sealed class RetryProxy
 
         var context = completion.ContextTokens?.ToString(CultureInfo.InvariantCulture) ?? "未获取";
         var reset = completion.ResetReason is { } resetReason ? $"，{resetReason}" : string.Empty;
-        if (preparing && KeepAlive.Enabled)
-        {
-            nextRound = $"首次准备成功，已转为自动保活；空闲 {(long)KeepAlive.Idle.TotalSeconds} 秒后进行下一轮";
-        }
-        logger.Info($"{prefix} 完整回复{reply.Stats.LogFields()}，当前会话 {context}/{completion.ContextLimit} token，{LogText.TimingText(reply.FirstContentSeconds, elapsed)}，回答：{answerPreview}{reset}，{nextRound}");
+        // 模型、token 与首字已记在代理的请求行，这里只写本轮结论，避免一次请求看起来像两次；
+        // 准备转入保活由工作区的“准备完成”一行说明。例：[会话 80221d57] 第 1 轮 Codex CLI 完成，当前会话 10105/50000 token，耗时 52.57 秒，回答：知道了，空闲 480 秒后进行下一轮
+        logger.Info($"{prefix} 完成，当前会话 {context}/{completion.ContextLimit} token，耗时 {elapsed:F2} 秒，回答：{answerPreview}{reset}，{nextRound}");
     }
 
     // ---------------------------------------------------------------------

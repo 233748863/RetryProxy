@@ -19,18 +19,15 @@ namespace RetryProxy.Core.Cli;
 /// <summary>CLI 一轮问答的结果：经 ResponseStats 归一化后的用量与答案。</summary>
 internal sealed class CliReply
 {
-    private CliReply(ResponseStats stats, string? model, double? firstContentSeconds)
+    private CliReply(ResponseStats stats, string? model)
     {
         Stats = stats;
         Model = model;
-        FirstContentSeconds = firstContentSeconds;
     }
 
     public ResponseStats Stats { get; }
 
     public string? Model { get; }
-
-    public double? FirstContentSeconds { get; set; }
 
     public static CliReply Create(KeepAliveFlavor flavor, string answer, string? model, JsonNode? usage, double? firstContentSeconds)
     {
@@ -80,7 +77,7 @@ internal sealed class CliReply
             throw new CliException("CLI 答案为空或超过 2 MiB 保护值");
         }
 
-        return new CliReply(stats, model, firstContentSeconds);
+        return new CliReply(stats, model);
     }
 }
 

@@ -257,7 +257,9 @@ while ($null -ne $line) {
         var logs = await fixture.CompletedLogs();
         Assert.True(logs.Contains("[通道保活][准备][会话 ") && logs.Contains("Codex CLI，沿用本机客户端配置，问题："), logs);
         Assert.DoesNotContain("[自动保活]", logs);
-        Assert.True(logs.Contains("完整回复") && logs.Contains("当前会话 52/50000 token") && logs.Contains("回答：Java CLI 验证回答") && logs.Contains("自动保活已关闭"), logs);
+        Assert.True(logs.Contains("Codex CLI 完成，当前会话 52/50000 token") && logs.Contains("回答：Java CLI 验证回答") && logs.Contains("自动保活已关闭"), logs);
+        // 本轮结论不重复请求行已有的用量，一次请求只对应一条带 token 的日志。
+        Assert.Equal(1, logs.Split("输入 40 / 输出 12 token").Length - 1);
         Assert.DoesNotContain("local-validation-token", logs);
 
         // 再问一轮复用同一会话（同一个 CLI 进程），轮次递增。

@@ -977,14 +977,21 @@ public sealed class RetryProxy
                         if (!buffered.TooLarge)
                         {
                             reader.Dispose();
-                            var response = new BufferedResponse(status, responseHeaders, buffered.Body);
+                            // 与一键准备一样解析暂存的错误正文：状态后写上游错误码对应的具体原因，并附上错误码、上游请求 ID 等诊断字段。
+                            // 例：上游 HTTP 500（当前需求量高，模型负载已达上限），上游错误码 get_channel_failed，…
+                            var stats = new ResponseStats(responseHeaders, safePath, model);
+                            stats.Observe(buffered.Body.Span, ctx.StartedAt.ElapsedSeconds);
+                            stats.Finish(ctx.StartedAt.ElapsedSeconds);
+                            var summary = stats.FailureSummary();
+                            var response = new BufferedResponse(status, responseHeaders, buffered.Body, summary);
                             ctx.Logger.Info(LogText.FormatCompletedAttempt(
-                                requestId, attemptNumber, totalAttempts, method, safePath, status, buffered.FirstByteSeconds, startedAt.ElapsedSeconds, string.Empty));
+                                requestId, attemptNumber, totalAttempts, method, safePath, status, buffered.FirstByteSeconds, startedAt.ElapsedSeconds,
+                                stats.FailureLogFields(), summary));
                             lastResponse = response;
                             var delay = RetryDelay(attempt, status, response.Headers);
                             ctx.Metrics.Retry(requestId, attemptNumber);
                             ctx.Metrics.RequestPhase(requestId, RequestPhase.WaitingRetry);
-                            ctx.Logger.Warn($"[{requestId}] {LogText.UpstreamStatus(status)} 可重试，{delay:F3} 秒后再次请求");
+                            ctx.Logger.Warn($"[{requestId}] {LogText.UpstreamStatus(status, summary)} 可重试，{delay:F3} 秒后再次请求");
                             await WaitDelayAsync(delay, ctx.Token).ConfigureAwait(false);
                             continue;
                         }
@@ -1611,7 +1618,7 @@ public sealed class RetryProxy
     {
         if (lastResponse is { } response)
         {
-            ctx.Logger.Warn($"[{ctx.RequestId}] 重试耗尽，返回客户端最后一次完整上游响应 HTTP {response.Status}");
+            ctx.Logger.Warn($"[{ctx.RequestId}] 重试耗尽，返回客户端最后一次完整上游响应 {LogText.HttpStatus(response.Status, response.Summary)}");
             return ProxyResponse.Buffered(response.Status, response.Headers, response.Body);
         }
 

@@ -555,4 +555,59 @@ public class RequestLoggingTests
         Assert.Equal("/v1/responses", current.PathAndQuery);
         Assert.True(original.Body.Span.SequenceEqual(current.Body.Span));
     }
+
+    private const string ChannelBusyError = "{\"error\":{\"code\":\"get_channel_failed\",\"type\":\"new_api_error\",\"message\":\"private-message\"}}";
+
+    [Fact]
+    public async Task ChannelRetriesExplainUpstreamErrorCodesLikePreparation()
+    {
+        var requests = 0;
+        await using var fixture = await LifecycleProxy.StartAsync(context => Interlocked.Increment(ref requests) == 1
+            ? Upstream.Bytes(context, 500, Encoding.UTF8.GetBytes(ChannelBusyError), "application/json", new Dictionary<string, string> { ["x-oneapi-request-id"] = "busy-request-123" })
+            : Upstream.Json(context, 200, "{\"model\":\"gpt-6-astra\",\"usage\":{\"input_tokens\":8,\"output_tokens\":2}}"),
+            LoggingConfig(5.0, 2));
+        using var client = TestClient.Create();
+        var response = await TestClient.Send(client, HttpMethod.Post, $"{fixture.Address}/v1/responses", "{\"model\":\"gpt-6-astra\",\"input\":\"private-prompt\"}");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        await response.Content.ReadAsStringAsync();
+        var logs = await CompletedLogs(fixture);
+
+        // 暂存的错误正文按上游错误码写明原因，并带上与一键准备相同的诊断字段；错误原文不进日志。
+        var attempt = Assert.Single(logs, line => line.Contains("第 1/3 次 POST /v1/responses"));
+        foreach (var expected in new[]
+                 {
+                     "INFO", "-> 上游 HTTP 500（当前需求量高，模型负载已达上限），上游错误码 get_channel_failed，上游错误类型 new_api_error",
+                     "上游请求 ID busy-request-123", "模型 gpt-6-astra", "首字 ",
+                 })
+        {
+            Assert.True(attempt.Contains(expected), $"缺少 {expected}: {attempt}");
+        }
+
+        Assert.Contains(logs, line => line.Contains("WARNING") && line.Contains("上游 HTTP 500（当前需求量高，模型负载已达上限） 可重试，"));
+        Assert.DoesNotContain(logs, line => line.Contains("private"));
+        Assert.Equal(2, requests);
+    }
+
+    [Fact]
+    public async Task RetryExhaustionNamesTheReasonOfTheReturnedResponse()
+    {
+        var requests = 0;
+        await using var fixture = await LifecycleProxy.StartAsync(context =>
+        {
+            if (Interlocked.Increment(ref requests) == 1)
+            {
+                return Upstream.Json(context, 500, ChannelBusyError);
+            }
+
+            // 之后的尝试连不上上游，只能把第一次暂存的完整 500 交给客户端。
+            Upstream.Reset(context);
+            return Task.CompletedTask;
+        }, LoggingConfig(5.0, 1));
+        using var client = TestClient.Create();
+        var response = await TestClient.Send(client, HttpMethod.Post, $"{fixture.Address}/v1/responses", "{\"model\":\"gpt-test\",\"input\":\"hi\"}");
+        Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
+        Assert.Equal(ChannelBusyError, await response.Content.ReadAsStringAsync());
+        var logs = await CompletedLogs(fixture);
+        Assert.Contains(logs, line => line.Contains("重试耗尽，返回客户端最后一次完整上游响应 HTTP 500（当前需求量高，模型负载已达上限）"));
+    }
 }

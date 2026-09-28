@@ -357,7 +357,8 @@ internal static class LegacyLogRestore
         if (response.StartsWith("上游 HTTP ", StringComparison.Ordinal))
         {
             var value = response["上游 HTTP ".Length..];
-            var end = value.IndexOfAny(new[] { '，', ' ', '\r', '\n' });
+            // 状态码后面可能紧跟括号里的含义，例：上游 HTTP 500（当前需求量高，模型负载已达上限），…
+            var end = value.IndexOfAny(new[] { '，', ' ', '（', '\r', '\n' });
             if (end >= 0)
             {
                 value = value[..end];

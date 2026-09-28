@@ -340,6 +340,11 @@ public class ProxyUnitTests
         Assert.Equal("上游 HTTP 524（上游响应超时）", LogText.UpstreamStatus(524));
         Assert.Equal("上游 HTTP 500（当前需求量高，模型负载已达上限）", LogText.UpstreamStatus(500, "当前需求量高，模型负载已达上限"));
         Assert.Equal("上游 HTTP 599", LogText.UpstreamStatus(599));
+        Assert.Equal("HTTP 502（上游网关错误）", LogText.HttpStatus(502));
+        Assert.Equal("HTTP 500（当前需求量高，模型负载已达上限）", LogText.HttpStatus(500, "当前需求量高，模型负载已达上限"));
+        Assert.Equal("HTTP 200", LogText.HttpStatus(200));
+        Assert.StartsWith("[request-1] 第 1/3 次 POST /v1/responses -> 上游 HTTP 500（当前需求量高，模型负载已达上限），上游错误码 get_channel_failed，",
+            LogText.FormatCompletedAttempt("request-1", 1, 3, "POST", "/v1/responses", 500, 0.25, 1.5, "，上游错误码 get_channel_failed", "当前需求量高，模型负载已达上限"));
     }
 
     [Fact]

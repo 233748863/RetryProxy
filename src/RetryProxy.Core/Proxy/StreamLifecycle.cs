@@ -241,19 +241,23 @@ internal static class LogText
         int status,
         double? firstByteSeconds,
         double elapsed,
-        string details)
+        string details,
+        string? summary = null)
     {
-        return $"[{requestId}] {AttemptPrefix(attemptNumber, totalAttempts, status)}{method} {safePath} -> {UpstreamStatus(status)}{details}，{TimingText(firstByteSeconds, elapsed)}";
+        return $"[{requestId}] {AttemptPrefix(attemptNumber, totalAttempts, status)}{method} {safePath} -> {UpstreamStatus(status, summary)}{details}，{TimingText(firstByteSeconds, elapsed)}";
     }
 
     /// <summary>
     /// 日志里的上游状态：非 2xx 时在括号里写明含义，优先用上游错误码翻译出的具体原因，其次是状态码的通用含义；都不认识时只写状态码。
     /// 例：<c>500</c> + 错误码 get_channel_failed → <c>上游 HTTP 500（当前需求量高，模型负载已达上限）</c>；<c>502</c> → <c>上游 HTTP 502（上游网关错误）</c>；<c>200</c> / <c>599</c> → <c>上游 HTTP 200</c> / <c>上游 HTTP 599</c>。
     /// </summary>
-    public static string UpstreamStatus(int status, string? summary = null)
+    public static string UpstreamStatus(int status, string? summary = null) => "上游 " + HttpStatus(status, summary);
+
+    /// <summary>不带“上游”前缀的状态写法，例：重试耗尽，返回客户端最后一次完整上游响应 HTTP 500（上游服务内部错误）。</summary>
+    public static string HttpStatus(int status, string? summary = null)
     {
         var meaning = status is >= 200 and < 300 ? null : summary ?? StatusMeaning(status);
-        return meaning is null ? $"上游 HTTP {status}" : $"上游 HTTP {status}（{meaning}）";
+        return meaning is null ? $"HTTP {status}" : $"HTTP {status}（{meaning}）";
     }
 
     /// <summary>常见 HTTP 状态码的大白话含义（含 Cloudflare 的 52x）；不认识的返回 null。</summary>

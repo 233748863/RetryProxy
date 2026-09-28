@@ -118,6 +118,20 @@ public class LegacyLogRestoreTests : IDisposable
     }
 
     [Fact]
+    public void StatusMeaningsInParenthesesKeepRetriesAndFailuresRestorable()
+    {
+        WriteLog("retry-proxy.log",
+            "2026-09-19 02:00:00 INFO [通道代理][通道][请求 aaaaaaaa] 第 1/3 次 POST /v1/responses -> 上游 HTTP 500（当前需求量高，模型负载已达上限），上游错误码 get_channel_failed，首字 0.10 秒 / 耗时 0.10 秒",
+            "2026-09-19 02:00:00 WARNING [通道代理][通道][请求 aaaaaaaa] 上游 HTTP 500（当前需求量高，模型负载已达上限） 可重试，0.01 秒后再次请求",
+            "2026-09-19 02:00:01 INFO [通道代理][通道][请求 aaaaaaaa] 第 2/3 次 POST /v1/responses -> 上游 HTTP 400（请求参数有误），首字 0.10 秒 / 耗时 0.10 秒",
+            "2026-09-19 02:00:02 INFO [通道代理][通道][请求 bbbbbbbb] 第 3/3 次 POST /v1/responses -> 上游 HTTP 524（上游响应超时），首字 0.10 秒 / 耗时 0.10 秒");
+
+        var records = LegacyLogRestore.Restore(_directory, "通道", Date);
+        Assert.Equal((1UL, RequestOutcome.Failure), (records["aaaaaaaa"].RetryCount, records["aaaaaaaa"].Outcome));
+        Assert.Equal(RequestOutcome.Failure, records["bbbbbbbb"].Outcome);
+    }
+
+    [Fact]
     public void ClaudeUsageIsCombinedOnlyWhenAllThreeFieldsWereLogged()
     {
         WriteLog(

@@ -57,7 +57,8 @@ internal sealed class NoGenerationException : Exception
     }
 }
 
-internal sealed record BufferedResponse(int Status, Internal.HeaderList Headers, ReadOnlyMemory<byte> Body);
+/// <summary>暂存下来的完整上游响应；<paramref name="Summary"/> 是从错误正文认出的原因（见 ResponseStats.FailureSummary），写日志用。</summary>
+internal sealed record BufferedResponse(int Status, Internal.HeaderList Headers, ReadOnlyMemory<byte> Body, string? Summary = null);
 
 internal enum ProxyErrorKind
 {

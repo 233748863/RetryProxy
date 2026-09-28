@@ -19,7 +19,6 @@ internal sealed class StreamLifecycle : IDisposable
     private readonly ProxyMetrics _metrics;
     private readonly string _requestId;
     private readonly ulong _attemptNumber;
-    private readonly ulong _totalAttempts;
     private readonly string _method;
     private readonly string _safePath;
     private readonly int _status;
@@ -39,7 +38,6 @@ internal sealed class StreamLifecycle : IDisposable
         ProxyMetrics metrics,
         string requestId,
         ulong attemptNumber,
-        ulong totalAttempts,
         string method,
         string safePath,
         int status,
@@ -59,7 +57,6 @@ internal sealed class StreamLifecycle : IDisposable
         _metrics = metrics;
         _requestId = requestId;
         _attemptNumber = attemptNumber;
-        _totalAttempts = totalAttempts;
         _method = method;
         _safePath = safePath;
         _status = status;
@@ -135,7 +132,6 @@ internal sealed class StreamLifecycle : IDisposable
             var message = LogText.FormatCompletedAttempt(
                 _requestId,
                 _attemptNumber,
-                _totalAttempts,
                 _method,
                 _safePath,
                 _status,
@@ -182,12 +178,11 @@ internal sealed class StreamLifecycle : IDisposable
             return;
         }
 
-        var attemptText = _totalAttempts == 0 ? $"第 {_attemptNumber} 次" : $"第 {_attemptNumber}/{_totalAttempts} 次";
         // 能从上游错误码认出原因且状态码非 2xx 时，原因已写在状态后的括号里，不再重复。
         var summary = Stats.FailureSummary();
         var reasonText = summary is not null && _status is < 200 or >= 300 ? string.Empty : $"，原因：{summary ?? reason}";
         _logger.Warn(
-            $"[{_requestId}] {attemptText} {_method} {_safePath} -> {LogText.UpstreamStatus(_status, summary)}，响应未完成{reasonText}，不再重试（已进入响应转发阶段）{Stats.FailureLogFields()}，{LogText.TimingText(Stats.FirstContentSeconds(), elapsed)}");
+            $"[{_requestId}] {_method} {_safePath} -> {LogText.UpstreamStatus(_status, summary)}{LogText.RetriedNote(_attemptNumber, false)}，响应未完成{reasonText}，不再重试（已进入响应转发阶段）{Stats.FailureLogFields()}，{LogText.TimingText(Stats.FirstContentSeconds(), elapsed)}");
     }
 
     /// <summary>对应 Drop：正文流没走完就被丢弃。</summary>
@@ -216,6 +211,44 @@ internal sealed class StreamLifecycle : IDisposable
     }
 }
 
+/// <summary>
+/// 一次请求内的重试日志节流：同一原因连续重试只写第一次，之后每 <see cref="ProgressEvery"/> 次写一条进度；原因变了重新写一次完整行。
+/// 例：连续 47 次 HTTP 500 → 第 1 次写完整行，第 20、40 次写「已重试 20 次，仍是 …」，其余不写。
+/// </summary>
+internal sealed class RetryLog
+{
+    public const int ProgressEvery = 20;
+
+    private string? _reason;
+    private ulong _sameReason;
+
+    public ulong Retries { get; private set; }
+
+    /// <summary>登记一次将要重试的失败，返回这次该写哪种日志。</summary>
+    public RetryLogKind Next(string reason)
+    {
+        Retries++;
+        if (!string.Equals(reason, _reason, StringComparison.Ordinal))
+        {
+            _reason = reason;
+            _sameReason = 1;
+            return RetryLogKind.Full;
+        }
+
+        _sameReason++;
+        return _sameReason % ProgressEvery == 0 ? RetryLogKind.Progress : RetryLogKind.None;
+    }
+
+    public string ProgressText(string requestId, string reason) => $"[{requestId}] 已重试 {Retries} 次，仍是{reason}";
+}
+
+internal enum RetryLogKind
+{
+    None,
+    Full,
+    Progress,
+}
+
 /// <summary>日志文案的小工具（对应 timing_text / attempt_prefix / format_completed_attempt）。</summary>
 internal static class LogText
 {
@@ -226,25 +259,37 @@ internal static class LogText
             : $"首字：无 / 耗时 {elapsed:F2} 秒";
     }
 
-    public static string AttemptPrefix(ulong attemptNumber, ulong totalAttempts, int status)
+    /// <summary>
+    /// 跟在上游状态后面的重试说明；第一次就结束时为空。
+    /// 例：第 48 次拿到 200 → <c>（重试 47 次后成功）</c>；第 4 次拿到 400 → <c>，已重试 3 次</c>。
+    /// </summary>
+    public static string RetriedNote(ulong attemptNumber, bool succeeded)
     {
-        return attemptNumber == 1 && status == 200 ? string.Empty
-            : totalAttempts == 0 ? $"第 {attemptNumber} 次 " : $"第 {attemptNumber}/{totalAttempts} 次 ";
+        if (attemptNumber <= 1)
+        {
+            return string.Empty;
+        }
+
+        var retries = attemptNumber - 1;
+        return succeeded ? $"（重试 {retries} 次后成功）" : $"，已重试 {retries} 次";
     }
+
+    /// <summary>重试失败行里的“第 N 次”，不写总次数（通常是 100001 这种没有意义的上限）。</summary>
+    public static string AttemptText(ulong attemptNumber) => $"第 {attemptNumber} 次";
+
+    public static string RetryDelayText(double delay) => $"{delay:F1} 秒后重试";
 
     public static string FormatCompletedAttempt(
         string requestId,
         ulong attemptNumber,
-        ulong totalAttempts,
         string method,
         string safePath,
         int status,
         double? firstByteSeconds,
         double elapsed,
-        string details,
-        string? summary = null)
+        string details)
     {
-        return $"[{requestId}] {AttemptPrefix(attemptNumber, totalAttempts, status)}{method} {safePath} -> {UpstreamStatus(status, summary)}{details}，{TimingText(firstByteSeconds, elapsed)}";
+        return $"[{requestId}] {method} {safePath} -> {UpstreamStatus(status)}{RetriedNote(attemptNumber, status is >= 200 and < 300)}{details}，{TimingText(firstByteSeconds, elapsed)}";
     }
 
     /// <summary>

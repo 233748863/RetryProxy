@@ -1,6 +1,7 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using RetryProxy.Core.Config;
+using RetryProxy.Core.Logging;
 using RetryProxy.Core.Metrics;
 using RetryProxy.Core.Workspace;
 using RetryProxy.Service;
@@ -264,7 +265,7 @@ public partial class CachePageViewModel : ViewModel
 
             var usage = CacheText.UsageCell(request);
             rows.Add(new CacheRow(
-                request.RequestId,
+                RouteLogger.DisplayId(request.RequestId),
                 CacheText.RequestTime(request),
                 request.Model,
                 CacheText.RequestRateText(request),

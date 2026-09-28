@@ -312,23 +312,46 @@ public class ProxyUnitTests
     }
 
     [Fact]
-    public void CompletedLogsOnlyHideTheFirstHttp200AttemptCounter()
+    public void CompletedLogsWriteRetryCountAfterTheStatus()
     {
-        foreach (var (attempt, total, status, expectedPrefix) in new (ulong, ulong, int, string)[]
+        foreach (var (attempt, status, expectedPrefix) in new (ulong, int, string)[]
                  {
-                     (1, 101, 200, "[request-1] POST /v1/responses -> 上游 HTTP 200"),
-                     (1, 1, 200, "[request-1] POST /v1/responses -> 上游 HTTP 200"),
-                     (2, 101, 200, "[request-1] 第 2/101 次 POST /v1/responses -> 上游 HTTP 200"),
-                     (101, 101, 200, "[request-1] 第 101/101 次 POST /v1/responses -> 上游 HTTP 200"),
-                     (1, 101, 503, "[request-1] 第 1/101 次 POST /v1/responses -> 上游 HTTP 503（上游服务暂不可用），"),
+                     (1, 200, "[request-1] POST /v1/responses -> 上游 HTTP 200，"),
+                     (2, 200, "[request-1] POST /v1/responses -> 上游 HTTP 200（重试 1 次后成功），"),
+                     (48, 200, "[request-1] POST /v1/responses -> 上游 HTTP 200（重试 47 次后成功），"),
+                     (1, 503, "[request-1] POST /v1/responses -> 上游 HTTP 503（上游服务暂不可用），模型"),
+                     (4, 400, "[request-1] POST /v1/responses -> 上游 HTTP 400（请求参数有误），已重试 3 次，"),
                  })
         {
-            var line = LogText.FormatCompletedAttempt("request-1", attempt, total, "POST", "/v1/responses", status, 0.25, 1.5, "，模型 gpt-test，输入 8 / 输出 2 token");
+            var line = LogText.FormatCompletedAttempt("request-1", attempt, "POST", "/v1/responses", status, 0.25, 1.5, "，模型 gpt-test，输入 8 / 输出 2 token");
             Assert.True(line.StartsWith(expectedPrefix, StringComparison.Ordinal), line);
+            Assert.DoesNotContain("第 ", line);
             Assert.Contains("模型 gpt-test，输入 8 / 输出 2 token", line);
             Assert.Contains("首字 0.25 秒", line);
             Assert.Contains("耗时 1.50 秒", line);
         }
+    }
+
+    [Fact]
+    public void RetryLogWritesFirstFailureThenEveryTwentiethUntilTheReasonChanges()
+    {
+        var log = new RetryLog();
+        var kinds = new List<RetryLogKind>();
+        for (var index = 0; index < 45; index++)
+        {
+            kinds.Add(log.Next("上游 HTTP 500（上游服务内部错误）"));
+        }
+
+        Assert.Equal(RetryLogKind.Full, kinds[0]);
+        Assert.Equal(RetryLogKind.Progress, kinds[19]);
+        Assert.Equal(RetryLogKind.Progress, kinds[39]);
+        Assert.Equal(42, kinds.Count(kind => kind == RetryLogKind.None));
+        Assert.Equal("[request-1] 已重试 45 次，仍是上游 HTTP 500（上游服务内部错误）", log.ProgressText("request-1", "上游 HTTP 500（上游服务内部错误）"));
+
+        Assert.Equal(RetryLogKind.Full, log.Next("上游 HTTP 429（请求过于频繁）"));
+        Assert.Equal(RetryLogKind.None, log.Next("上游 HTTP 429（请求过于频繁）"));
+        Assert.Equal(RetryLogKind.Full, log.Next("上游 HTTP 500（上游服务内部错误）"));
+        Assert.Equal(48UL, log.Retries);
     }
 
     [Fact]
@@ -343,8 +366,6 @@ public class ProxyUnitTests
         Assert.Equal("HTTP 502（上游网关错误）", LogText.HttpStatus(502));
         Assert.Equal("HTTP 500（当前需求量高，模型负载已达上限）", LogText.HttpStatus(500, "当前需求量高，模型负载已达上限"));
         Assert.Equal("HTTP 200", LogText.HttpStatus(200));
-        Assert.StartsWith("[request-1] 第 1/3 次 POST /v1/responses -> 上游 HTTP 500（当前需求量高，模型负载已达上限），上游错误码 get_channel_failed，",
-            LogText.FormatCompletedAttempt("request-1", 1, 3, "POST", "/v1/responses", 500, 0.25, 1.5, "，上游错误码 get_channel_failed", "当前需求量高，模型负载已达上限"));
     }
 
     [Fact]

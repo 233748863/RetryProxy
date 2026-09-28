@@ -225,7 +225,7 @@ public class RequestLoggingTests
         var line = logs[0];
         Assert.Contains("] POST /v1/responses -> 上游 HTTP 200", line);
         Assert.DoesNotContain("第 1/", line);
-        foreach (var expected in new[] { "HTTP 200", "模型 gpt-test", "输入 4096", "输出 32", "缓存命中 512", "推理 8", "首字", "耗时" })
+        foreach (var expected in new[] { "HTTP 200", "模型 gpt-test", "输入 4096", "输出 32", "命中 512", "推理 8", "首字", "耗时" })
         {
             Assert.True(line.Contains(expected), $"缺少 {expected}: {line}");
         }
@@ -301,7 +301,7 @@ public class RequestLoggingTests
         Assert.Contains("WARNING", logs[0]);
         Assert.Contains("客户端断开", logs[0]);
         Assert.Contains("输入 44", logs[0]);
-        Assert.Contains("第 1/1 次", logs[0]);
+        Assert.DoesNotContain("第 ", logs[0]);
         Assert.Contains("不再重试（已进入响应转发阶段）", logs[0]);
         Assert.Equal(0UL, fixture.Metrics.Snapshot().SuccessfulRequests);
         Assert.Equal(1UL, fixture.Metrics.Snapshot().FailedRequests);
@@ -402,7 +402,7 @@ public class RequestLoggingTests
             Assert.Contains("上游错误码 server_error", line);
             Assert.Contains("错误参数 input[0].content", line);
             Assert.Contains("上游请求 ID upstream-request-123", line);
-            Assert.Contains("输入 未获取 / 输出 未获取", line);
+            Assert.DoesNotContain("输入 未获取", line);
             Assert.DoesNotContain("private-error", line);
             Assert.DoesNotContain("private-api-secret", line);
             Assert.Equal(0UL, fixture.Metrics.Snapshot().SuccessfulRequests);
@@ -432,14 +432,15 @@ public class RequestLoggingTests
         var line = logs[0];
         foreach (var expected in new[]
                  {
-                     "WARNING", "第 1/3 次", "上游 HTTP 200", "原因：上游请求超限", "不再重试（已进入响应转发阶段）", "上游错误码 rate_limit_exceeded",
+                     "WARNING", "上游 HTTP 200", "原因：上游请求超限", "不再重试（已进入响应转发阶段）", "上游错误码 rate_limit_exceeded",
                      "上游错误类型 too_many_requests", "上游请求 ID rate-limit-request-123", "生成内容：未读取到", "最后事件 error",
-                     "输入 未获取 / 输出 未获取 token（未读取到用量统计）", "首字：无",
+                     "首字：无",
                  })
         {
             Assert.True(line.Contains(expected), $"缺少 {expected}: {line}");
         }
 
+        Assert.DoesNotContain("输入 未获取", line);
         Assert.DoesNotContain("private", line);
         Assert.Equal(1, requests);
         var metrics = fixture.Metrics.Snapshot();
@@ -477,7 +478,7 @@ public class RequestLoggingTests
             var line = logs[0];
             foreach (var part in new[]
                      {
-                         expected, "第 1/3 次", "链路：直连", "生成内容：已读取到", "最后事件 response.output_text.delta",
+                         expected, "链路：直连", "生成内容：已读取到", "最后事件 response.output_text.delta",
                          "上游请求 ID broken-stream-request-123", "不再重试（已进入响应转发阶段）",
                      })
             {
@@ -514,9 +515,9 @@ public class RequestLoggingTests
         var logs = await CompletedLogs(fixture);
         var failures = logs.FindAll(line => line.Contains("Timeout"));
         Assert.True(failures.Count == 2, string.Join("\n", logs));
-        Assert.Contains("第 1/2 次", failures[0]);
-        Assert.Contains("将在 0.000 秒后重试", failures[0]);
-        Assert.Contains("第 2/2 次", failures[1]);
+        Assert.Contains("第 1 次", failures[0]);
+        Assert.Contains("0.0 秒后重试", failures[0]);
+        Assert.Contains("第 2 次", failures[1]);
         Assert.Contains("已达到重试上限", failures[1]);
         foreach (var line in logs)
         {
@@ -573,19 +574,45 @@ public class RequestLoggingTests
         var logs = await CompletedLogs(fixture);
 
         // 暂存的错误正文按上游错误码写明原因，并带上与一键准备相同的诊断字段；错误原文不进日志。
-        var attempt = Assert.Single(logs, line => line.Contains("第 1/3 次 POST /v1/responses"));
+        // 每次重试只写一行：状态、诊断字段和等待时间在同一行。
+        var attempt = Assert.Single(logs, line => line.Contains("第 1 次 POST /v1/responses"));
         foreach (var expected in new[]
                  {
-                     "INFO", "-> 上游 HTTP 500（当前需求量高，模型负载已达上限），上游错误码 get_channel_failed，上游错误类型 new_api_error",
-                     "上游请求 ID busy-request-123", "模型 gpt-6-astra", "首字 ",
+                     "WARNING", "-> 上游 HTTP 500（当前需求量高，模型负载已达上限），上游错误码 get_channel_failed，上游错误类型 new_api_error",
+                     "上游请求 ID busy-request-123", "模型 gpt-6-astra", "秒后重试",
                  })
         {
             Assert.True(attempt.Contains(expected), $"缺少 {expected}: {attempt}");
         }
 
-        Assert.Contains(logs, line => line.Contains("WARNING") && line.Contains("上游 HTTP 500（当前需求量高，模型负载已达上限） 可重试，"));
+        Assert.DoesNotContain("输入 未获取", attempt);
+        Assert.DoesNotContain("首字", attempt);
+        Assert.Contains(logs, line => line.Contains("INFO") && line.Contains("上游 HTTP 200（重试 1 次后成功）"));
+        Assert.Equal(2, logs.Count);
         Assert.DoesNotContain(logs, line => line.Contains("private"));
         Assert.Equal(2, requests);
+    }
+
+    [Fact]
+    public async Task RepeatedRetriesForTheSameReasonAreSummarized()
+    {
+        var requests = 0;
+        await using var fixture = await LifecycleProxy.StartAsync(context => Interlocked.Increment(ref requests) <= 25
+            ? Upstream.Text(context, 500, "busy")
+            : Upstream.Json(context, 200, "{\"model\":\"gpt-6-astra\",\"usage\":{\"input_tokens\":8,\"output_tokens\":2}}"),
+            LoggingConfig(5.0, 30));
+        using var client = TestClient.Create();
+        var response = await TestClient.Send(client, HttpMethod.Post, $"{fixture.Address}/v1/responses", "{\"model\":\"gpt-6-astra\"}");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        await response.Content.ReadAsStringAsync();
+        var logs = await CompletedLogs(fixture);
+
+        // 25 次同样的 500：第 1 次完整一行，第 20 次一条进度，最后一行成功并写明重试次数。
+        Assert.True(logs.Count == 3, string.Join("\n", logs));
+        Assert.True(logs[0].Contains("第 1 次 POST /v1/responses -> 上游 HTTP 500（上游服务内部错误），模型 gpt-6-astra，0.0 秒后重试"), logs[0]);
+        Assert.True(logs[1].Contains("已重试 20 次，仍是上游 HTTP 500（上游服务内部错误）"), logs[1]);
+        Assert.True(logs[2].Contains("POST /v1/responses -> 上游 HTTP 200（重试 25 次后成功）"), logs[2]);
+        Assert.Equal(25UL, fixture.Metrics.Snapshot().RetryCount);
     }
 
     [Fact]

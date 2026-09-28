@@ -244,6 +244,7 @@ D:\RetryProxy\
 - 文件 `logs\retry-proxy.log`，行格式 `YYYY-MM-DD HH:MM:SS LEVEL message`，LEVEL 为 `INFO/WARNING/ERROR`；5 MiB 轮转 × 3。
 - 通道前缀规则：消息以 `[` 开头 → `[通道]` 紧贴；否则 `[通道] `。
 - UI 队列 10000 行有界，满则丢弃。
+- **精简（2026-09-28 用户确认）**：请求编号只显示前 8 位（缓存页同步，统计仍存完整 ID）；同一请求同一原因的重试只写第 1 次完整行（`第 N 次 … -> 原因，诊断字段，X.X 秒后重试`），之后每 20 次一条 `已重试 N 次，仍是…`，原因变化时重新写完整行；成功行不再写 `第 N/总数 次`，改为 `上游 HTTP 200（重试 N 次后成功）`；失败时用量全缺就不写 `输入 未获取 / 输出 未获取`；缓存用量合并为 `缓存 95.9%（命中 X / 写入 Y）`。此后新日志与 Rust 格式不再逐字一致，legacy 恢复只用于旧 Rust 日志。
 
 ### 6.7 每日统计（Core/Metrics）
 - 目录 `logs\daily-statistics\{SHA256(route_id) hex}\{YYYY-MM-DD}.jsonl`，头行 + 请求行 schema v1 逐字段一致。

@@ -384,6 +384,8 @@ public sealed class RetryProxy
 
         public MonotonicInstant StartedAt { get; }
 
+        public RetryLog Retries { get; } = new();
+
         public Task Cancelled => _cancelled ??= Task.Delay(Timeout.Infinite, Token);
 
         /// <summary>客户端请求头的原顺序（含 Host、Content-Length），指纹连接按它重排上游请求头。</summary>
@@ -861,7 +863,7 @@ public sealed class RetryProxy
             }
             catch (UpstreamException failure)
             {
-                if (await HandleAttemptFailureAsync(ctx, attemptNumber, totalAttempts, null, null, startedAt, usingSystemProxy, failure).ConfigureAwait(false))
+                if (await HandleAttemptFailureAsync(ctx, attemptNumber, totalAttempts, null, startedAt, usingSystemProxy, failure).ConfigureAwait(false))
                 {
                     return RetryExhaustedResponse(ctx, totalAttempts, lastResponse);
                 }
@@ -907,7 +909,7 @@ public sealed class RetryProxy
                     catch (UpstreamException failure)
                     {
                         reader.Dispose();
-                        if (await HandleAttemptFailureAsync(ctx, attemptNumber, totalAttempts, status, null, startedAt, usingSystemProxy, failure).ConfigureAwait(false))
+                        if (await HandleAttemptFailureAsync(ctx, attemptNumber, totalAttempts, status, startedAt, usingSystemProxy, failure).ConfigureAwait(false))
                         {
                             return RetryExhaustedResponse(ctx, totalAttempts, lastResponse);
                         }
@@ -945,7 +947,8 @@ public sealed class RetryProxy
                         var delay = RetryDelay(attempt, status, responseHeaders);
                         ctx.Metrics.Retry(requestId, attemptNumber);
                         ctx.Metrics.RequestPhase(requestId, RequestPhase.WaitingRetry);
-                        ctx.Logger.Warn($"[{requestId}] 第 {attemptNumber} 次 {method} {safePath} -> {(summary is not null && status is < 200 or >= 300 ? LogText.UpstreamStatus(status, summary) : $"{LogText.UpstreamStatus(status)}，{reason}")}，未交给客户端，{delay:F3} 秒后代理重试{stats.FailureLogFields()}");
+                        var failureText = summary is not null && status is < 200 or >= 300 ? LogText.UpstreamStatus(status, summary) : $"{LogText.UpstreamStatus(status)}，{reason}";
+                        LogRetry(ctx, failureText, $"[{requestId}] {LogText.AttemptText(attemptNumber)} {method} {safePath} -> {failureText}，未交给客户端{stats.FailureLogFields()}，{LogText.RetryDelayText(delay)}");
                         await WaitDelayAsync(delay, ctx.Token).ConfigureAwait(false);
                         continue;
                     }
@@ -964,7 +967,7 @@ public sealed class RetryProxy
                         catch (UpstreamException failure)
                         {
                             reader.Dispose();
-                            if (await HandleAttemptFailureAsync(ctx, attemptNumber, totalAttempts, status, null, startedAt, usingSystemProxy, failure).ConfigureAwait(false))
+                            if (await HandleAttemptFailureAsync(ctx, attemptNumber, totalAttempts, status, startedAt, usingSystemProxy, failure).ConfigureAwait(false))
                             {
                                 return RetryExhaustedResponse(ctx, totalAttempts, lastResponse);
                             }
@@ -982,14 +985,12 @@ public sealed class RetryProxy
                             stats.Finish(ctx.StartedAt.ElapsedSeconds);
                             var summary = stats.FailureSummary();
                             var response = new BufferedResponse(status, responseHeaders, buffered.Body, summary);
-                            ctx.Logger.Info(LogText.FormatCompletedAttempt(
-                                requestId, attemptNumber, totalAttempts, method, safePath, status, buffered.FirstByteSeconds, startedAt.ElapsedSeconds,
-                                stats.FailureLogFields(), summary));
                             lastResponse = response;
                             var delay = RetryDelay(attempt, status, response.Headers);
+                            var failureText = LogText.UpstreamStatus(status, summary);
+                            LogRetry(ctx, failureText, $"[{requestId}] {LogText.AttemptText(attemptNumber)} {method} {safePath} -> {failureText}{stats.FailureLogFields()}，{LogText.RetryDelayText(delay)}");
                             ctx.Metrics.Retry(requestId, attemptNumber);
                             ctx.Metrics.RequestPhase(requestId, RequestPhase.WaitingRetry);
-                            ctx.Logger.Warn($"[{requestId}] {LogText.UpstreamStatus(status, summary)} 可重试，{delay:F3} 秒后再次请求");
                             await WaitDelayAsync(delay, ctx.Token).ConfigureAwait(false);
                             continue;
                         }
@@ -1017,7 +1018,7 @@ public sealed class RetryProxy
                 catch (Exception failure) when (failure is UpstreamException or NoGenerationException)
                 {
                     reader.Dispose();
-                    if (await HandleAttemptFailureAsync(ctx, attemptNumber, totalAttempts, status, null, startedAt, usingSystemProxy, failure).ConfigureAwait(false))
+                    if (await HandleAttemptFailureAsync(ctx, attemptNumber, totalAttempts, status, startedAt, usingSystemProxy, failure).ConfigureAwait(false))
                     {
                         return RetryExhaustedResponse(ctx, totalAttempts, lastResponse);
                     }
@@ -1338,7 +1339,7 @@ public sealed class RetryProxy
                     break;
                 }
 
-                throw new NoGenerationException($"等待生成达到 {StreamLifecycle.Format(Config.GenerationTimeoutSeconds)} 秒，尚未向客户端转发响应{stats.FailureLogFields()}");
+                throw new NoGenerationException($"等待生成达到 {StreamLifecycle.Format(Config.GenerationTimeoutSeconds)} 秒，尚未向客户端转发响应", stats.FailureLogFields());
             }
 
             if (!readTask.IsCompleted)
@@ -1353,7 +1354,7 @@ public sealed class RetryProxy
                 if (generationGate is not null && !generationGate.Finish())
                 {
                     stats.Finish(ctx.StartedAt.ElapsedSeconds);
-                    throw new NoGenerationException($"上游流在生成内容前结束，未收到完成事件，尚未向客户端转发响应{stats.FailureLogFields()}");
+                    throw new NoGenerationException("上游流在生成内容前结束，未收到完成事件，尚未向客户端转发响应", stats.FailureLogFields());
                 }
 
                 break;
@@ -1389,7 +1390,6 @@ public sealed class RetryProxy
             ctx.Metrics,
             requestId,
             attemptNumber,
-            totalAttempts,
             ctx.Method,
             ctx.SafePath,
             status,
@@ -1519,39 +1519,52 @@ public sealed class RetryProxy
         ulong attemptNumber,
         ulong totalAttempts,
         int? status,
-        double? firstByteSeconds,
         MonotonicInstant startedAt,
         bool usingSystemProxy,
         Exception error)
     {
         var elapsed = startedAt.ElapsedSeconds;
         var phase = status is null ? NetworkPhase.AwaitingResponse : NetworkPhase.ReadingResponse;
-        var label = error switch
+        var (label, fields) = error switch
         {
-            UpstreamException network => NetworkErrorLabel.Describe(network, usingSystemProxy, phase),
-            NoGenerationException generation => generation.Message,
+            UpstreamException network => (NetworkErrorLabel.Describe(network, usingSystemProxy, phase), string.Empty),
+            NoGenerationException generation => (generation.Reason, generation.Fields),
             _ => throw error,
         };
         var statusText = status is { } value ? LogText.UpstreamStatus(value) : "上游状态码：无";
         double? delay = totalAttempts == 0 || attemptNumber < totalAttempts ? RetryDelay(attemptNumber - 1, null, null) : null;
         var isTemporaryKeepAlive = _localAccessKey is not null && ctx.RequestId.StartsWith(ProxyMetrics.KeepAlivePrefix, StringComparison.Ordinal);
-        var retryText = delay is { } seconds ? $"将在 {seconds:F3} 秒后重试" : "已达到重试上限";
-        if (delay is null && isTemporaryKeepAlive)
-        {
-            retryText = KeepAlive.Snapshot().Preparing ? "本轮结束，后台准备将在间隔后继续" : "本轮结束，下次按保活间隔继续";
-        }
-        var attemptText = isTemporaryKeepAlive ? "本轮" : totalAttempts == 0 ? $"第 {attemptNumber} 次" : $"第 {attemptNumber}/{totalAttempts} 次";
-        ctx.Logger.Warn($"[{ctx.RequestId}] {attemptText} {ctx.Method} {ctx.SafePath} -> {statusText}，{label}，{retryText}，{LogText.TimingText(firstByteSeconds, elapsed)}");
+        var attemptText = isTemporaryKeepAlive ? "本轮" : LogText.AttemptText(attemptNumber);
+        var failureText = $"{statusText}，{label}";
+        var message = $"[{ctx.RequestId}] {attemptText} {ctx.Method} {ctx.SafePath} -> {failureText}{fields}，耗时 {elapsed:F2} 秒";
         if (delay is not { } wait)
         {
+            var endText = !isTemporaryKeepAlive ? "已达到重试上限"
+                : KeepAlive.Snapshot().Preparing ? "本轮结束，后台准备将在间隔后继续" : "本轮结束，下次按保活间隔继续";
+            ctx.Logger.Warn($"{message}，{endText}");
             ctx.Metrics.Failure(ctx.RequestId);
             return true;
         }
 
+        LogRetry(ctx, failureText, $"{message}，{LogText.RetryDelayText(wait)}");
         ctx.Metrics.Retry(ctx.RequestId, attemptNumber);
         ctx.Metrics.RequestPhase(ctx.RequestId, RequestPhase.WaitingRetry);
         await WaitDelayAsync(wait, ctx.Token).ConfigureAwait(false);
         return false;
+    }
+
+    /// <summary>按 <see cref="RetryLog"/> 节流写一次将要重试的失败：原因变了写完整行，同一原因每 20 次写一条进度。</summary>
+    private static void LogRetry(RequestContext ctx, string reason, string fullMessage)
+    {
+        switch (ctx.Retries.Next(reason))
+        {
+            case RetryLogKind.Full:
+                ctx.Logger.Warn(fullMessage);
+                break;
+            case RetryLogKind.Progress:
+                ctx.Logger.Warn(ctx.Retries.ProgressText(ctx.RequestId, reason));
+                break;
+        }
     }
 
     private async Task WaitDelayAsync(double delay, CancellationToken token)

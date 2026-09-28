@@ -261,8 +261,7 @@ public class ResponseStatsTests
         Assert.Equal((ulong?)4, request.CacheCreationTokens);
         var fields = stats.LogFields();
         Assert.Contains("输入 20 / 输出 5 token", fields);
-        Assert.Contains("缓存命中 6 token", fields);
-        Assert.Contains("缓存写入 4 token", fields);
+        Assert.Contains("缓存 30.0%（命中 6 / 写入 4）", fields);
         Assert.Contains("推理 2 token", fields);
         Assert.Equal((ulong?)25, stats.ContextTokens(false));
         Assert.Equal((double?)0.6, stats.FirstContentSeconds());
@@ -281,7 +280,7 @@ public class ResponseStatsTests
             """{"type":"response.completed","response":{"usage":{"input_tokens":0,"output_tokens":0,"input_tokens_details":{"cached_tokens":42}}}}""",
             0.3);
         Assert.Contains("输入 0 / 输出 0", zero.LogFields());
-        Assert.Contains("缓存命中 42", zero.LogFields());
+        Assert.Contains("缓存（命中 42）", zero.LogFields());
     }
 
     [Fact]
@@ -368,8 +367,8 @@ public class ResponseStatsTests
         var fields = stats.LogFields();
         Assert.Contains("上游错误码 rate_limit_exceeded", fields);
         Assert.Contains("上游错误类型 too_many_requests", fields);
-        Assert.Contains("输入 未获取 / 输出 未获取", fields);
-        Assert.Contains("未读取到用量统计", fields);
+        Assert.DoesNotContain("输入 未获取", fields);
+        Assert.DoesNotContain("用量统计", fields);
         Assert.Contains("生成内容：未读取到", fields);
         Assert.Contains("最后事件 error", fields);
         Assert.DoesNotContain("eastus2", fields);

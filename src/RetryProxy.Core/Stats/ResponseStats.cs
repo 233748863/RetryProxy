@@ -526,26 +526,20 @@ internal sealed class ResponseStats
             fields.Append("，模型 ").Append(_model);
         }
 
-        if (_isApiResponse)
+        // 失败时两项用量都没读到就整段不写，只读到一项才提示不完整。
+        if (_isApiResponse && !(failed && _usage.Input is null && _usage.Output is null))
         {
             fields.Append("，输入 ").Append(Count(_usage.Input)).Append(" / 输出 ").Append(Count(_usage.Output)).Append(" token");
             if (failed && (_usage.Input is null || _usage.Output is null))
             {
-                fields.Append(_usage.Input is null && _usage.Output is null ? "（未读取到用量统计）" : "（用量统计不完整）");
+                fields.Append("（用量统计不完整）");
             }
         }
 
-        AppendTokenField(fields, "缓存命中", _usage.CacheRead);
-        AppendTokenField(fields, "缓存写入", _usage.CacheCreation);
-        AppendTokenField(fields, "推理", _usage.Reasoning);
-        if (CacheUsage() is { } usage)
+        AppendCacheFields(fields);
+        if (_usage.Reasoning is { } reasoning)
         {
-            var rate = 100.0 * usage.Cached / usage.Input;
-            fields.Append("，缓存命中率 ").Append(rate.ToString("F1", CultureInfo.InvariantCulture)).Append('%');
-            if (usage.Cached == 0)
-            {
-                fields.Append("（完全未命中）");
-            }
+            fields.Append("，推理 ").Append(reasoning.ToString(CultureInfo.InvariantCulture)).Append(" token");
         }
 
         if (_cacheKeyState.Label() is { } keyLabel)
@@ -571,12 +565,40 @@ internal sealed class ResponseStats
 
     private static string Count(ulong? value) => value?.ToString(CultureInfo.InvariantCulture) ?? "未获取";
 
-    private static void AppendTokenField(StringBuilder fields, string label, ulong? value)
+    /// <summary>
+    /// 缓存用量合成一段：能算命中率时 <c>，缓存 95.9%（命中 114681 / 写入 4907）</c>，一点没命中时 <c>，缓存 0.0%（完全未命中 / 写入 4907）</c>；
+    /// 算不出命中率时 <c>，缓存（命中 42）</c>；上游没报缓存用量时不写。
+    /// </summary>
+    private void AppendCacheFields(StringBuilder fields)
     {
-        if (value is { } count)
+        var usage = CacheUsage();
+        var parts = new List<string>(2);
+        if (usage is { Cached: 0 })
         {
-            fields.Append('，').Append(label).Append(' ').Append(count.ToString(CultureInfo.InvariantCulture)).Append(" token");
+            parts.Add("完全未命中");
         }
+        else if (_usage.CacheRead is { } read)
+        {
+            parts.Add($"命中 {read.ToString(CultureInfo.InvariantCulture)}");
+        }
+
+        if (_usage.CacheCreation is { } creation)
+        {
+            parts.Add($"写入 {creation.ToString(CultureInfo.InvariantCulture)}");
+        }
+
+        if (parts.Count == 0)
+        {
+            return;
+        }
+
+        fields.Append("，缓存");
+        if (usage is { } known)
+        {
+            fields.Append(' ').Append((100.0 * known.Cached / known.Input).ToString("F1", CultureInfo.InvariantCulture)).Append('%');
+        }
+
+        fields.Append('（').Append(string.Join(" / ", parts)).Append('）');
     }
 
     private void ObserveEvent(DecodedEvent decoded, double elapsed)

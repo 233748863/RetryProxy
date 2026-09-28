@@ -219,8 +219,8 @@ public class ProxyIntegrationTests
         Assert.Equal(2, attempts);
         service.Stop(TimeSpan.FromSeconds(5));
         var logText = LogFiles.ReadAll(logDirectory);
-        Assert.True(logText.Contains("第 1/2 次 GET /hello -> 上游 HTTP 500"), logText);
-        Assert.True(logText.Contains("第 2/2 次 GET /hello -> 上游 HTTP 200"), logText);
+        Assert.True(logText.Contains("第 1 次 GET /hello -> 上游 HTTP 500（上游服务内部错误），0.0 秒后重试"), logText);
+        Assert.True(logText.Contains("GET /hello -> 上游 HTTP 200（重试 1 次后成功）"), logText);
         Assert.True(service.State is ServiceState.Stopped or ServiceState.Error);
     }
 

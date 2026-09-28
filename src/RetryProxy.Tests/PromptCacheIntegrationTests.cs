@@ -7,6 +7,7 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
 using RetryProxy.Core.Config;
+using RetryProxy.Core.Logging;
 using RetryProxy.Tests.Support;
 using Xunit;
 
@@ -91,7 +92,7 @@ public class PromptCacheIntegrationTests
         Assert.Equal(60.0, snapshot.Cache.HitRatePercent());
         Assert.Equal(1000UL, snapshot.Cache.RecentRequests[0].TotalInputTokens());
         Assert.Equal(0UL, snapshot.GptCache.MeasuredRequests);
-        Assert.True(logs.Contains("缓存命中率 80.0%"), logs);
+        Assert.True(logs.Contains("缓存 80.0%（"), logs);
         Assert.DoesNotContain("fixture-private-input", logs);
         using var health = await TestClient.Health(client, proxy.Address);
         var metrics = health.RootElement.GetProperty("metrics");
@@ -184,7 +185,7 @@ public class PromptCacheIntegrationTests
         }
 
         Assert.True(logs.Contains("缓存标识：代理已补全"), logs);
-        Assert.True(logs.Contains("缓存命中率 50.0%"), logs);
+        Assert.True(logs.Contains("缓存 50.0%（"), logs);
         foreach (var privateText in new[] { "fixture-secret", "private-one", "fixture-thread", key })
         {
             Assert.DoesNotContain(privateText, logs);
@@ -204,7 +205,7 @@ public class PromptCacheIntegrationTests
         Assert.Equal(2048, recent[1].GetProperty("input_tokens").GetInt32());
         Assert.Equal("代理已补全", recent[1].GetProperty("cache_key_status").GetString());
         Assert.True(recent[1].GetProperty("completed_at_unix_ms").GetInt64() > 0);
-        Assert.Contains(recent[1].GetProperty("request_id").GetString()!, logs);
+        Assert.Contains($"[请求 {RouteLogger.DisplayId(recent[1].GetProperty("request_id").GetString()!)}]", logs);
         foreach (var privateText in new[] { "fixture-secret", "private-one", "fixture-thread", key })
         {
             Assert.DoesNotContain(privateText, healthText);

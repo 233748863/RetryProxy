@@ -8,6 +8,8 @@ namespace RetryProxy.Core.Logging;
 /// </summary>
 public sealed class RouteLogger
 {
+    private const int DisplayIdLength = 8;
+
     private readonly ProxyLogger _logger;
     private readonly LogActivity? _activity;
     private readonly string? _requestId;
@@ -43,6 +45,17 @@ public sealed class RouteLogger
         return new RouteLogger(_logger, RouteName, context.Source, context._activity, requestId);
     }
 
+    /// <summary>
+    /// 日志与缓存页显示的请求编号：去掉保活前缀（只用于内部统计，避免准备请求被误读成保活），只留前 8 位，同一时段内足够区分；统计里仍保留完整 ID。
+    /// 例：<c>b5d0dc2097b943caa80f90748ee2ced5</c> → <c>b5d0dc20</c>。
+    /// </summary>
+    public static string DisplayId(string requestId)
+    {
+        var id = requestId.StartsWith(ProxyMetrics.KeepAlivePrefix, StringComparison.Ordinal)
+            ? requestId[ProxyMetrics.KeepAlivePrefix.Length..] : requestId;
+        return id[..Math.Min(id.Length, DisplayIdLength)];
+    }
+
     public void Info(string message) => _logger.Write("INFO", Prefix(message));
 
     public void Warn(string message) => _logger.Write("WARNING", Prefix(message));
@@ -71,10 +84,7 @@ public sealed class RouteLogger
 
         if (_requestId is not null && message.StartsWith($"[{_requestId}]", StringComparison.Ordinal))
         {
-            // 保活前缀只用于内部统计，界面和文件统一显示请求 ID，避免准备请求被误读成保活。
-            var id = _requestId.StartsWith(ProxyMetrics.KeepAlivePrefix, StringComparison.Ordinal)
-                ? _requestId[ProxyMetrics.KeepAlivePrefix.Length..] : _requestId;
-            message = $"[请求 {id}]{message[(_requestId.Length + 2)..]}";
+            message = $"[请求 {DisplayId(_requestId)}]{message[(_requestId.Length + 2)..]}";
         }
 
         return message.StartsWith('[')

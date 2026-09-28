@@ -51,10 +51,18 @@ internal sealed class ResponseStreamException : Exception
 /// <summary>等待生成阶段没有拿到可转发的内容（对应 AttemptReadError::NoGeneration）。</summary>
 internal sealed class NoGenerationException : Exception
 {
-    public NoGenerationException(string reason)
-        : base(reason)
+    public NoGenerationException(string reason, string fields)
+        : base(reason + fields)
     {
+        Reason = reason;
+        Fields = fields;
     }
+
+    /// <summary>不含诊断字段的原因，用来判断连续重试是否同一原因。</summary>
+    public string Reason { get; }
+
+    /// <summary>上游请求 ID、模型等诊断字段（见 ResponseStats.FailureLogFields）。</summary>
+    public string Fields { get; }
 }
 
 /// <summary>暂存下来的完整上游响应；<paramref name="Summary"/> 是从错误正文认出的原因（见 ResponseStats.FailureSummary），写日志用。</summary>

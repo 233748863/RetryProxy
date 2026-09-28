@@ -1,4 +1,5 @@
 using System;
+using RetryProxy.Core.Logging;
 using RetryProxy.Core.Metrics;
 
 namespace RetryProxy.Core.Workspace;
@@ -57,7 +58,7 @@ public static class CacheText
 
     public static string RequestHint(CacheRequest request)
     {
-        return $"{RequestTime(request)} · {request.RequestId} · {request.Model}\n"
+        return $"{RequestTime(request)} · {RouteLogger.DisplayId(request.RequestId)} · {request.Model}\n"
             + $"命中 {RequestRateText(request)} · 读取 {OptionalCount(request.CachedTokens)} / 总输入 {OptionalCount(request.TotalInputTokens())} token\n"
             + $"缓存写入 {OptionalCount(request.CacheCreationTokens)} token\n"
             + $"缓存标识：{request.CacheKeyStatus}\n{UsageHelp}";

@@ -1,0 +1,42 @@
+<drawers:DrawerPage x:Class="RetryProxy.View.Drawers.ProxyDrawer"
+                    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:drawers="clr-namespace:RetryProxy.View.Drawers"
+                    xmlns:i18n="clr-namespace:RetryProxy.Service.I18n"
+                    xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml">
+    <StackPanel>
+        <TextBlock x:Name="ClientText" FontWeight="SemiBold" Margin="0,0,0,12" />
+        <TextBlock Text="{i18n:T 本地端口}" Margin="0,0,0,4" />
+        <ui:TextBox x:Name="PortBox" AutomationProperties.AutomationId="ChannelListenPort" AutomationProperties.Name="{i18n:T 本地端口}" />
+        <TextBlock Text="{i18n:T 最大重试次数}" Margin="0,12,0,4" />
+        <ui:TextBox x:Name="RetriesBox" AutomationProperties.AutomationId="ChannelRetries" AutomationProperties.Name="{i18n:T 最大重试次数}" />
+        <TextBlock Text="{i18n:T 单次超时（秒）}" Margin="0,12,0,4" />
+        <ui:TextBox x:Name="TimeoutBox" AutomationProperties.Name="{i18n:T 单次超时（秒）}" />
+        <TextBlock Text="{i18n:T 总等待上限（秒）}" Margin="0,12,0,4" />
+        <ui:TextBox x:Name="TotalTimeoutBox" AutomationProperties.Name="{i18n:T 总等待上限（秒）}"
+                    ToolTip="{i18n:T 包含连接、重试等待和接收响应；到时结束本次请求，不再重试。}" />
+        <TextBlock Text="{i18n:T 等待生成上限（秒）}" Margin="0,12,0,4" />
+        <ui:TextBox x:Name="GenerationTimeoutBox" AutomationProperties.Name="{i18n:T 等待生成上限（秒）}"
+                    ToolTip="{i18n:T 每次收到上游成功事件流的响应头后开始计时；空消息不重置。尚未转发内容时到期可重试，总等待上限优先。}" />
+        <TextBlock Text="{i18n:T 退避最小间隔（秒）}" Margin="0,12,0,4" />
+        <ui:TextBox x:Name="BaseDelayBox" AutomationProperties.Name="{i18n:T 退避最小间隔（秒）}" />
+        <TextBlock Text="{i18n:T 退避最大间隔（秒）}" Margin="0,12,0,4" />
+        <ui:TextBox x:Name="MaxDelayBox" AutomationProperties.Name="{i18n:T 退避最大间隔（秒）}" />
+        <CheckBox x:Name="CompressionCheck" Content="{i18n:T 透传压缩}" Margin="0,16,0,0" />
+        <TextBlock Text="{i18n:T 原样转发客户端的 Accept-Encoding；保存后对新的尝试生效。}" TextWrapping="Wrap"
+                   Foreground="{ui:ThemeResource TextFillColorSecondaryBrush}" Margin="0,4,0,0" />
+        <Separator Margin="0,16" />
+        <CheckBox x:Name="KeepAliveCheck" AutomationProperties.AutomationId="DrawerKeepAlive" Content="{i18n:T 本通道保活}" />
+        <TextBlock Text="{i18n:T 保活间隔（分钟）}" Margin="0,12,0,4" />
+        <ui:TextBox x:Name="IdleMinutesBox" AutomationProperties.AutomationId="ChannelKeepAliveMinutes" AutomationProperties.Name="{i18n:T 保活间隔（分钟）}" />
+        <TextBlock Text="{i18n:T 思考强度}" Margin="0,12,0,4" />
+        <ComboBox x:Name="EffortBox" AutomationProperties.AutomationId="ChannelReasoningEffort" SelectedValuePath="Tag" AutomationProperties.Name="{i18n:T 思考强度}" />
+        <TextBlock Text="{i18n:T 会话上限（token）}" Margin="0,12,0,4" />
+        <ui:TextBox x:Name="ContextLimitBox" AutomationProperties.AutomationId="ChannelContextLimit" AutomationProperties.Name="{i18n:T 会话上限（token）}" />
+        <Separator Margin="0,16" />
+        <TextBlock x:Name="StateText" TextWrapping="Wrap" Margin="0,0,0,8" AutomationProperties.LiveSetting="Polite" />
+        <ui:Button x:Name="ToggleButton" AutomationProperties.AutomationId="ToggleProxy" HorizontalAlignment="Left" Click="ToggleClicked" />
+        <TextBlock Text="{i18n:T 启停使用已保存的设置；停止代理时，当前连接将中断。}" TextWrapping="Wrap"
+                   Foreground="{ui:ThemeResource TextFillColorSecondaryBrush}" Margin="0,8,0,0" />
+    </StackPanel>
+</drawers:DrawerPage>

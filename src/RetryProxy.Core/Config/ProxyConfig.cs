@@ -295,7 +295,7 @@ public sealed class ProxyConfig : IEquatable<ProxyConfig>
 
     /// <summary>
     /// 某条通道当前的快照：运行时配置（含环境变量覆盖）的地址与参数，加上当前供应商、Key 与本地口令。
-    /// <paramref name="fetchedModels"/> 是本次运行里该供应商最近一次「获取模型」的结果，并入 Codex 的已知模型。
+    /// <paramref name="fetchedModels"/> 为兼容调用方额外提供的模型；持久化的获取结果始终并入已知模型。
     /// 当前供应商不存在时抛 <see cref="ConfigException"/>（与 <see cref="RuntimeConfigFor"/> 相同）。
     /// </summary>
     public ChannelSnapshot SnapshotFor(string routeId, IEnumerable<string>? fetchedModels = null)
@@ -307,6 +307,7 @@ public sealed class ProxyConfig : IEquatable<ProxyConfig>
         var known = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var model in provider.Keys.Select(item => item.ModelOverride?.Model ?? string.Empty)
                      .Append(provider.Models.Model)
+                     .Concat(provider.FetchedModels)
                      .Concat(fetchedModels ?? Enumerable.Empty<string>()))
         {
             if (!string.IsNullOrWhiteSpace(model))
@@ -378,7 +379,7 @@ public sealed class ProxyConfig : IEquatable<ProxyConfig>
     /// </summary>
     public void Validate(bool requireUpstream)
     {
-        if (KeepaliveContextLimit == 0)
+        if (KeepaliveContextLimit <= 0)
         {
             throw new ConfigException("保活会话用量阈值必须大于 0");
         }
@@ -427,6 +428,11 @@ public sealed class ProxyConfig : IEquatable<ProxyConfig>
         foreach (var route in Routes)
         {
             route.Validate();
+            if (route.KeepaliveContextLimit < 0)
+            {
+                throw new ConfigException("保活会话用量阈值必须大于 0");
+            }
+
             if (!routeIds.Add(route.Id))
             {
                 throw new ConfigException($"转发通道 ID 重复：{route.Id}");

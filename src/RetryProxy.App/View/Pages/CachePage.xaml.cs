@@ -1,15 +1,12 @@
-using RetryProxy.ViewModel.Pages;
 using System.Windows.Controls;
 
 namespace RetryProxy.View.Pages;
 
-public partial class CachePage : Page
+/// <summary>统计页下半部分；沿用缓存走势、筛选和明细，继承容器指定的数据上下文。</summary>
+public partial class CachePage : UserControl
 {
-    public CachePageViewModel ViewModel { get; }
-
-    public CachePage(CachePageViewModel viewModel)
+    public CachePage()
     {
-        DataContext = ViewModel = viewModel;
         InitializeComponent();
     }
 }

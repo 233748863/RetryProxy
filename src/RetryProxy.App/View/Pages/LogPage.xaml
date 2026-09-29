@@ -45,6 +45,7 @@
 
         <!--  来源和级别分行；窄窗口下筛选项自动换行。  -->
         <StackPanel Grid.Row="0" Margin="0,0,0,10">
+            <controls:ClientSelector Margin="0,0,0,12" />
             <Grid Margin="0,0,0,10">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*" />
@@ -157,12 +158,12 @@
                                Content="{i18n:T 错误}"
                                Style="{StaticResource LogFilterChip}" />
                     <ui:Button Appearance="{Binding OnlySelected, Converter={StaticResource BooleanToChipAppearanceConverter}}"
-                               AutomationProperties.AutomationId="LogSelectedRoute"
+                               AutomationProperties.AutomationId="LogSelectedClient"
                                Command="{Binding ToggleOnlySelectedCommand}"
                                Style="{StaticResource LogFilterChip}"
                                ToolTip="{Binding OnlySelectedLabel}"
-                               Visibility="{Binding ShowRouteFilter, Converter={StaticResource BooleanToVisibilityConverter}}">
-                        <TextBlock MaxWidth="180" Text="{Binding OnlySelectedLabel}" TextTrimming="CharacterEllipsis" />
+                               Visibility="{Binding ShowClientFilter, Converter={StaticResource BooleanToVisibilityConverter}}">
+                        <TextBlock Text="{i18n:T 仅当前客户端}" />
                     </ui:Button>
                 </WrapPanel>
                 <ui:TextBox Grid.Column="1"
@@ -170,7 +171,7 @@
                             VerticalAlignment="Top"
                             AutomationProperties.AutomationId="LogSearch"
                             Icon="{ui:SymbolIcon Search24}"
-                            PlaceholderText="{i18n:T 搜索任务 / 通道 / 请求 ID}"
+                            PlaceholderText="{i18n:T 搜索任务 / 客户端 / 请求 ID}"
                             Text="{Binding Query, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged, Delay=200}" />
             </Grid>
         </StackPanel>

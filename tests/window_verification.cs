@@ -266,6 +266,18 @@ public static class RetryProxyTrayVerification {
         return result;
     }
 
+    // 仅枚举指定测试进程的窗口，供托盘弹出菜单验收使用，不触碰其他实例。
+    public static IntPtr[] WindowsForProcess(uint processId) {
+        var result = new System.Collections.Generic.List<IntPtr>();
+        EnumDesktopWindows(desktop, (window, parameter) => {
+            uint owner;
+            GetWindowThreadProcessId(window, out owner);
+            if (owner == processId) { result.Add(window); }
+            return true;
+        }, IntPtr.Zero);
+        return result.ToArray();
+    }
+
     public static Rectangle Bounds(IntPtr window) {
         Rectangle bounds;
         if (!GetWindowRect(window, out bounds)) { throw new Win32Exception(Marshal.GetLastWin32Error()); }

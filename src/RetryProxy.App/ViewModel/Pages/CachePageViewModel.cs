@@ -46,21 +46,13 @@ public partial class CachePageViewModel : ViewModel
     private readonly WorkspaceService _workspaceService;
     private CacheSnapshot? _lastSnapshot;
     private CacheFilter _filter = CacheFilter.All;
-    private bool _syncing;
+    private string? _displayedRouteId;
+    private DateTime _displayedDate;
 
     private ProxyWorkspace Workspace => _workspaceService.Workspace;
 
     [ObservableProperty]
-    private ObservableCollection<PickerItem> _channels = [];
-
-    [ObservableProperty]
-    private PickerItem? _selectedChannel;
-
-    [ObservableProperty]
     private bool _hasChannel;
-
-    [ObservableProperty]
-    private string _title = "缓存明细";
 
     [ObservableProperty]
     private string _dateHeadline = string.Empty;
@@ -161,49 +153,32 @@ public partial class CachePageViewModel : ViewModel
 
     private void Refresh(bool force)
     {
-        _syncing = true;
-        try
+        var route = Workspace.SelectedRouteRef();
+        HasChannel = route is not null;
+        if (route is null)
         {
-            var channels = Workspace.Config.Routes
-                .Select(route => new PickerItem(route.Id, $"{route.Name} · {route.ListenPort} · {UiText.StateLabel(Workspace.RouteState(route.Id))}"))
-                .ToList();
-            if (Channels.Count != channels.Count || !Channels.Zip(channels).All(pair => pair.First == pair.Second))
-            {
-                Channels.Clear();
-                foreach (var item in channels)
-                {
-                    Channels.Add(item);
-                }
-            }
-
-            SelectedChannel = Channels.FirstOrDefault(item => item.Key == Workspace.SelectedRoute);
-            var route = Workspace.SelectedRouteRef();
-            HasChannel = route is not null;
-            if (route is null)
-            {
-                Title = "缓存明细";
-                _lastSnapshot = null;
-                Trend.Clear();
-                Rows.Clear();
-                HasRows = false;
-                TrendIsEmpty = true;
-                return;
-            }
-
-            Title = $"缓存明细 · {route.Name}";
-            var cache = Workspace.Services.TryGetValue(route.Id, out var service) ? service.Metrics.Snapshot().Cache : new CacheSnapshot();
-            if (!force && _lastSnapshot is { } previous && SameCache(previous, cache))
-            {
-                return;
-            }
-
-            _lastSnapshot = cache;
-            Render(cache);
+            _displayedRouteId = null;
+            _lastSnapshot = null;
+            Trend.Clear();
+            Rows.Clear();
+            HasRows = false;
+            TrendIsEmpty = true;
+            return;
         }
-        finally
+
+        var cache = Workspace.Services.TryGetValue(route.Id, out var service) ? service.Metrics.Snapshot().Cache : new CacheSnapshot();
+        var today = DateTime.Today;
+        // 两个客户端可能有相同的空快照；切换客户端或跨日仍要刷新分区。
+        if (!force && _displayedRouteId == route.Id && _displayedDate == today
+            && _lastSnapshot is { } previous && SameCache(previous, cache))
         {
-            _syncing = false;
+            return;
         }
+
+        _displayedRouteId = route.Id;
+        _displayedDate = today;
+        _lastSnapshot = cache;
+        Render(cache);
     }
 
     private static bool SameCache(CacheSnapshot a, CacheSnapshot b)
@@ -281,17 +256,6 @@ public partial class CachePageViewModel : ViewModel
         EmptyRowsText = CacheText.EmptyRowsText(cache);
         CacheKeyHelp = CacheText.CacheKeyHelp(cache);
         HasCacheKeyHelp = CacheKeyHelp is not null;
-    }
-
-    partial void OnSelectedChannelChanged(PickerItem? value)
-    {
-        if (_syncing || value is null || value.Key == Workspace.SelectedRoute)
-        {
-            return;
-        }
-
-        Workspace.SelectRoute(value.Key);
-        _workspaceService.Flush();
     }
 
     [RelayCommand]

@@ -25,10 +25,11 @@ public sealed class PreparationWorkspace
     private Action? _uiNotifier;
     private int _nextNumber;
 
-    public PreparationWorkspace(ProxyLogger logger, IEnumerable<SavedPreparation?>? saved = null, Action<List<SavedPreparation>>? save = null)
+    public PreparationWorkspace(ProxyLogger logger, IEnumerable<SavedPreparation?>? saved = null, Action<List<SavedPreparation>>? save = null, Func<ClientType, CliCredential>? currentProviderResolver = null)
     {
         _logger = logger;
         _save = save;
+        if (currentProviderResolver is not null) LocalProviderResolver = currentProviderResolver;
         Restore(saved ?? []);
     }
 

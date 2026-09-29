@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string]$ExePath = (Join-Path $PSScriptRoot '..\dist\RetryProxy.exe'),
     [switch]$WithChannels,
     [switch]$CompactWindow
@@ -9,7 +9,7 @@ $ExePath = (Resolve-Path -LiteralPath $ExePath).ProviderPath
 $tempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\')
 $runtime = Join-Path $tempRoot ('RetryProxyPreparation-' + [Guid]::NewGuid().ToString('N'))
 $savedEnvironment = @{}
-foreach ($name in @('RETRY_PROXY_CONFIG_JSON', 'RETRY_PROXY_CODEX_CLI', 'RETRY_PROXY_TEST_PREPARATION_GATE')) {
+foreach ($name in @('RETRY_PROXY_CONFIG_JSON', 'RETRY_PROXY_CODEX_CLI', 'RETRY_PROXY_TEST_PREPARATION_GATE', 'CLAUDE_CONFIG_DIR', 'CODEX_HOME')) {
     $savedEnvironment[$name] = [Environment]::GetEnvironmentVariable($name)
 }
 $process = $null
@@ -20,7 +20,6 @@ $initialBounds = $null
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
 Add-Type -Path (Join-Path $PSScriptRoot 'window_verification.cs')
-
 function Wait-For([scriptblock]$Condition, [string]$Message, [int]$Seconds = 15) {
     $timer = [Diagnostics.Stopwatch]::StartNew()
     do {
@@ -35,7 +34,13 @@ function Find-Elements([string]$Value, [switch]$ById) {
     $root = [Windows.Automation.AutomationElement]::FromHandle($window)
     $property = if ($ById) { [Windows.Automation.AutomationElement]::AutomationIdProperty } else { [Windows.Automation.AutomationElement]::NameProperty }
     $condition = [Windows.Automation.PropertyCondition]::new($property, $Value)
-    return $root.FindAll([Windows.Automation.TreeScope]::Descendants, $condition)
+    $matches = $root.FindAll([Windows.Automation.TreeScope]::Descendants, $condition)
+    if ($matches.Count -gt 0) { return $matches }
+    foreach ($popup in [RetryProxyTrayVerification]::WindowsForProcess($process.Id)) {
+        if ($popup -eq $window -or -not [RetryProxyTrayVerification]::IsWindowVisible($popup)) { continue }
+        $popupRoot = [Windows.Automation.AutomationElement]::FromHandle($popup)
+        $popupRoot.FindAll([Windows.Automation.TreeScope]::Descendants, $condition)
+    }
 }
 
 function Invoke-Control([string]$Value, [switch]$ById) {
@@ -69,6 +74,8 @@ function Set-Field([string]$Id, [string]$Value) {
 function Select-ComboItem([string]$Id, [string]$Text, [switch]$ByName) {
     $picker = @(Find-Elements $Id -ById:(-not $ByName))[0]
     if ($null -eq $picker) { throw "Missing picker: $Id" }
+    # 抽屉出现后还有 200ms 动画，此时表单节点存在但暂时禁用。
+    Wait-For { $picker.Current.IsEnabled } "Picker is not enabled: $Id"
     $picker.SetFocus()
     $expand = $picker.GetCurrentPattern([Windows.Automation.ExpandCollapsePattern]::Pattern)
     $expand.Expand()
@@ -205,12 +212,17 @@ function Add-Preparation([string]$Minutes, [string]$Effort) {
 
 try {
     New-Item -ItemType Directory -Path $runtime | Out-Null
-    Get-ChildItem -LiteralPath (Split-Path -Parent $ExePath) -File | Copy-Item -Destination $runtime
+    Get-ChildItem -LiteralPath (Split-Path -Parent $ExePath) -File | Where-Object { $_.Name -match '\.(exe|dll)$|\.(deps|runtimeconfig)\.json$' } | Copy-Item -Destination $runtime
     $translations = Join-Path (Split-Path -Parent $ExePath) 'User\I18n'
     if (Test-Path -LiteralPath $translations) {
         New-Item -ItemType Directory -Path (Join-Path $runtime 'User') | Out-Null
         Copy-Item -LiteralPath $translations -Destination (Join-Path $runtime 'User\I18n') -Recurse
     }
+    $env:CLAUDE_CONFIG_DIR = Join-Path $runtime 'clients\claude'
+    $env:CODEX_HOME = Join-Path $runtime 'clients\codex'
+    New-Item -ItemType Directory -Path $env:CLAUDE_CONFIG_DIR, $env:CODEX_HOME -Force | Out-Null
+    [IO.File]::WriteAllText((Join-Path $env:CLAUDE_CONFIG_DIR 'settings.json'), '{}', [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText((Join-Path $env:CODEX_HOME 'config.toml'), '', [Text.UTF8Encoding]::new($false))
     $upstreamPort = Get-FreePort
     $eventPath = Join-Path $runtime 'upstream-events.jsonl'
     $gate = Join-Path $runtime 'allow-preparation'
@@ -251,20 +263,27 @@ try {
         } finally { $listener.Close() }
     }
     Wait-For { Test-Path -LiteralPath (Join-Path $runtime 'upstream.ready') } 'Fixture upstream did not start'
-    $config = @{ schema_version = 6; upstream_base_url = ''; providers = @(); routes = @(); desired_running = $false }
+    # 每个客户端一条通道，无供应商时仍可查看统计；只使用随机测试端口。
+    $codexPort = Get-FreePort
+    $claudePort = Get-FreePort
+    while ($claudePort -eq $codexPort) { $claudePort = Get-FreePort }
+    $config = @{
+        schema_version = 7; providers = @(); selected_route_id = 'fixture-codex'
+        routes = @(
+            @{ id = 'fixture-codex'; name = 'Codex'; client_type = 'codex'; listen_port = $codexPort; current_provider_id = ''; current_key_id = ''; local_token = '00112233445566778899aabbccddeeff'; desired_running = $false },
+            @{ id = 'fixture-claude'; name = 'Claude Code'; client_type = 'claude'; listen_port = $claudePort; current_provider_id = ''; current_key_id = ''; local_token = 'ffeeddccbbaa99887766554433221100'; desired_running = $false }
+        )
+    }
     if ($WithChannels) {
-        $longProvider = 'fixture-other-' + ('服务商长名称校验' * 8)
+        $longProvider = 'fixture-' + ('供应商长名称校验' * 8)
         $config.providers = @(
-            @{ name = 'fixture'; base_url = "http://127.0.0.1:$upstreamPort" },
-            @{ name = $longProvider; base_url = "http://127.0.0.1:$upstreamPort" },
-            @{ name = 'fixture-empty'; base_url = "http://127.0.0.1:$upstreamPort" }
+            @{ id = 'provider-codex'; client_type = 'codex'; name = 'fixture'; base_url = "http://127.0.0.1:$upstreamPort"; keys = @(@{ id = 'key-codex'; name = '主号'; api_key = 'sk-prepare-fixture' }) },
+            @{ id = 'provider-claude'; client_type = 'claude'; name = $longProvider; base_url = "http://127.0.0.1:$upstreamPort"; keys = @(@{ id = 'key-claude'; name = '主号'; api_key = 'sk-prepare-fixture' }) }
         )
-        $config.routes = @(
-            @{ id = 'fixture-codex'; name = 'fixture-codex'; provider_name = 'fixture'; client_type = 'codex'; listen_port = (Get-FreePort); desired_running = $false },
-            @{ id = 'fixture-claude'; name = 'fixture-claude'; provider_name = 'fixture'; client_type = 'claude'; listen_port = (Get-FreePort); desired_running = $false },
-            @{ id = 'fixture-other'; name = ('fixture-other-' + ('通道长名称校验' * 8)); provider_name = $longProvider; client_type = 'codex'; listen_port = (Get-FreePort); desired_running = $false }
-        )
-        $config.selected_route_id = 'fixture-codex'
+        $config.routes[0].current_provider_id = 'provider-codex'
+        $config.routes[0].current_key_id = 'key-codex'
+        $config.routes[1].current_provider_id = 'provider-claude'
+        $config.routes[1].current_key_id = 'key-claude'
     }
     $env:RETRY_PROXY_CONFIG_JSON = $config | ConvertTo-Json -Depth 8 -Compress
     $env:RETRY_PROXY_CODEX_CLI = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot 'fixtures\preparation-codex.ps1')).ProviderPath
@@ -287,116 +306,116 @@ try {
         } 'Private test window did not reach its compact size'
     }
     $initialBounds = [RetryProxyTrayVerification]::Bounds($window)
-    Wait-For { @(Find-Elements 'HomeOverviewCard' -ById).Count -gt 0 } 'Application did not open the application home by default'
-    $homeDestinations = @(
-        @{ Card = 'HomeOverviewCard'; Marker = 'ManageChannels' },
-        @{ Card = 'HomeChannelsCard'; Marker = 'ProviderPicker' },
-        @{ Card = 'HomePreparationCard'; Marker = 'AddPreparation' },
-        @{ Card = 'HomeLogsCard'; Marker = 'LogCounter' },
-        @{ Card = 'HomeCacheCard'; Marker = 'CachePageTitle' },
-        @{ Card = 'HomeSettingsCard'; Marker = 'SwitchAppearance' }
+    Wait-For { @(Find-Elements 'ProxySettings' -ById).Count -gt 0 } 'Application did not open Providers by default'
+    Invoke-Control 'SelectCodex' -ById
+    $destinations = @(
+        @{ Navigation = 'StatisticsNavigation'; Marker = 'ManageProviders' },
+        @{ Navigation = 'PreparationNavigation'; Marker = 'AddPreparation' },
+        @{ Navigation = '运行日志'; Marker = 'LogCounter'; ByName = $true },
+        @{ Navigation = '软件设置'; Marker = 'SwitchAppearance'; ByName = $true }
     )
-    foreach ($destination in $homeDestinations) {
-        Invoke-Control $destination.Card -ById
-        Wait-For { @(Find-Elements $destination.Marker -ById).Count -gt 0 } "Home card opened the wrong page: $($destination.Card)"
-        Assert-WindowStable "opening $($destination.Card)"
-        Invoke-Control 'HomeNavigation' -ById
-        Wait-For { @(Find-Elements 'HomeOverviewCard' -ById).Count -gt 0 } 'Navigation did not return to the application home'
+    foreach ($destination in $destinations) {
+        Invoke-Control $destination.Navigation -ById:(-not $destination.ByName)
+        Wait-For { @(Find-Elements $destination.Marker -ById).Count -gt 0 } "Navigation opened the wrong page: $($destination.Navigation)"
+        Assert-WindowStable "opening $($destination.Navigation)"
+        Invoke-Control 'ProviderNavigation' -ById
+        Wait-For { @(Find-Elements 'ProxySettings' -ById).Count -gt 0 } 'Navigation did not return to Providers'
     }
-    Write-Host 'All six home cards and return navigation passed.'
-    Invoke-Control 'HomeOverviewCard' -ById
-    Wait-For { @(Find-Elements 'ManageChannels' -ById).Count -gt 0 } 'Home card did not open the overview'
-    foreach ($id in @('EnableAllChannels', 'DisableAllChannels', 'ChannelKeepAlive', 'ChannelReasoningEffort')) {
-        if (@(Find-Elements $id -ById).Count -gt 0) { throw "Management control is still on the overview: $id" }
+    Invoke-Control 'StatisticsNavigation' -ById
+    Wait-For { @(Find-Elements 'ManageProviders' -ById).Count -gt 0 } 'Statistics did not load'
+    if (@(Find-Elements 'CachePageTitle' -ById).Count -eq 0) { throw 'Statistics lost the cache details section' }
+    foreach ($id in @('OverviewChannelPicker', 'CacheChannelPicker', 'EnableAllChannels', 'DisableAllChannels')) {
+        if (@(Find-Elements $id -ById).Count -gt 0) { throw "Removed control is still on Statistics: $id" }
     }
-    if (-not $WithChannels) {
-        Wait-For { @(Find-Elements '尚未创建通道，请前往通道管理添加服务商和通道').Count -gt 0 } 'Empty overview did not explain how to add a channel'
-    } else {
-        Select-ComboItem 'OverviewChannelPicker' 'fixture-other*'
+    foreach ($client in @(@{ Selector = 'SelectClaude'; Port = $claudePort }, @{ Selector = 'SelectCodex'; Port = $codexPort })) {
+        Invoke-Control $client.Selector -ById
         Wait-For {
             $url = @(Find-Elements 'OverviewLocalUrl' -ById)[0]
-            return $null -ne $url -and $url.Current.Name.Contains([string]$config.routes[2].listen_port)
-        } 'Cross-provider selection did not update the overview address'
-        Assert-WindowStable 'selecting a channel with a long provider and channel name'
-        Invoke-Control 'ManageChannels' -ById
-        Wait-For { @(Find-Elements 'ProviderPicker' -ById).Count -gt 0 } 'Channel management did not open'
-        if ((Get-ComboSelection 'ProviderPicker') -notlike 'fixture-other*' -or (Get-ComboSelection 'ChannelPicker') -notlike 'fixture-other*') {
-            throw 'Overview selection did not synchronize the provider and channel in management'
-        }
-        Assert-WindowStable 'showing long names in channel management'
-        Select-ComboItem 'ProviderPicker' 'fixture-empty*'
-        Invoke-Control 'OverviewNavigation' -ById
-        Wait-For { @(Find-Elements '选择通道查看运行状态').Count -gt 0 } 'Overview did not handle a provider without channels'
-        if (@(Find-Elements 'OverviewTotalRequests' -ById | Where-Object { -not $_.Current.IsOffscreen }).Count -gt 0) { throw 'Overview kept displaying statistics from the previous channel' }
-        Select-ComboItem 'OverviewChannelPicker' 'fixture-codex*'
+            return $null -ne $url -and $url.Current.Name.Contains([string]$client.Port)
+        } 'Client selection did not update Statistics'
+        Assert-WindowStable 'switching the current client in Statistics'
     }
-    Assert-WindowStable 'opening the overview from its home card'
+    if (-not $WithChannels) {
+        Wait-For { @(Find-Elements '未选择供应商').Count -gt 0 } 'Statistics lost the unconfigured-client state'
+    }
+    Invoke-Control 'ManageProviders' -ById
+    Wait-For { @(Find-Elements 'ProxySettings' -ById).Count -gt 0 } 'Statistics shortcut did not open Providers'
     Invoke-Control 'PreparationNavigation' -ById
-    Wait-For { @(Find-Elements '尚未添加准备任务').Count -gt 0 } 'Empty preparation page was not shown'
+    Wait-For { @(Find-Elements '当前客户端尚未添加准备任务').Count -gt 0 } 'Empty preparation page was not shown'
     Assert-WindowStable 'opening the preparation page'
     Add-Preparation '5' '低 · low'
-    Wait-For { @(Find-Elements '保活中').Count -gt 0 } 'First preparation did not complete'
+    Wait-For { @(Find-Elements '已准备').Count -gt 0 } 'First preparation did not complete'
     Assert-WindowStable 'completing preparation'
     Write-Host 'Independent preparation and model lookup passed.'
 
     Remove-Item -LiteralPath $gate
     Add-Preparation '7.5' '高 · high'
-    Wait-For { @(Find-Elements '终止准备').Count -gt 0 } 'Second preparation was not pending'
-    Invoke-Control '终止准备'
+    Wait-For { @(Find-Elements 'PreparationStatus' -ById | Where-Object { $_.Current.Name -like '准备中*' }).Count -gt 0 } 'Second preparation was not pending'
+    $secondStop = @(Find-Elements '停止' | Where-Object { $_.Current.ControlType -eq [Windows.Automation.ControlType]::Button -and $_.Current.IsEnabled })[1]
+    if ($null -eq $secondStop) {
+        [Windows.Automation.AutomationElement]::FromHandle($window).FindAll([Windows.Automation.TreeScope]::Descendants, [Windows.Automation.Condition]::TrueCondition) |
+            ForEach-Object { "$($_.Current.ControlType.ProgrammaticName) | $($_.Current.AutomationId) | $($_.Current.Name) | enabled=$($_.Current.IsEnabled)" } |
+            Set-Content -LiteralPath (Join-Path $PSScriptRoot '..\.tmp\m3-preparation-ui.txt') -Encoding utf8
+        throw 'Second stop button not found; saved the UI tree'
+    }
+    $secondStop.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern).Invoke()
     Wait-For { @(Find-Elements '已停止').Count -gt 0 } 'Second task did not stop'
-    if (@(Find-Elements '保活中').Count -eq 0) { throw 'Stopping the second task interrupted the first task' }
+    if (@(Find-Elements '已准备').Count -eq 0) { throw 'Stopping the second task interrupted the first task' }
     New-Item -ItemType File -Path $gate | Out-Null
-    Invoke-Control '开始准备'
-    Wait-For { @(Find-Elements '保活中').Count -ge 2 } 'Second task did not restart independently'
+    Invoke-Control '开始'
+    Wait-For { @(Find-Elements '已准备').Count -ge 2 } 'Second task did not restart independently'
     Assert-WindowStable 'adding and restarting a second preparation task'
 
-    Invoke-Control 'HomeNavigation' -ById
-    Invoke-Control 'HomeOverviewCard' -ById
-    Wait-For { @(Find-Elements 'ManageChannels' -ById).Count -gt 0 } 'Overview is missing'
-    if ($WithChannels) {
-        Select-ComboItem 'OverviewChannelPicker' 'fixture-claude*'
-        Wait-For { (Get-ComboSelection 'OverviewChannelPicker') -like 'fixture-claude*' } 'Overview did not switch channels'
-        Select-ComboItem 'OverviewChannelPicker' 'fixture-codex*'
-    }
-    Invoke-Control 'ManageChannels' -ById
-    Wait-For { @(Find-Elements 'EnableAllChannels' -ById).Count -gt 0 } 'Overview shortcut did not open channel management'
-    if ($WithChannels) {
-        Wait-For { @(Find-Elements 'ToggleChannel' -ById).Count -gt 0 } 'Channel configuration is missing'
-        Wait-For { @(Find-Elements '通道选择').Count -gt 0 } 'Channel management selector is missing'
-        Select-ComboItem 'ChannelReasoningEffort' '极限 · ultra'
-        $picker = @(Find-Elements '通道选择')[0]
-        $expand = $picker.GetCurrentPattern([Windows.Automation.ExpandCollapsePattern]::Pattern)
-        $expand.Expand()
-        $condition = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ControlTypeProperty, [Windows.Automation.ControlType]::ListItem)
-        $items = $picker.FindAll([Windows.Automation.TreeScope]::Descendants, $condition)
-        $channel = @($items | Where-Object { $_.Current.Name -like 'fixture-claude*' })[0]
-        if ($null -eq $channel) { throw 'Second channel was not found' }
-        $channel.GetCurrentPattern([Windows.Automation.SelectionItemPattern]::Pattern).Select()
-        $expand.Collapse()
-        Wait-For {
-            $selection = $picker.GetCurrentPattern([Windows.Automation.SelectionPattern]::Pattern).Current.GetSelection()
-            return $selection.Count -gt 0 -and $selection[0].Current.Name -like 'fixture-claude*'
-        } 'Channel management did not switch to the second channel'
-        Wait-For { (Get-ComboSelection 'ChannelReasoningEffort') -eq '默认（沿用客户端）' } 'Channel switch shared a reasoning effort'
-        Select-ComboItem 'ChannelReasoningEffort' '最高 · max'
-        Select-ComboItem '通道选择' 'fixture-codex*' -ByName
-        Wait-For { (Get-ComboSelection 'ChannelReasoningEffort') -eq '极限 · ultra' } 'Codex channel effort was lost'
-        Select-ComboItem '通道选择' 'fixture-claude*' -ByName
-        Wait-For { (Get-ComboSelection 'ChannelReasoningEffort') -eq '最高 · max' } 'Claude channel effort was lost'
-        @(Find-Elements 'ChannelReasoningEffort' -ById)[0].SetFocus()
-    }
-    Assert-WindowStable 'opening channel management and selecting a channel'
+    # 切到 Claude 后 Codex 任务应隐藏但继续运行，新增任务默认沿用所选客户端。
+    Invoke-Control 'SelectClaude' -ById
+    Wait-For { @(Find-Elements '当前客户端尚未添加准备任务').Count -gt 0 } 'Preparation tasks were not filtered by client'
+    Invoke-Control 'AddPreparation' -ById
+    Wait-For { @(Find-Elements 'PreparationClaude' -ById).Count -gt 0 } 'Preparation dialog did not open'
+    $selectedClaude = @(Find-Elements 'PreparationClaude' -ById)[0].GetCurrentPattern([Windows.Automation.SelectionItemPattern]::Pattern)
+    if (-not $selectedClaude.Current.IsSelected) { throw 'New preparation did not default to the selected client' }
+    Invoke-Control '取消'
+    Invoke-Control 'ProviderNavigation' -ById
+    Wait-For { @(Find-Elements 'ProxySettings' -ById).Count -gt 0 } 'Providers did not load'
+    Invoke-Control 'ProxySettings' -ById
+    Wait-For { @(Find-Elements 'ChannelReasoningEffort' -ById).Count -gt 0 } 'Proxy settings drawer did not open'
+    Select-ComboItem 'ChannelReasoningEffort' '最高 · max'
+    Invoke-Control 'DrawerSave' -ById
+    Wait-For { @(Find-Elements 'ChannelReasoningEffort' -ById).Count -eq 0 } 'Proxy settings drawer did not close'
+    Invoke-Control 'SelectCodex' -ById
+    Invoke-Control 'ProxySettings' -ById
+    Wait-For { @(Find-Elements 'ChannelReasoningEffort' -ById).Count -gt 0 } 'Codex settings did not open'
+    Select-ComboItem 'ChannelReasoningEffort' '极限 · ultra'
+    Invoke-Control 'DrawerSave' -ById
+    Wait-For { @(Find-Elements 'ChannelReasoningEffort' -ById).Count -eq 0 } 'Proxy settings drawer did not close'
+    Invoke-Control 'SelectClaude' -ById
+    Invoke-Control 'ProxySettings' -ById
+    Wait-For { (Get-ComboSelection 'ChannelReasoningEffort') -eq '最高 · max' } 'Claude channel effort was lost'
+    Invoke-Control 'DrawerCancel' -ById
+    Wait-For { @(Find-Elements 'ChannelReasoningEffort' -ById).Count -eq 0 } 'Proxy settings drawer did not close'
+    Invoke-Control 'SelectCodex' -ById
+    Invoke-Control 'ProxySettings' -ById
+    Wait-For { (Get-ComboSelection 'ChannelReasoningEffort') -eq '极限 · ultra' } 'Codex channel effort was lost'
+    Invoke-Control 'DrawerCancel' -ById
+    Wait-For { @(Find-Elements 'ChannelReasoningEffort' -ById).Count -eq 0 } 'Proxy settings drawer did not close'
     Invoke-Control 'PreparationNavigation' -ById
-    Wait-For { @(Find-Elements '保活中').Count -ge 2 } 'Navigation or channel selection changed preparation state'
-    if (@(Find-Elements '准备 1 · Codex').Count -eq 0 -or @(Find-Elements '准备 2 · Codex').Count -eq 0) { throw 'Task identities changed with the channel' }
-    Assert-WindowStable 'returning to the preparation tasks'
-    Invoke-Control '停止保活'
+    Wait-For { @(Find-Elements '已准备').Count -ge 2 } 'Client selection changed the running preparation tasks'
+    Wait-For { @(Find-Elements '手动填写').Count -gt 0 } 'Manual preparation group is missing'
+    Assert-WindowStable 'returning to client-filtered preparation tasks'
+    Invoke-Control '停止'
     Wait-For { @(Find-Elements '已停止').Count -gt 0 } 'First task did not stop'
-    Invoke-Control '停止保活'
+    Invoke-Control '停止'
     Wait-For { @(Find-Elements '已停止').Count -ge 2 } 'Second task did not stop'
-    Invoke-Control '删除'
-    Invoke-Control '删除'
-    Wait-For { @(Find-Elements '尚未添加准备任务').Count -gt 0 } 'Stopped tasks could not be removed'
+    Invoke-Control '任务操作'
+    Invoke-Control '查看日志'
+    Wait-For { @(Find-Elements 'LogSearch' -ById).Count -gt 0 } 'Task log action did not open Logs'
+    $taskQuery = @(Find-Elements 'LogSearch' -ById)[0].GetCurrentPattern([Windows.Automation.ValuePattern]::Pattern).Current.Value
+    if ($taskQuery -ne '[准备 1 · ') { throw 'Task log action did not select the first preparation' }
+    Invoke-Control 'PreparationNavigation' -ById
+    foreach ($unused in 1..2) {
+        Invoke-Control '任务操作'
+        Invoke-Control '删除'
+    }
+    Wait-For { @(Find-Elements '当前客户端尚未添加准备任务').Count -gt 0 } 'Stopped tasks could not be removed'
     Assert-WindowStable 'stopping and removing preparation tasks'
     Invoke-Control 'AddPreparation' -ById
     Wait-For { @(Find-Elements 'PreparationCodex' -ById).Count -gt 0 } 'Preparation dialog did not reopen'
@@ -413,9 +432,10 @@ try {
     foreach ($line in $preparationLines) {
         if ($line -notmatch '\[一键准备\]\[准备 [12] · Codex\]' -or $line.Contains('[保活-')) { throw "Preparation log lost its identity: $line" }
     }
+    Set-Field 'LogSearch' ''
     Invoke-Control 'LogSourcePreparation' -ById
     Wait-For { (Get-LogCount) -eq $preparationLines.Count } 'Preparation source omitted task lifecycle logs'
-    if ($WithChannels -and @(Find-Elements 'LogSelectedRoute' -ById | Where-Object { -not $_.Current.IsOffscreen }).Count -gt 0) { throw 'Preparation log filtering still depends on the selected channel' }
+    if (@(Find-Elements 'LogSelectedClient' -ById).Count -eq 0) { throw 'Current-client filter is missing for preparation logs' }
     Set-Field 'LogSearch' '准备 1'
     $firstTaskCount = @($preparationLines | Where-Object { $_.Contains('[准备 1 · Codex]') }).Count
     Wait-For { (Get-LogCount) -eq $firstTaskCount } 'Task search did not isolate the first preparation'
@@ -428,13 +448,14 @@ try {
     Invoke-Control 'LogSourceKeepAlive' -ById
     Wait-For { (Get-LogCount) -eq 0 } 'Independent preparation leaked into channel keepalive logs'
     Invoke-Control 'LogSourceAll' -ById
-    if ($WithChannels) {
-        Invoke-Control 'LogSelectedRoute' -ById
-        Wait-For { (Get-LogCount) -eq 0 } 'Unstarted channel unexpectedly matched preparation logs'
-        Invoke-Control 'LogSourcePreparation' -ById
-        Wait-For { (Get-LogCount) -eq $preparationLines.Count } 'Selected channel hid independent preparation logs'
-        Invoke-Control 'LogSourceAll' -ById
-    }
+    Invoke-Control 'LogSourcePreparation' -ById
+    Invoke-Control 'LogSelectedClient' -ById
+    Invoke-Control 'SelectClaude' -ById
+    Wait-For { (Get-LogCount) -eq 0 } 'Claude client filter matched Codex preparation logs'
+    Invoke-Control 'SelectCodex' -ById
+    Wait-For { (Get-LogCount) -eq $preparationLines.Count } 'Codex client filter lost its preparation logs'
+    Invoke-Control 'LogSelectedClient' -ById
+    Invoke-Control 'LogSourceAll' -ById
     Wait-For { (Get-LogCount) -eq $logLines.Count } 'All sources did not restore every log line'
     Assert-LogControlsVisible
     Assert-WindowStable 'filtering log sources, tasks and severity'
@@ -442,7 +463,8 @@ try {
     $modelEvents = @($events | Where-Object path -eq '/v1/models')
     $preparationEvents = @($events | Where-Object path -ne '/v1/models')
     if (@($preparationEvents | Where-Object { -not $_.authOk }).Count -gt 0) { throw 'Preparation forwarded an incorrect credential' }
-    if ($modelEvents.Count -ne 6 -or @($modelEvents | Where-Object { -not $_.authOk -and $_.apiKeyOk }).Count -ne 2) { throw 'Claude model lookup did not retry Bearer authentication exactly once' }
+    # 手动准备默认 Bearer；测试上游首请求接受该认证，每项任务获取 Codex/Claude 模型各一次。
+    if ($modelEvents.Count -ne 4 -or @($modelEvents | Where-Object { -not $_.authOk -or $_.apiKeyOk }).Count -ne 0) { throw 'Model lookup did not use the default Bearer authentication exactly once per fetch' }
     if (@($modelEvents | Where-Object authOk).Count -ne 4) { throw 'Model lookup did not use the selected provider' }
     if (@($preparationEvents | Where-Object effort -eq 'low').Count -eq 0 -or @($preparationEvents | Where-Object effort -eq 'high').Count -eq 0) { throw 'Selected reasoning efforts did not reach the preparation clients' }
     $log = Get-Content -LiteralPath (Join-Path $runtime 'logs\retry-proxy.log') -Raw

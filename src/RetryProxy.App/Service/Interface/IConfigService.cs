@@ -1,4 +1,4 @@
-﻿using RetryProxy.Core.Config;
+using RetryProxy.Core.Config;
 
 namespace RetryProxy.Service.Interface
 {
@@ -7,5 +7,9 @@ namespace RetryProxy.Service.Interface
         AllConfig Get();
 
         void Save();
+
+        void SaveChecked();
+
+        void BackupBeforeDeletion();
     }
 }

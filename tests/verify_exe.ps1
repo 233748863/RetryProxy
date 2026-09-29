@@ -5,7 +5,7 @@
 )
 # C# 版端到端验收（移植自 D:\API-Proxy\tests\verify_rust_exe.ps1）。
 # 与 Rust 版的差异：托盘钩子窗口按标题前缀 wpfui_th_ 查找，托盘操作一律用回调消息 2048 + WM_LBUTTONDBLCLK（显示/隐藏切换）；
-# 最小化保持在任务栏（IsIconic），隐藏到托盘只改可见性；缓存明细改为页面（导航项“缓存明细”，标题“缓存明细 · E2E”）；
+# 最小化保持在任务栏（IsIconic），隐藏到托盘只改可见性；统计页合并概况与缓存，代理设置从供应商页抽屉进入；
 # 配置注入时不写 User\config.json。
 
 $ErrorActionPreference = "Stop"
@@ -13,6 +13,8 @@ if ($UseCurrentDesktop -and -not $VerifyTray) { throw '-UseCurrentDesktop requir
 $ExePath = (Resolve-Path -LiteralPath $ExePath).ProviderPath
 $distDir = Split-Path -Parent $ExePath
 $oldConfig = $env:RETRY_PROXY_CONFIG_JSON
+$oldClaudeHome = $env:CLAUDE_CONFIG_DIR
+$oldCodexHome = $env:CODEX_HOME
 $TrayCallback = 2048       # WPF-UI NOTIFYICONDATA.uCallbackMessage
 $TrayIconId = 1            # 第一个 NotifyIcon
 $LButtonDblClk = 0x0203
@@ -121,10 +123,18 @@ function Start-App {
 }
 
 try {
-    Copy-Item -LiteralPath $ExePath -Destination $runtimeExe
-    if (Test-Path -LiteralPath (Join-Path $distDir 'User')) {
-        Copy-Item -LiteralPath (Join-Path $distDir 'User') -Destination (Join-Path $runtimeDir 'User') -Recurse
+    # 只复制程序文件和翻译，不读取或复制真实用户配置；兼容单文件发布与开发构建。
+    Get-ChildItem -LiteralPath $distDir -File | Where-Object { $_.Name -match '\.(exe|dll)$|\.(deps|runtimeconfig)\.json$' } | Copy-Item -Destination $runtimeDir
+    $translations = Join-Path $distDir 'User\I18n'
+    if (Test-Path -LiteralPath $translations) {
+        New-Item -ItemType Directory -Path (Join-Path $runtimeDir 'User') -Force | Out-Null
+        Copy-Item -LiteralPath $translations -Destination (Join-Path $runtimeDir 'User\I18n') -Recurse
     }
+    $env:CLAUDE_CONFIG_DIR = Join-Path $runtimeDir 'clients\claude'
+    $env:CODEX_HOME = Join-Path $runtimeDir 'clients\codex'
+    New-Item -ItemType Directory -Path $env:CLAUDE_CONFIG_DIR, $env:CODEX_HOME -Force | Out-Null
+    [IO.File]::WriteAllText((Join-Path $env:CLAUDE_CONFIG_DIR 'settings.json'), '{}', [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText((Join-Path $env:CODEX_HOME 'config.toml'), '', [Text.UTF8Encoding]::new($false))
     $job = Start-Job -ArgumentList $upstreamPort, $runtimeDir -ScriptBlock {
         param($Port, $RuntimeDir)
         $listener = [Net.HttpListener]::new()
@@ -180,7 +190,7 @@ try {
                     }
                     continue
                 }
-                if ($context.Request.Url.AbsolutePath -eq '/tray-stream') {
+                if ($context.Request.Url.AbsolutePath -in @('/tray-stream', '/v1/tray-stream')) {
                     $context.Response.ContentType = 'text/event-stream'
                     $context.Response.SendChunked = $true
                     $body = [Text.Encoding]::UTF8.GetBytes("data: {`"type`":`"response.output_text.delta`",`"delta`":`"before-minimize`"}`n`n")
@@ -215,23 +225,17 @@ try {
     }
 
     $config = @{
-        schema_version = 6
-        client_type = 'codex'
-        upstream_base_url = "http://127.0.0.1:$upstreamPort"
-        listen_port = $proxyPort
-        max_retries = 1
-        timeout_seconds = 10.0
-        generation_timeout_seconds = 0.5
-        base_delay_seconds = 0.0
-        max_delay_seconds = 0.0
-        desired_running = $true
-        selected_route_id = "e2e"
-        providers = @(@{ name = "local"; base_url = "http://127.0.0.1:$upstreamPort" })
+        schema_version = 7
+        selected_route_id = 'e2e'
+        providers = @(@{
+            id = 'fixture-provider'; client_type = 'codex'; name = 'local'; base_url = "http://127.0.0.1:$upstreamPort"
+            keys = @(@{ id = 'fixture-key'; name = '默认'; api_key = 'fixture-only-key' })
+        })
         routes = @(@{
-            id = "e2e"; name = "E2E"; provider_name = "local"; client_type = 'codex'; listen_port = $proxyPort
+            id = 'e2e'; name = 'Codex'; client_type = 'codex'; listen_port = $proxyPort
+            current_provider_id = 'fixture-provider'; current_key_id = 'fixture-key'; local_token = '00112233445566778899aabbccddeeff'
             max_retries = 1; timeout_seconds = 10.0; base_delay_seconds = 0.0
-            generation_timeout_seconds = 0.5
-            max_delay_seconds = 0.0; desired_running = $true
+            generation_timeout_seconds = 0.5; max_delay_seconds = 0.0; desired_running = $true
         })
     } | ConvertTo-Json -Depth 8
 
@@ -293,43 +297,46 @@ try {
         $trayWindow = [RetryProxyTrayVerification]::FindWindowByTitlePrefix($process.Id, 'wpfui_th_')
         Wait-TrayCondition { [RetryProxyTrayVerification]::IsUsable($mainWindow) } 'Main window did not become usable'
 
-        # 首页卡片直达运行概况；单通道与批量启停统一在通道管理，切换与重启保留统计。
-        Wait-TrayCondition { $null -ne (Find-UiElement $mainWindow 'HomeOverviewCard' -ById) } 'Startup did not open the application home'
-        Invoke-UiElement $mainWindow 'HomeOverviewCard' -ById
-        Wait-TrayCondition { $null -ne (Find-UiElement $mainWindow 'ManageChannels' -ById) } 'Home card did not open the overview'
+        # 默认供应商页；客户端选择跨页同步，概况和缓存共处统计页。
+        Wait-TrayCondition { $null -ne (Find-UiElement $mainWindow 'ProxySettings' -ById) } 'Startup did not open the Providers page'
+        Invoke-UiElement $mainWindow 'SelectCodex' -ById
+        Wait-TrayCondition { $null -ne (Find-UiElement $mainWindow 'CurrentProviderKey' -ById) } 'Current provider and key are missing'
+        Invoke-NavigationItem $mainWindow '统计'
+        Wait-TrayCondition { $null -ne (Find-UiElement $mainWindow 'ManageProviders' -ById) } 'Statistics did not load'
         foreach ($id in @('ToggleChannel', 'EnableAllChannels', 'DisableAllChannels', 'ChannelKeepAlive')) {
-            if ($null -ne (Find-UiElement $mainWindow $id -ById)) { throw "Management control is still on the overview: $id" }
+            if ($null -ne (Find-UiElement $mainWindow $id -ById)) { throw "Management control is still on Statistics: $id" }
         }
         Wait-TrayCondition {
             $counter = Find-UiElement $mainWindow 'OverviewTotalRequests' -ById
             return $null -ne $counter -and $counter.Current.Name -eq [string]$cacheHealth.metrics.total_requests
-        } 'Overview did not show the current channel statistics'
-        Invoke-NavigationItem $mainWindow '通道管理'
-        Wait-TrayCondition { $null -ne (Find-UiElement $mainWindow 'ToggleChannel' -ById) } 'Channel management did not load'
-        foreach ($operation in @('single', 'all')) {
-            $stopControl = if ($operation -eq 'single') { 'ToggleChannel' } else { 'DisableAllChannels' }
-            $startControl = if ($operation -eq 'single') { 'ToggleChannel' } else { 'EnableAllChannels' }
-            Invoke-UiElement $mainWindow $stopControl -ById
-            Wait-TrayCondition {
-                try { $null = Invoke-RestMethod "http://127.0.0.1:$proxyPort/_retry/health" -TimeoutSec 1; return $false }
-                catch { return $true }
-            } "Channel management failed to stop the proxy: $operation"
-            Wait-TrayCondition { (Find-UiElement $mainWindow $startControl -ById).Current.IsEnabled } 'Channel start did not become available'
-            Invoke-UiElement $mainWindow $startControl -ById
-            Wait-TrayCondition {
-                try { $null = Invoke-RestMethod "http://127.0.0.1:$proxyPort/_retry/health" -TimeoutSec 1; return $true }
-                catch { return $false }
-            } "Channel management failed to start the proxy: $operation"
-        }
+        } 'Statistics did not show current-client request totals'
+        Invoke-UiElement $mainWindow 'ManageProviders' -ById
+        Wait-TrayCondition { $null -ne (Find-UiElement $mainWindow 'ProxySettings' -ById) } 'Manage providers shortcut failed'
+        Invoke-UiElement $mainWindow 'ProxySettings' -ById
+        Wait-TrayCondition { $null -ne (Find-UiElement $mainWindow 'ChannelListenPort' -ById) } 'Proxy settings drawer did not open'
+        Invoke-UiElement $mainWindow 'ToggleProxy' -ById
+        Invoke-UiElement $mainWindow '确认停止'
+        Wait-TrayCondition {
+            try { $null = Invoke-RestMethod "http://127.0.0.1:$proxyPort/_retry/health" -TimeoutSec 1; return $false }
+            catch { return $true }
+        } 'Proxy settings failed to stop the proxy'
+        Wait-TrayCondition { (Find-UiElement $mainWindow 'ToggleProxy' -ById).Current.IsEnabled } 'Proxy start did not become available'
+        Invoke-UiElement $mainWindow 'ToggleProxy' -ById
+        Wait-TrayCondition {
+            try { $null = Invoke-RestMethod "http://127.0.0.1:$proxyPort/_retry/health" -TimeoutSec 1; return $true }
+            catch { return $false }
+        } 'Proxy settings failed to start the proxy'
+        Invoke-UiElement $mainWindow 'DrawerCancel' -ById
+        Wait-TrayCondition { $null -eq (Find-UiElement $mainWindow 'ChannelListenPort' -ById) } 'Drawer close animation did not finish'
         Invoke-NavigationItem $mainWindow '软件设置'
         Wait-TrayCondition { $null -ne (Find-UiElement $mainWindow 'SwitchAppearance' -ById) } 'Appearance setting is missing'
         Invoke-UiElement $mainWindow 'SwitchAppearance' -ById
-        Invoke-NavigationItem $mainWindow '运行概况'
+        Invoke-NavigationItem $mainWindow '统计'
         Wait-TrayCondition {
             $counter = Find-UiElement $mainWindow 'OverviewTotalRequests' -ById
             return $null -ne $counter -and $counter.Current.Name -eq [string]$cacheHealth.metrics.total_requests
         } 'Navigation or channel restart lost statistics'
-        Write-Host 'Overview, channel management, single/all start-stop and software settings checks passed.'
+        Write-Host 'Statistics, provider navigation, proxy settings start-stop and software settings checks passed.'
 
         foreach ($maximized in @($false, $true)) {
             $command = if ($maximized) { 0xF030 } else { 0xF120 }
@@ -361,12 +368,12 @@ try {
         } 'Window did not return to normal size before cache checks'
         Write-Host 'Tray minimize, hide and restore checks passed.'
 
-        # 缓存明细是页面：导航后标题带通道名，代理不受影响。
-        Invoke-NavigationItem $mainWindow '缓存明细'
-        Wait-TrayCondition { $null -ne (Find-UiElement $mainWindow '缓存明细 · E2E') } 'Cache page did not show the channel title'
+        # 缓存明细在统计页下半部分，导航和查看记录不影响代理。
+        Invoke-NavigationItem $mainWindow '统计'
+        Wait-TrayCondition { $null -ne (Find-UiElement $mainWindow 'CachePageTitle' -ById) } 'Statistics did not include cache details'
         $cachePageResult = Invoke-RestMethod "http://127.0.0.1:$proxyPort/test" -TimeoutSec 5
         if ($process.HasExited -or $cachePageResult.result -ne 'proxy-ok') { throw 'Opening the cache page interrupted the proxy' }
-        Invoke-NavigationItem $mainWindow '运行概况'
+        Invoke-NavigationItem $mainWindow '统计'
         Write-Host 'Cache page check passed.'
 
         $client = [Net.Http.HttpClient]::new()
@@ -502,6 +509,10 @@ finally {
     if ($null -ne $client) { $client.Dispose() }
     if ($null -ne $oldConfig) { $env:RETRY_PROXY_CONFIG_JSON = $oldConfig }
     else { Remove-Item Env:RETRY_PROXY_CONFIG_JSON -ErrorAction SilentlyContinue }
+    if ($null -ne $oldClaudeHome) { $env:CLAUDE_CONFIG_DIR = $oldClaudeHome }
+    else { Remove-Item Env:CLAUDE_CONFIG_DIR -ErrorAction SilentlyContinue }
+    if ($null -ne $oldCodexHome) { $env:CODEX_HOME = $oldCodexHome }
+    else { Remove-Item Env:CODEX_HOME -ErrorAction SilentlyContinue }
     if ($null -ne $process -and -not $process.HasExited) { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue }
     if ($null -ne $process) { $process.WaitForExit(5000) | Out-Null; $process.Dispose() }
     if ($VerifyTray) { [RetryProxyTrayVerification]::ClosePrivateDesktop() }

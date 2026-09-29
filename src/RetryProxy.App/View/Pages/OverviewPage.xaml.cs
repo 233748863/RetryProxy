@@ -1,15 +1,12 @@
-using RetryProxy.ViewModel.Pages;
 using System.Windows.Controls;
 
 namespace RetryProxy.View.Pages;
 
-public partial class OverviewPage : Page
+/// <summary>统计页上半部分；数据与导航生命周期由 StatisticsPage 统一管理。</summary>
+public partial class OverviewPage : UserControl
 {
-    public OverviewPageViewModel ViewModel { get; }
-
-    public OverviewPage(OverviewPageViewModel viewModel)
+    public OverviewPage()
     {
-        DataContext = ViewModel = viewModel;
         InitializeComponent();
     }
 }

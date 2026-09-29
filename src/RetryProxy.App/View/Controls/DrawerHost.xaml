@@ -1,0 +1,49 @@
+<UserControl x:Class="RetryProxy.View.Controls.DrawerHost"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:i18n="clr-namespace:RetryProxy.Service.I18n"
+             xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+             Visibility="Collapsed" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
+             Focusable="False" IsTabStop="False" ClipToBounds="True">
+    <Grid Background="#66000000">
+        <Border x:Name="Panel" AutomationProperties.AutomationId="DrawerPanel" HorizontalAlignment="Right" Width="400"
+                Background="{ui:ThemeResource ApplicationBackgroundBrush}"
+                BorderBrush="{ui:ThemeResource ControlStrokeColorDefaultBrush}" BorderThickness="1,0,0,0"
+                KeyboardNavigation.TabNavigation="Cycle" KeyboardNavigation.ControlTabNavigation="Cycle"
+                FocusManager.IsFocusScope="True">
+            <Border.RenderTransform><TranslateTransform x:Name="SlideTransform" /></Border.RenderTransform>
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+                <Grid Margin="16,12">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <ui:Button x:Name="BackButton" Margin="0,0,8,0" Appearance="Transparent" Click="CloseClicked"
+                               Visibility="Collapsed" AutomationProperties.Name="{i18n:T 返回供应商}"
+                               ToolTip="{i18n:T 返回供应商}"><ui:SymbolIcon Symbol="ArrowLeft24" /></ui:Button>
+                    <TextBlock x:Name="TitleText" Grid.Column="1" FontSize="18" FontWeight="SemiBold"
+                               TextWrapping="Wrap" VerticalAlignment="Center" />
+                    <ui:Button x:Name="CloseButton" Grid.Column="2" Appearance="Transparent" Click="CloseClicked"
+                               AutomationProperties.Name="{i18n:T 关闭}" ToolTip="{i18n:T 关闭}"><ui:SymbolIcon Symbol="Dismiss24" /></ui:Button>
+                </Grid>
+                <ScrollViewer x:Name="BodyScroll" Grid.Row="1" VerticalScrollBarVisibility="Auto"
+                              HorizontalScrollBarVisibility="Disabled" Padding="20,4,20,16" Focusable="False">
+                    <ContentControl x:Name="Body" Focusable="False" />
+                </ScrollViewer>
+                <StackPanel Grid.Row="2" Margin="20,12,20,16">
+                    <TextBlock x:Name="ErrorText" Margin="0,0,0,10" Visibility="Collapsed"
+                               Foreground="{ui:ThemeResource SystemFillColorCriticalBrush}" TextWrapping="Wrap"
+                               AutomationProperties.LiveSetting="Assertive" />
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                        <ui:Button x:Name="CancelButton" AutomationProperties.AutomationId="DrawerCancel" Content="{i18n:T 取消}" Click="CloseClicked" MinWidth="80" Margin="0,0,8,0" />
+                        <ui:Button x:Name="SaveButton" AutomationProperties.AutomationId="DrawerSave" Content="{i18n:T 保存}" Click="SaveClicked" MinWidth="80" Appearance="Primary" />
+                    </StackPanel>
+                </StackPanel>
+            </Grid>
+        </Border>
+    </Grid>
+</UserControl>

@@ -8,7 +8,7 @@ using Wpf.Ui.Controls;
 
 namespace RetryProxy.Service;
 
-/// <summary>通道管理与独立准备共用的对话框入口（WPF-UI ContentDialog）。</summary>
+/// <summary>删除确认与独立准备对话框入口（准备任务抽屉随 M5 接入）。</summary>
 public sealed class Dialogs
 {
     private readonly IContentDialogService _dialogs;
@@ -37,20 +37,6 @@ public sealed class Dialogs
         };
         var result = await dialog.ShowAsync();
         return result == ContentDialogResult.Primary;
-    }
-
-    public async Task ShowProviderEditorAsync(ProviderEditor editor)
-    {
-        var dialog = new ProviderEditorDialog(_dialogs.GetDialogHostEx(), Workspace, editor);
-        await dialog.ShowAsync();
-        _workspaceService.Flush();
-    }
-
-    public async Task ShowRouteEditorAsync(RouteEditor editor)
-    {
-        var dialog = new RouteEditorDialog(_dialogs.GetDialogHostEx(), Workspace, editor);
-        await dialog.ShowAsync();
-        _workspaceService.Flush();
     }
 
     public async Task ShowPrepareOptionsAsync(PreparationDialogState state)

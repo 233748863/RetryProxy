@@ -45,7 +45,7 @@
 | D5 | 配置存储 | **已确认：完全沿用 BetterGI 方式**，`{exe 目录}\User\config.json`，System.Text.Json 缩进输出，`ConfigService` 读失败时把坏文件备份到 `User\backup\` 后用默认值重建；`AllConfig` 任一属性变更即整体落盘（200 ms 防抖）。代理配置（`ProxyConfig`：providers/routes/selected_route_id/schema_version）作为 `AllConfig.Proxy` 子对象存放，界面偏好（主题、语言、托盘行为、窗口尺寸）作为 `AllConfig.Common` 等同级子对象。 | 与 Rust 版**不再共用**配置。首次启动若 `config.json` 不存在而注册表 `HKCU\Software\LLM Retry Proxy\ConfigJson` 存在，则读取并迁移一次（走同一套 schema 6 迁移逻辑），写入 config.json 后不再回写注册表；日志记录 `已从注册表导入旧配置`。`RETRY_PROXY_CONFIG_JSON` 环境变量注入仍保留供测试使用，此时保存为空操作。**schema、读失败处理与写入方式已被《PRD-供应商管理》§8 取代（2026-09-29）**：schema 7、迁移前备份、原子写、读失败不再用默认值重建落盘。 |
 | D6 | HTTP 服务端 | 每条通道一个独立 Kestrel `WebApplication`，绑定 `127.0.0.1:port`；停用即硬停（不做优雅关闭），与 Rust 语义一致。 | 用 `<FrameworkReference Include="Microsoft.AspNetCore.App"/>`。不用 HttpListener（http.sys 无法精细控制流式与 499）。 |
 | D7 | HTTP 客户端 | 每通道一个 `HttpClient`（`SocketsHttpHandler`：禁重定向、ConnectTimeout=单次超时、自定义 `IWebProxy` 复刻 `system_proxy.rs` 规则、TLS 走 SChannel）。连续无数据超时用逐段读取 + `CancellationTokenSource` 实现。**客户端个数与连接超时已被《PRD-供应商管理》§9 取代（2026-09-29）**：每通道按 http / https 各一个 `HttpClient`，连接超时在连接回调里按当前快照计时，改参数后新连接立即生效。 | .NET 无原生 read-timeout。 |
-| D8 | 页面结构 | **已确认（2026-09-22，用户明确"首页要和参考项目一致"；同日拍板落点）**：NavigationView 六页：**首页**（照搬 BetterGI 首页：横幅 + 一张「代理服务，启动！」折叠卡，卡内含服务商/通道的新增/编辑/删除按钮，见 5.2）、**运行状态**（新增：通道计数与全部启停、状态胶囊、保活状态、统计瓦片、缓存摘要、请求明细、策略行）、**运行日志**（新增：日志面板独占一页）、**缓存明细**（原独立窗口改为页面，只从左侧导航进入）、**设置**（语言 + 「开机自动启动」折叠组）、**关于**。 | 首页视觉与 BetterGI 一致优先于沿用 Rust 工作流。M0 已按此实现首页/设置页并截图验证；运行状态、运行日志两页在 M5 实现。 |
+| D8 | 页面结构 | **已被《PRD-供应商管理》§5.1–§5.6 取代（2026-09-29）**：供应商默认页、统计合并、四页共享客户端、右侧抽屉，以下为旧规格。 **已确认（2026-09-22，用户明确"首页要和参考项目一致"；同日拍板落点）**：NavigationView 六页：**首页**（照搬 BetterGI 首页：横幅 + 一张「代理服务，启动！」折叠卡，卡内含服务商/通道的新增/编辑/删除按钮，见 5.2）、**运行状态**（新增：通道计数与全部启停、状态胶囊、保活状态、统计瓦片、缓存摘要、请求明细、策略行）、**运行日志**（新增：日志面板独占一页）、**缓存明细**（原独立窗口改为页面，只从左侧导航进入）、**设置**（语言 + 「开机自动启动」折叠组）、**关于**。 | 首页视觉与 BetterGI 一致优先于沿用 Rust 工作流。M0 已按此实现首页/设置页并截图验证；运行状态、运行日志两页在 M5 实现。 |
 | D9 | 日志面板 | 不用 Serilog RichTextBox sink；自实现 `LogPage` 控件：虚拟化 `ListView` + 按行着色（等价 Rust `log_line_job`）。文件日志沿用 Rust 格式（自实现轮转 5 MiB × 3），**不用 Serilog 按日滚动**，否则 legacy 恢复解析失效。 | 旧日志恢复逻辑依赖 `retry-proxy.log(.1/.2/.3)` 与 `WARNING` 级别字样。 |
 | D10 | JSON 库 | 统一 `System.Text.Json`；prompt_cache_key 插入采用字节级操作，不反序列化重写。适用范围已被《PRD-供应商管理》§6.2 扩展（2026-09-29）：顶层 `model` 改写同样按字节替换。 | AGENTS.md 偏好 Newtonsoft，但本项目需要保留原始字节，STJ 足够。 |
 | D11 | 图标 | 用 Rust `icon.rs` 的配色重新绘制静态 `logo.ico`/`logo.png`（深靛底、青绿链路、橙色箭头）。 | 不复用 BetterGI 的原神图标。 |
@@ -119,7 +119,7 @@ D:\RetryProxy\
 - `NavigationView`（左侧 160 px 面板，`NavigationCacheMode=Enabled`，`AnimatedNavigationSelectionIndicatorBehavior`）。
 - `TitleBar` 尾部按钮：切换主题、最小化到托盘。
 - `SnackbarPresenter`（`ISnackbarService`）用于非阻塞提示；`ThemedMessageBox` 用于阻塞提示与确认。
-- `tray:NotifyIcon`：双击还原；右键菜单 `显示窗口 / 全部启用 / 全部停用 / 退出`；关闭窗口行为由设置 `ExitToTray` 决定（默认 **退出**，与 Rust 版一致）。
+- 托盘菜单已被《PRD-供应商管理》§4.8 取代（2026-09-29）：每客户端一个动态 Key 子菜单，隐藏时通知、显示时提示撤销。旧规格：`tray:NotifyIcon`：双击还原；右键菜单 `显示窗口 / 全部启用 / 全部停用 / 退出`；关闭窗口行为由设置 `ExitToTray` 决定（默认 **退出**，与 Rust 版一致）。
 - 单实例（命名管道 `InstanceBootstrap`），二次启动激活已有窗口。
 - `ConfigService` 模式（任何属性变更即保存，加 200 ms 防抖）。
 - 全局异常处理（`ExceptionReport`）、`WelcomeDialog`（首次运行）、`AboutWindow`、`CheckUpdateWindow`（更新源待定，首期可禁用）。
@@ -130,6 +130,7 @@ D:\RetryProxy\
 ### 5.2 页面与控件（与 Rust 版逐项对应）
 
 #### 首页（HomePage）
+已被《PRD-供应商管理》§5.1–§5.2 取代（2026-09-29），以下保留历史规格。
 **已确认（2026-09-22）**：布局照搬 BetterGI `HomePage.xaml`，不再复刻 Rust 主窗口。M0 已实现（`src\RetryProxy.App\View\Pages\HomePage.xaml`，截图 `build\m0-home*.png`）：
 
 1. **横幅**：高 200、圆角 8 的 `ImageBrush` 图片（暂借 BetterGI `banner.jpg`，用户日后自换）+ 左下角标题 `LLM Retry Proxy`、副标题 `本地 LLM 反向代理，自动重试，免费且开源`、链接 `点击查看文档与教程`。

@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using RetryProxy.Core.Config;
+using RetryProxy.Core.Cli;
 using RetryProxy.Core.Logging;
 using RetryProxy.Core.Workspace;
 using RetryProxy.Helpers.Win32;
@@ -43,14 +44,32 @@ public sealed class WorkspaceService
         var all = configService.Get();
         Workspace = new ProxyWorkspace(proxyLogger, all.Proxy ?? ProxyConfig.Builtin(), config =>
         {
-            all.Proxy = config;
-            configService.Save();
+            var previous = all.Proxy;
+            try
+            {
+                all.Proxy = config;
+                configService.SaveChecked();
+            }
+            catch
+            {
+                all.Proxy = previous;
+                throw;
+            }
         });
+        Workspace.BeforeDestructiveChange = configService.BackupBeforeDeletion;
         Workspace.NoticePosted += OnNoticePosted;
+        I18n.I18nService.Instance.PropertyChanged += (_, _) => RequestRefresh();
         Preparations = new PreparationWorkspace(proxyLogger, all.Preparations, preparations =>
         {
             all.Preparations = preparations;
             configService.Save();
+        }, client =>
+        {
+            var route = Workspace.Config.RouteFor(client);
+            var provider = route is null ? null : Workspace.Config.ProviderById(route.CurrentProviderId);
+            var key = route is null ? null : Workspace.Config.CurrentKeyOf(route);
+            if (provider is null || key is null) throw new WorkspaceException("请先为当前客户端添加并选择 Key");
+            return CliCredential.Create(key.ApiKey, provider.BaseUrl, authMode: provider.AuthMode);
         });
         Preparations.NoticePosted += ShowNotice;
         _refreshTimer = new DispatcherTimer(DispatcherPriority.Background) { Interval = NotifyRepaintDelay };
@@ -234,11 +253,11 @@ public sealed class WorkspaceService
         try
         {
             _snackbar.Show(
-                "提示",
-                message,
+                I18n.I18nService.Instance.Translate("提示"),
+                View.Drawers.DrawerText.Error(message),
                 ControlAppearance.Secondary,
                 new SymbolIcon(SymbolRegular.Info24),
-                TimeSpan.FromSeconds(6));
+                TimeSpan.FromSeconds(5));
         }
         catch (Exception error)
         {

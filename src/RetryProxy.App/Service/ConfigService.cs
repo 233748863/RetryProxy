@@ -145,6 +145,30 @@ public class ConfigService : IConfigService
         }
     }
 
+    /// <summary>管理供应商时保存失败必须返回给调用者，避免界面显示成功但密钥没有落盘。</summary>
+    public void SaveChecked()
+    {
+        _debounce.Change(Timeout.Infinite, Timeout.Infinite);
+        if (Config is not null)
+        {
+            Write(Config, throwOnError: true);
+        }
+    }
+
+    /// <summary>先落盘当前配置再备份；备份失败则中止删除，例：删除 Key 前保留原密钥。</summary>
+    public void BackupBeforeDeletion()
+    {
+        if (ProxyConfigLoader.IsTestInjectionActive()) return;
+        SaveChecked();
+        _rwLock.EnterWriteLock();
+        try
+        {
+            if (BackupConfigFile(Global.Absolute(ConfigRelativePath)) is null)
+                throw new ConfigException("备份失败，已取消删除");
+        }
+        finally { _rwLock.ExitWriteLock(); }
+    }
+
     /// <summary>
     /// 读取 config.json。代理节点单独解析，以便拿到"是否迁移"与迁移记录；旧版代理配置迁移前先备份原文件。
     /// 文件损坏时备份原文件、阻止本次运行写盘，并返回空配置。
@@ -204,11 +228,13 @@ public class ConfigService : IConfigService
     /// <summary>
     /// 先写临时文件再整体替换，写到一半断电或崩溃时原文件仍完整。
     /// </summary>
-    private void Write(AllConfig config)
+    private void Write(AllConfig config, bool throwOnError = false)
     {
         // 自动化测试通过环境变量注入整份配置时，持久化必须保持无副作用；读取失败时不覆盖原文件。
-        if (ProxyConfigLoader.IsTestInjectionActive() || _persistenceBlocked)
+        if (ProxyConfigLoader.IsTestInjectionActive()) return;
+        if (_persistenceBlocked)
         {
+            if (throwOnError) throw new ConfigException("配置读取失败，本次运行不能保存修改");
             return;
         }
 
@@ -232,6 +258,7 @@ public class ConfigService : IConfigService
             Console.WriteLine(e.StackTrace);
             _proxyLogger?.Error($"配置文件写入失败：{e.GetBaseException().Message}");
             TryDelete(temp);
+            if (throwOnError) throw new ConfigException("配置保存失败，请检查文件权限与磁盘空间");
             ShowConfigExceptionDialog("写入", e);
         }
         finally

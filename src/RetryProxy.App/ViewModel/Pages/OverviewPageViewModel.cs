@@ -29,7 +29,6 @@ public partial class OverviewPageViewModel : ViewModel
 
     private readonly WorkspaceService _workspaceService;
     private readonly INavigationService _navigationService;
-    private bool _syncing;
     private string? _displayedRouteId;
     private int _copyVersion;
 
@@ -45,13 +44,7 @@ public partial class OverviewPageViewModel : ViewModel
     private string _versionText = $"v{Global.Version}";
 
     [ObservableProperty]
-    private ObservableCollection<PickerItem> _channels = [];
-
-    [ObservableProperty]
-    private PickerItem? _selectedChannel;
-
-    [ObservableProperty]
-    private bool _hasChannels;
+    private string _currentProviderKey = string.Empty;
 
     [ObservableProperty]
     private bool _hasChannel;
@@ -160,6 +153,11 @@ public partial class OverviewPageViewModel : ViewModel
         _navigationService = navigationService;
         _workspaceService.Refreshed += Refresh;
         _workspaceService.Tick += Refresh;
+        I18nService.Instance.PropertyChanged += (_, _) =>
+        {
+            CopyLabel = ClientPageText.Translate("本地监听");
+            Refresh();
+        };
         Refresh();
     }
 
@@ -189,25 +187,23 @@ public partial class OverviewPageViewModel : ViewModel
     private void Refresh()
     {
         var running = Workspace.RunningCount();
-        RunningSummary = $"{running} / {Workspace.Config.Routes.Count} 个通道在运行";
+        RunningSummary = ClientPageText.Translate("{0} / {1} 个通道在运行", running, Workspace.Config.Routes.Count);
         RunningBrush = running > 0 ? ThemeBrush("SystemFillColorSuccessBrush") : ThemeBrush("TextFillColorSecondaryBrush");
 
-        RefreshChannels();
+        CurrentProviderKey = ClientPageText.CurrentProviderKey(Workspace);
         var route = Workspace.SelectedRouteRef();
         if (_displayedRouteId != route?.Id)
         {
             _displayedRouteId = route?.Id;
             _copyVersion++;
-            CopyLabel = "本地监听";
+            CopyLabel = ClientPageText.Translate("本地监听");
             CopyLabelBrush = ThemeBrush("TextFillColorSecondaryBrush");
         }
 
         HasChannel = route is not null;
-        EmptyHint = I18nService.Instance.Translate(HasChannels
-            ? "选择通道查看运行状态"
-            : "尚未创建通道，请前往通道管理添加服务商和通道");
+        EmptyHint = ClientPageText.Translate("当前客户端尚无通道，请前往供应商页配置");
         var state = route is null ? ServiceState.Stopped : Workspace.RouteState(route.Id);
-        StateLabel = UiText.StateLabel(state);
+        StateLabel = ClientPageText.Translate(UiText.StateLabel(state));
         StateSeverity = state switch
         {
             ServiceState.Running => InfoBadgeSeverity.Success,
@@ -225,42 +221,6 @@ public partial class OverviewPageViewModel : ViewModel
         RefreshStatistics(route);
     }
 
-    private void RefreshChannels()
-    {
-        _syncing = true;
-        try
-        {
-            var channels = Workspace.Config.Routes.Select(route => new PickerItem(
-                route.Id, $"{route.Name} · {route.ListenPort} · {Workspace.Config.ProviderById(route.CurrentProviderId)?.Name ?? "未选服务商"}")).ToList();
-            if (Channels.Count != channels.Count || !Channels.SequenceEqual(channels))
-            {
-                Channels.Clear();
-                foreach (var channel in channels)
-                {
-                    Channels.Add(channel);
-                }
-            }
-
-            HasChannels = Channels.Count > 0;
-            SelectedChannel = Channels.FirstOrDefault(channel => channel.Key == Workspace.SelectedRoute);
-        }
-        finally
-        {
-            _syncing = false;
-        }
-    }
-
-    partial void OnSelectedChannelChanged(PickerItem? value)
-    {
-        if (_syncing || value is null || value.Key == Workspace.SelectedRoute)
-        {
-            return;
-        }
-
-        Workspace.SelectRoute(value.Key);
-        _workspaceService.Flush();
-    }
-
     private void ClearRouteDetails()
     {
         Hint = string.Empty;
@@ -276,7 +236,7 @@ public partial class OverviewPageViewModel : ViewModel
         var snapshot = Workspace.RouteKeepAlives.TryGetValue(route.Id, out var watchdog) ? watchdog.Snapshot() : null;
         Hint = Workspace.KeepAliveHint(route);
         HintToolTip = snapshot?.PreparationLastError is { } reason
-            ? $"最近一次后台问答未完成：{reason}\n通道保活可在“通道管理”中调整。"
+            ? ClientPageText.Translate("最近一次后台问答未完成：{0}\n通道保活可在供应商页的“代理设置”中调整。", reason)
             : null;
     }
 
@@ -365,9 +325,9 @@ public partial class OverviewPageViewModel : ViewModel
     }
 
     [RelayCommand]
-    private void OnManageChannels()
+    private void OnManageProviders()
     {
-        _navigationService.Navigate(typeof(ChannelPage));
+        _navigationService.Navigate(typeof(ProviderPage));
     }
 
     [RelayCommand]
@@ -380,12 +340,12 @@ public partial class OverviewPageViewModel : ViewModel
 
         Clipboard.SetText(LocalUrl);
         var version = ++_copyVersion;
-        CopyLabel = "已复制";
+        CopyLabel = ClientPageText.Translate("已复制");
         CopyLabelBrush = ThemeBrush("SystemFillColorSuccessBrush");
         await Task.Delay(CopiedLabelDuration);
         if (version == _copyVersion)
         {
-            CopyLabel = "本地监听";
+            CopyLabel = ClientPageText.Translate("本地监听");
             CopyLabelBrush = ThemeBrush("TextFillColorSecondaryBrush");
         }
     }

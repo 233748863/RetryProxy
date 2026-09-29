@@ -78,11 +78,7 @@ public static class ProxyConfigJson
 
         var config = new ProxyConfig
         {
-            Providers = ParseArray(value, "providers", ParseProvider)
-                .Select((provider, position) => (provider.Provider, provider.SortIndex, position))
-                .OrderBy(item => item.SortIndex ?? item.position)
-                .Select(item => item.Provider)
-                .ToList(),
+            Providers = ParseProviders(value),
             Routes = ParseArray(value, "routes", (element, index) => ParseRoute(element, index, null).Route),
             SelectedRouteId = OptionalString(value, "selected_route_id", string.Empty),
             ClientTakeover = ParseTakeover(value),
@@ -226,6 +222,13 @@ public static class ProxyConfigJson
         }
 
         writer.WriteEndArray();
+        writer.WriteStartArray("fetched_models");
+        foreach (var model in provider.FetchedModels)
+        {
+            writer.WriteStringValue(model);
+        }
+
+        writer.WriteEndArray();
         writer.WriteEndObject();
     }
 
@@ -322,6 +325,16 @@ public static class ProxyConfigJson
         return result;
     }
 
+    private static List<ProviderEndpoint> ParseProviders(JsonElement value)
+    {
+        var providers = ParseArray(value, "providers", ParseProvider);
+        // sort_index 只比较同客户端的卡片；另一客户端的槽位保持原样，读写往返不会打散列表。
+        var ordered = providers.GroupBy(item => item.Provider.ClientType).ToDictionary(group => group.Key,
+            group => new Queue<ProviderEndpoint>(group.Select((item, index) => (item, index))
+                .OrderBy(entry => entry.item.SortIndex ?? entry.index).Select(entry => entry.item.Provider)));
+        return providers.Select(item => ordered[item.Provider.ClientType].Dequeue()).ToList();
+    }
+
     private static (ProviderEndpoint Provider, long? SortIndex) ParseProvider(JsonElement value, int index)
     {
         var label = $"配置文件中的 providers 第 {index} 项";
@@ -345,6 +358,9 @@ public static class ProxyConfigJson
             Notes = OptionalString(value, "notes", string.Empty),
             BalanceQuery = ParseBalanceQuery(value, label),
             Keys = ParseArray(value, "keys", (element, keyIndex) => ParseKey(element, $"{label} keys 第 {keyIndex} 项")),
+            FetchedModels = ParseArray(value, "fetched_models", (element, modelIndex) => element.ValueKind == JsonValueKind.String
+                ? element.GetString()!
+                : throw new ConfigException($"{label} fetched_models 第 {modelIndex} 项必须是字符串")),
         };
         long? sortIndex = value.TryGetProperty("sort_index", out var sortElement)
             ? ToLong(AsInteger(sortElement, $"{label} sort_index"), $"{label} sort_index必须是整数")

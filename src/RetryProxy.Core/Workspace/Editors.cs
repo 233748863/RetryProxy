@@ -54,6 +54,15 @@ public sealed class RouteEditor
     public string MaxDelay { get; set; } = string.Empty;
 
     public bool PassThroughCompression { get; set; }
+
+    /// <summary>新抽屉一次提交通道与保活设置；旧对话框留空时沿用通道原值。</summary>
+    public bool? KeepaliveEnabled { get; set; }
+
+    public double? KeepaliveIdleMinutes { get; set; }
+
+    public long? KeepaliveContextLimit { get; set; }
+
+    public ReasoningEffort? KeepaliveReasoningEffort { get; set; }
 }
 
 /// <summary>编辑器字段解析失败时抛出，消息即界面文案。</summary>

@@ -1,4 +1,4 @@
-<Page x:Class="RetryProxy.View.Pages.OverviewPage"
+<UserControl x:Class="RetryProxy.View.Pages.OverviewPage"
       xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
       xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
       xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
@@ -6,7 +6,6 @@
       xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
       xmlns:pages="clr-namespace:RetryProxy.ViewModel.Pages"
       xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
-      Title="OverviewPage"
       d:DataContext="{d:DesignInstance Type=pages:OverviewPageViewModel}"
       d:DesignHeight="900"
       d:DesignWidth="800"
@@ -16,7 +15,7 @@
       Foreground="{DynamicResource TextFillColorPrimaryBrush}"
       mc:Ignorable="d">
 
-    <Page.Resources>
+    <UserControl.Resources>
         <Style x:Key="TileBorder" TargetType="Border">
             <Setter Property="Background" Value="{DynamicResource ControlFillColorDefaultBrush}" />
             <Setter Property="BorderBrush" Value="{DynamicResource ControlStrokeColorDefaultBrush}" />
@@ -35,20 +34,19 @@
             <Setter Property="HorizontalAlignment" Value="Center" />
             <Setter Property="Foreground" Value="{DynamicResource TextFillColorTertiaryBrush}" />
         </Style>
-    </Page.Resources>
+    </UserControl.Resources>
 
-    <ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
-        <StackPanel Margin="{StaticResource PagePadding}">
+        <StackPanel>
             <Grid Margin="0,0,0,12">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
-                <TextBlock VerticalAlignment="Center" FontSize="16" FontWeight="SemiBold" Text="{i18n:T 运行概况}" />
+                <TextBlock VerticalAlignment="Center" FontSize="16" FontWeight="SemiBold" Text="{i18n:T 运行统计}" />
                 <ui:Button Grid.Column="1"
-                           AutomationProperties.AutomationId="ManageChannels"
-                           Command="{Binding ManageChannelsCommand}"
-                           Content="{i18n:T 通道管理}"
+                           AutomationProperties.AutomationId="ManageProviders"
+                           Command="{Binding ManageProvidersCommand}"
+                           Content="{i18n:T 供应商管理}"
                            Icon="{ui:SymbolIcon Channel24}" />
             </Grid>
 
@@ -69,38 +67,24 @@
                 </Grid>
             </ui:Card>
 
-            <!--  跨服务商查看通道，与通道管理、缓存页同步所选通道  -->
+            <!--  客户端由统计页统一选择；这里只显示该客户端此刻使用的供应商与 Key。  -->
             <ui:Card Margin="0,0,0,12" Padding="14">
                 <StackPanel>
                     <TextBlock Margin="0,0,0,6" FontSize="11"
-                               Foreground="{DynamicResource TextFillColorTertiaryBrush}" Text="{i18n:T 当前通道}" />
-                    <Grid Visibility="{Binding HasChannels, Converter={StaticResource BooleanToVisibilityConverter}}">
+                               Foreground="{DynamicResource TextFillColorTertiaryBrush}" Text="{i18n:T 当前供应商 · Key}" />
+                    <Grid Visibility="{Binding HasChannel, Converter={StaticResource BooleanToVisibilityConverter}}">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
-                        <ComboBox MinWidth="0"
-                                  HorizontalContentAlignment="Stretch"
-                                  AutomationProperties.AutomationId="OverviewChannelPicker"
-                                  AutomationProperties.Name="{i18n:T 通道选择}"
-                                  ItemsSource="{Binding Channels}"
-                                  SelectedItem="{Binding SelectedChannel, Mode=TwoWay}">
-                            <ComboBox.ItemTemplate>
-                                <DataTemplate>
-                                    <TextBlock Text="{Binding Text}" TextTrimming="CharacterEllipsis" ToolTip="{Binding Text}" />
-                                </DataTemplate>
-                            </ComboBox.ItemTemplate>
-                            <ComboBox.ItemContainerStyle>
-                                <Style TargetType="ComboBoxItem" BasedOn="{StaticResource {x:Type ComboBoxItem}}">
-                                    <Setter Property="AutomationProperties.Name" Value="{Binding Text}" />
-                                </Style>
-                            </ComboBox.ItemContainerStyle>
-                        </ComboBox>
+                        <TextBlock VerticalAlignment="Center"
+                                   AutomationProperties.AutomationId="StatisticsCurrentProviderKey"
+                                   Text="{Binding CurrentProviderKey}" TextTrimming="CharacterEllipsis"
+                                   ToolTip="{Binding CurrentProviderKey}" />
                         <ui:InfoBadge Grid.Column="1" Margin="10,0,0,0"
                                       VerticalAlignment="Center"
                                       Severity="{Binding StateSeverity}"
-                                      Value="{Binding StateLabel}"
-                                      Visibility="{Binding HasChannel, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                                      Value="{Binding StateLabel}" />
                     </Grid>
                     <TextBlock Foreground="{DynamicResource TextFillColorTertiaryBrush}"
                                Text="{Binding EmptyHint}" TextWrapping="Wrap"
@@ -327,5 +311,4 @@
                 </StackPanel>
             </ui:Card>
         </StackPanel>
-    </ScrollViewer>
-</Page>
+</UserControl>

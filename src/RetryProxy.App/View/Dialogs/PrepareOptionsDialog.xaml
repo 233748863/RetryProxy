@@ -38,7 +38,7 @@
                      Margin="0,8,0,0"
                      Checked="OnModeChanged"
                      AutomationProperties.AutomationId="PreparationLocalProvider"
-                     Content="{i18n:T 使用本机客户端当前供应商}"
+                     Content="{i18n:T 跟随当前 Key}"
                      GroupName="prepare-mode"
                      IsChecked="True" />
         <RadioButton x:Name="NewRadio"

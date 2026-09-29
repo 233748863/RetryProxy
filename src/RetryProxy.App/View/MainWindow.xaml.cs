@@ -1,5 +1,8 @@
 using Microsoft.Extensions.Logging;
 using RetryProxy.Core.Logging;
+using RetryProxy.Core.Config;
+using RetryProxy.Service;
+using System.Linq;
 using RetryProxy.Helpers.DpiAwareness;
 using RetryProxy.Helpers.Ui;
 using RetryProxy.Helpers.Win32;
@@ -53,6 +56,10 @@ public partial class MainWindow : FluentWindow, INavigationWindow
         this.InitializeDpiAwareness();
         _windowRecovery = new WindowRecovery(this, proxyLogger);
 
+        App.GetService<DrawerService>()!.SetHost(DrawerHost);
+        DrawerHost.AllowsOverlayFocus = target => SwitchToast.IsVisible && target is not null
+            && (ReferenceEquals(target, SwitchToast) || SwitchToast.IsAncestorOf(target));
+        App.GetService<KeySwitchService>()!.Switched += OnKeySwitched;
         snackbarService.SetSnackbarPresenter(SnackbarPresenter);
         contentDialogService.SetDialogHost(RootContentDialogHost);
         navigationService.SetNavigationControl(RootNavigation);
@@ -262,11 +269,61 @@ public partial class MainWindow : FluentWindow, INavigationWindow
     {
         _logger.LogDebug("主窗体退出");
         _windowRecovery.Dispose();
+        App.GetService<KeySwitchService>()!.Switched -= OnKeySwitched;
         CompositionTarget.Rendering -= OnCompositionTargetRendering;
         I18nService.Instance.PropertyChanged -= OnLanguageChanged;
         RemoveHandler(PreviewMouseWheelEvent, new MouseWheelEventHandler(OnGlobalPreviewMouseWheel));
         base.OnClosed(e);
         App.GetService<NotifyIconViewModel>()?.Exit();
+    }
+
+    private void OnKeySwitched(KeySwitchNotice notice)
+    {
+        if (IsVisible && WindowState != WindowState.Minimized)
+        {
+            SwitchToast.VerticalAlignment = DrawerHost.IsOpen ? VerticalAlignment.Top : VerticalAlignment.Bottom;
+            SwitchToast.Show(notice);
+        }
+        else
+        {
+            SwitchToast.Hide();
+            if (!TrayBalloon.Show(TrayIcon, notice.Message))
+                _proxyLogger.Warn("托盘切换通知未能显示");
+        }
+    }
+
+    private void OnTrayMenuOpened(object sender, RoutedEventArgs e)
+    {
+        PopulateTray(ClaudeTrayMenu, ClientType.Claude);
+        PopulateTray(CodexTrayMenu, ClientType.Codex);
+    }
+
+    private void PopulateTray(System.Windows.Controls.MenuItem menu, ClientType client)
+    {
+        var workspace = App.GetService<WorkspaceService>()!.Workspace;
+        var route = workspace.Config.RouteFor(client);
+        var selected = route is null ? null : workspace.Config.ProviderById(route.CurrentProviderId);
+        var selectedKey = route is null ? null : workspace.Config.CurrentKeyOf(route);
+        var current = selectedKey is null ? selected?.Name ?? I18nService.Instance.Translate("未选择供应商") : $"{selected!.Name} · {selectedKey.Name}";
+        menu.Header = $"{client.Label()}：{current}";
+        menu.Items.Clear();
+        if (route is null) return;
+        foreach (var provider in workspace.Config.ProvidersFor(client))
+        foreach (var key in provider.Keys)
+        {
+            var providerId = provider.Id;
+            var keyId = key.Id;
+            var item = new System.Windows.Controls.MenuItem
+            {
+                Header = $"{provider.Name} · {key.Name}",
+                IsCheckable = true,
+                IsChecked = route.CurrentProviderId == providerId && route.CurrentKeyId == keyId,
+            };
+            item.Click += (_, _) => App.GetService<KeySwitchService>()!.Switch(route.Id, providerId, keyId);
+            menu.Items.Add(item);
+        }
+        if (menu.Items.Count == 0)
+            menu.Items.Add(new System.Windows.Controls.MenuItem { Header = I18nService.Instance.Translate("尚无 Key"), IsEnabled = false });
     }
 
     private void OnNotifyIconLeftDoubleClick(NotifyIcon sender, RoutedEventArgs e)

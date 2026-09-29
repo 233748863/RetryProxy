@@ -664,7 +664,7 @@ public class ProxyConfigTests
         Assert.False(migrated);
         Assert.Equal(config, loaded);
         Assert.Equal("k2", loaded.CurrentKeyOf(loaded.RouteFor(ClientType.Claude)!)!.Id);
-        Assert.Equal("****ture", loaded.CurrentKeyOf(loaded.RouteFor(ClientType.Claude)!)!.MaskedKey);
+        Assert.Equal("sk-g····ture", loaded.CurrentKeyOf(loaded.RouteFor(ClientType.Claude)!)!.MaskedKey);
 
         // Claude 只写角色与 1M，Codex 只写上下文窗口与压缩阈值。
         var saved = Canonical(config);
@@ -695,7 +695,7 @@ public class ProxyConfigTests
         Assert.Equal(new[] { "first", "second" }, config.ProvidersFor(ClientType.Codex).Select(provider => provider.Name));
         var saved = Canonical(config).GetProperty("providers");
         Assert.Equal(
-            new[] { ("claude", 0), ("first", 0), ("second", 1) },
+            new[] { ("first", 0), ("claude", 0), ("second", 1) },
             saved.EnumerateArray().Select(provider => (provider.GetProperty("name").GetString()!, provider.GetProperty("sort_index").GetInt32())));
     }
 
@@ -734,7 +734,7 @@ public class ProxyConfigTests
         Assert.Equal(
             new[]
             {
-                "id", "client_type", "name", "base_url", "auth_mode", "models", "website_url", "notes", "balance_query", "sort_index", "keys",
+                "id", "client_type", "name", "base_url", "auth_mode", "models", "website_url", "notes", "balance_query", "sort_index", "keys", "fetched_models",
             },
             providerKeys);
         var routeKeys = document.RootElement.GetProperty("routes")[0].EnumerateObject().Select(property => property.Name).ToArray();

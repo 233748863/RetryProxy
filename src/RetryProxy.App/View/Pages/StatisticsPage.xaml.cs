@@ -3,11 +3,11 @@ using System.Windows.Controls;
 
 namespace RetryProxy.View.Pages;
 
-public partial class HomePage : Page
+public partial class StatisticsPage : Page
 {
-    public HomePageViewModel ViewModel { get; }
+    public StatisticsPageViewModel ViewModel { get; }
 
-    public HomePage(HomePageViewModel viewModel)
+    public StatisticsPage(StatisticsPageViewModel viewModel)
     {
         DataContext = ViewModel = viewModel;
         InitializeComponent();

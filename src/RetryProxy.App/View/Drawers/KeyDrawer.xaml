@@ -1,0 +1,28 @@
+<drawers:DrawerPage x:Class="RetryProxy.View.Drawers.KeyDrawer"
+                    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:drawers="clr-namespace:RetryProxy.View.Drawers"
+                    xmlns:i18n="clr-namespace:RetryProxy.Service.I18n"
+                    xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml">
+    <StackPanel>
+        <TextBlock x:Name="DraftHint" Text="{i18n:T 保存后返回供应商草稿；取消供应商编辑会丢弃这些修改。}"
+                   TextWrapping="Wrap" Foreground="{ui:ThemeResource TextFillColorSecondaryBrush}" Margin="0,0,0,16" />
+        <TextBlock Text="{i18n:T Key 名称}" Margin="0,0,0,4" />
+        <ui:TextBox x:Name="NameBox" AutomationProperties.Name="{i18n:T Key 名称}" />
+        <TextBlock Text="{i18n:T API Key}" Margin="0,12,0,4" />
+        <PasswordBox x:Name="SecretBox" PasswordChanged="SecretChanged" AutomationProperties.Name="{i18n:T API Key}" />
+        <ui:TextBox x:Name="VisibleSecretBox" Visibility="Collapsed" TextChanged="VisibleSecretChanged"
+                    SpellCheck.IsEnabled="False" AutomationProperties.Name="{i18n:T API Key}" />
+        <CheckBox x:Name="ShowSecretCheck" Content="{i18n:T 显示密钥}" Checked="SecretVisibilityChanged"
+                  Unchecked="SecretVisibilityChanged" Margin="0,8,0,0" />
+        <TextBlock Text="{i18n:T 模型覆盖}" Margin="0,16,0,4" />
+        <ComboBox x:Name="ModelBox" IsEditable="True" IsTextSearchEnabled="False"
+                  AutomationProperties.Name="{i18n:T 模型覆盖}" />
+        <TextBlock Text="{i18n:T 留空沿用供应商模型}" TextWrapping="Wrap" Margin="0,4,0,0"
+                   Foreground="{ui:ThemeResource TextFillColorSecondaryBrush}" />
+        <CheckBox x:Name="ContextCheck" Content="{i18n:T 1M 上下文}" Margin="0,8,0,0" />
+        <TextBlock Text="{i18n:T 备注}" Margin="0,16,0,4" />
+        <ui:TextBox x:Name="NotesBox" AcceptsReturn="True" TextWrapping="Wrap" MinHeight="88"
+                    VerticalScrollBarVisibility="Auto" AutomationProperties.Name="{i18n:T 备注}" />
+    </StackPanel>
+</drawers:DrawerPage>

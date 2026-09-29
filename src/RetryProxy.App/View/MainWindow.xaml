@@ -7,6 +7,7 @@
                  xmlns:markup="clr-namespace:RetryProxy.Markup"
                  xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
                  xmlns:pages="clr-namespace:RetryProxy.View.Pages"
+                 xmlns:controls="clr-namespace:RetryProxy.View.Controls"
                  xmlns:tray="http://schemas.lepo.co/wpfui/2022/xaml/tray"
                  xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
                  xmlns:viewModel="clr-namespace:RetryProxy.ViewModel"
@@ -52,36 +53,18 @@
                            IsPaneToggleVisible="True"
                            IsTopSeparatorVisible="False"
                            IsFooterSeparatorVisible="False"
-                           OpenPaneLength="160">
+                           OpenPaneLength="160" PaneDisplayMode="Left" IsPaneOpen="True">
             <b:Interaction.Behaviors>
                 <behavior:AnimatedNavigationSelectionIndicatorBehavior />
             </b:Interaction.Behaviors>
             <ui:NavigationView.MenuItems>
-                <ui:NavigationViewItem Content="{i18n:T 首页}"
-                                       AutomationProperties.AutomationId="HomeNavigation"
-                                       NavigationCacheMode="Enabled"
-                                       TargetPageType="{x:Type pages:HomePage}">
-                    <ui:NavigationViewItem.Icon>
-                        <ui:SymbolIcon Symbol="Home24" />
-                    </ui:NavigationViewItem.Icon>
+                <ui:NavigationViewItem Content="{i18n:T 供应商}" AutomationProperties.AutomationId="ProviderNavigation"
+                                       NavigationCacheMode="Enabled" TargetPageType="{x:Type pages:ProviderPage}">
+                    <ui:NavigationViewItem.Icon><ui:SymbolIcon Symbol="Channel24" /></ui:NavigationViewItem.Icon>
                 </ui:NavigationViewItem>
-
-                <ui:NavigationViewItem Content="{i18n:T 运行概况}"
-                                       AutomationProperties.AutomationId="OverviewNavigation"
-                                       NavigationCacheMode="Enabled"
-                                       TargetPageType="{x:Type pages:OverviewPage}">
-                    <ui:NavigationViewItem.Icon>
-                        <ui:SymbolIcon Symbol="Pulse24" />
-                    </ui:NavigationViewItem.Icon>
-                </ui:NavigationViewItem>
-
-                <ui:NavigationViewItem Content="{i18n:T 通道管理}"
-                                       AutomationProperties.AutomationId="ChannelNavigation"
-                                       NavigationCacheMode="Enabled"
-                                       TargetPageType="{x:Type pages:ChannelPage}">
-                    <ui:NavigationViewItem.Icon>
-                        <ui:SymbolIcon Symbol="Channel24" />
-                    </ui:NavigationViewItem.Icon>
+                <ui:NavigationViewItem Content="{i18n:T 统计}" AutomationProperties.AutomationId="StatisticsNavigation"
+                                       NavigationCacheMode="Enabled" TargetPageType="{x:Type pages:StatisticsPage}">
+                    <ui:NavigationViewItem.Icon><ui:SymbolIcon Symbol="Pulse24" /></ui:NavigationViewItem.Icon>
                 </ui:NavigationViewItem>
 
                 <ui:NavigationViewItem Content="{i18n:T 一键准备}"
@@ -101,13 +84,6 @@
                     </ui:NavigationViewItem.Icon>
                 </ui:NavigationViewItem>
 
-                <ui:NavigationViewItem Content="{i18n:T 缓存明细}"
-                                       NavigationCacheMode="Enabled"
-                                       TargetPageType="{x:Type pages:CachePage}">
-                    <ui:NavigationViewItem.Icon>
-                        <ui:SymbolIcon Symbol="Database24" />
-                    </ui:NavigationViewItem.Icon>
-                </ui:NavigationViewItem>
             </ui:NavigationView.MenuItems>
             <ui:NavigationView.FooterMenuItems>
                 <ui:NavigationViewItem Content="{i18n:T 软件设置}"
@@ -130,6 +106,8 @@
             <ui:NavigationView.ContentOverlay>
                 <Grid>
                     <ui:SnackbarPresenter x:Name="SnackbarPresenter" />
+                    <controls:DrawerHost x:Name="DrawerHost" />
+                    <controls:SwitchToast x:Name="SwitchToast" />
                     <ui:ContentDialogHost x:Name="RootContentDialogHost" />
                 </Grid>
             </ui:NavigationView.ContentOverlay>
@@ -170,14 +148,14 @@
             </ui:TitleBar.TrailingContent>
         </ui:TitleBar>
 
-        <tray:NotifyIcon Grid.Row="0"
+        <tray:NotifyIcon x:Name="TrayIcon" Grid.Row="0"
                          FocusOnLeftClick="False"
                          Icon="pack://application:,,,/Resources/Images/logo.ico"
                          LeftDoubleClick="OnNotifyIconLeftDoubleClick"
                          MenuOnRightClick="True"
                          TooltipText="LLM Retry Proxy">
             <tray:NotifyIcon.Menu>
-                <ContextMenu>
+                <ContextMenu x:Name="TrayMenu" Opened="OnTrayMenuOpened">
                     <ContextMenu.DataContext>
                         <markup:ServiceLocator Type="{x:Type viewModel:NotifyIconViewModel}" />
                     </ContextMenu.DataContext>
@@ -185,12 +163,8 @@
                                  Header="{i18n:T 显示窗口}"
                                  Icon="{ui:SymbolIcon Window24}" />
                     <Separator />
-                    <ui:MenuItem Command="{Binding EnableAllCommand}"
-                                 Header="{i18n:T 全部启用}"
-                                 Icon="{ui:SymbolIcon Play24}" />
-                    <ui:MenuItem Command="{Binding DisableAllCommand}"
-                                 Header="{i18n:T 全部停用}"
-                                 Icon="{ui:SymbolIcon Stop24}" />
+                    <MenuItem x:Name="ClaudeTrayMenu" Header="Claude Code" />
+                    <MenuItem x:Name="CodexTrayMenu" Header="Codex" />
                     <Separator />
                     <ui:MenuItem Command="{Binding ExitCommand}"
                                  Header="{i18n:T 退出}"

@@ -25,6 +25,9 @@ public sealed class ProviderEndpoint : IEquatable<ProviderEndpoint>
 
     public ProviderModels Models { get; set; } = new();
 
+    /// <summary>最近一次获取的模型列表；持久化后重启仍参与 Codex 的已知模型判断。</summary>
+    public List<string> FetchedModels { get; set; } = new();
+
     public string WebsiteUrl { get; set; } = string.Empty;
 
     public string Notes { get; set; } = string.Empty;
@@ -53,6 +56,8 @@ public sealed class ProviderEndpoint : IEquatable<ProviderEndpoint>
         WebsiteUrl = WebsiteUrl.Trim();
         Notes = Notes.Trim();
         Models.NormalizeInPlace();
+        FetchedModels = FetchedModels.Where(model => !string.IsNullOrWhiteSpace(model))
+            .Select(model => model.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         foreach (var key in Keys)
         {
             key.NormalizeInPlace();
@@ -73,6 +78,31 @@ public sealed class ProviderEndpoint : IEquatable<ProviderEndpoint>
         }
 
         UrlRules.ValidateBaseUrl(BaseUrl, "服务商地址");
+        if (!Enum.IsDefined(ClientType))
+        {
+            throw new ConfigException("请选择有效的客户端类型");
+        }
+
+        if (!Enum.IsDefined(AuthMode))
+        {
+            throw new ConfigException("请选择有效的认证方式");
+        }
+
+        if (!Enum.IsDefined(BalanceQuery.Mode) || (BalanceQuery.Detected is { } detected && !Enum.IsDefined(detected)))
+        {
+            throw new ConfigException("请选择有效的余额查询方式");
+        }
+
+        if (Models.ContextWindow is <= 0 || Models.AutoCompactTokenLimit is <= 0)
+        {
+            throw new ConfigException("上下文窗口和自动压缩阈值必须是正整数或留空");
+        }
+
+        if (Models.ContextWindow is { } window && Models.AutoCompactTokenLimit is { } limit && limit > window)
+        {
+            throw new ConfigException("自动压缩阈值不能超过上下文窗口");
+        }
+
         var keyIds = new HashSet<string>();
         var keyNames = new HashSet<string>();
         foreach (var key in Keys)
@@ -101,6 +131,11 @@ public sealed class ProviderEndpoint : IEquatable<ProviderEndpoint>
             {
                 throw new ConfigException($"服务商“{Name}”的 Key“{key.Name}”未填写密钥");
             }
+
+            if (key.ApiKey.Any(character => char.IsWhiteSpace(character) || char.IsControl(character)))
+            {
+                throw new ConfigException("API Key 不能包含空白或控制字符");
+            }
         }
     }
 
@@ -112,6 +147,7 @@ public sealed class ProviderEndpoint : IEquatable<ProviderEndpoint>
         BaseUrl = BaseUrl,
         AuthMode = AuthMode,
         Models = Models.Clone(),
+        FetchedModels = FetchedModels.ToList(),
         WebsiteUrl = WebsiteUrl,
         Notes = Notes,
         BalanceQuery = BalanceQuery.Clone(),
@@ -127,6 +163,7 @@ public sealed class ProviderEndpoint : IEquatable<ProviderEndpoint>
             && BaseUrl == other.BaseUrl
             && AuthMode == other.AuthMode
             && Models.Equals(other.Models)
+            && FetchedModels.SequenceEqual(other.FetchedModels)
             && WebsiteUrl == other.WebsiteUrl
             && Notes == other.Notes
             && BalanceQuery.Equals(other.BalanceQuery)

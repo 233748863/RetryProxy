@@ -1,0 +1,54 @@
+<drawers:DrawerPage x:Class="RetryProxy.View.Drawers.ProviderDrawer"
+                    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:drawers="clr-namespace:RetryProxy.View.Drawers"
+                    xmlns:i18n="clr-namespace:RetryProxy.Service.I18n"
+                    xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml">
+    <StackPanel>
+        <TextBlock Text="{i18n:T 供应商名称}" Margin="0,0,0,4" />
+        <ui:TextBox x:Name="NameBox" AutomationProperties.Name="{i18n:T 供应商名称}" />
+        <TextBlock Text="{i18n:T 接口地址}" Margin="0,12,0,4" />
+        <ui:TextBox x:Name="UrlBox" AutomationProperties.Name="{i18n:T 接口地址}" />
+        <StackPanel x:Name="AuthPanel" Margin="0,12,0,0">
+            <TextBlock Text="{i18n:T 认证方式}" Margin="0,0,0,4" />
+            <ComboBox x:Name="AuthBox" SelectedIndex="0" AutomationProperties.Name="{i18n:T 认证方式}">
+                <ComboBoxItem Content="{i18n:T Bearer（默认）}" />
+                <ComboBoxItem Content="x-api-key" />
+            </ComboBox>
+        </StackPanel>
+        <TextBlock Text="{i18n:T 官网}" Margin="0,12,0,4" />
+        <ui:TextBox x:Name="WebsiteBox" AutomationProperties.Name="{i18n:T 官网}" />
+        <TextBlock Text="{i18n:T 备注}" Margin="0,12,0,4" />
+        <ui:TextBox x:Name="NotesBox" AcceptsReturn="True" TextWrapping="Wrap" MinHeight="72"
+                    VerticalScrollBarVisibility="Auto" AutomationProperties.Name="{i18n:T 备注}" />
+        <TextBlock Text="{i18n:T 主模型}" Margin="0,20,0,4" />
+        <ComboBox x:Name="ModelBox" IsEditable="True" IsTextSearchEnabled="False" AutomationProperties.Name="{i18n:T 主模型}" />
+        <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+            <ui:Button x:Name="FetchButton" Content="{i18n:T 获取模型}" Click="FetchClicked" />
+            <ui:Button x:Name="CancelFetchButton" Content="{i18n:T 取消获取}" Click="CancelFetchClicked"
+                       Margin="8,0,0,0" Visibility="Collapsed" />
+        </StackPanel>
+        <TextBlock x:Name="FetchStatus" Margin="0,6,0,0" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite"
+                   Foreground="{ui:ThemeResource TextFillColorSecondaryBrush}" />
+        <CheckBox x:Name="ContextCheck" Content="{i18n:T 1M 上下文}" Margin="0,8,0,0" />
+        <Expander x:Name="RolesExpander" Header="{i18n:T 按角色分别指定}" IsExpanded="False" Margin="0,12,0,0">
+            <StackPanel Margin="0,8,0,0">
+                <TextBlock Text="{i18n:T 角色模型留空时，模型和 1M 设置均跟随主模型。}" TextWrapping="Wrap" Margin="0,0,0,8"
+                           Foreground="{ui:ThemeResource TextFillColorSecondaryBrush}" />
+                <drawers:RoleModelField x:Name="OpusField" RoleName="Opus" />
+                <drawers:RoleModelField x:Name="SonnetField" RoleName="Sonnet" />
+                <drawers:RoleModelField x:Name="HaikuField" RoleName="Haiku" />
+                <drawers:RoleModelField x:Name="FableField" RoleName="Fable" />
+            </StackPanel>
+        </Expander>
+        <StackPanel x:Name="CodexPanel" Margin="0,12,0,0">
+            <TextBlock Text="{i18n:T 上下文窗口（可空）}" Margin="0,0,0,4" />
+            <ui:TextBox x:Name="ContextWindowBox" AutomationProperties.Name="{i18n:T 上下文窗口（可空）}" />
+            <TextBlock Text="{i18n:T 自动压缩阈值（可空）}" Margin="0,12,0,4" />
+            <ui:TextBox x:Name="AutoCompactBox" AutomationProperties.Name="{i18n:T 自动压缩阈值（可空）}" />
+        </StackPanel>
+        <TextBlock Text="{i18n:T Key 列表}" FontWeight="SemiBold" Margin="0,20,0,8" />
+        <StackPanel x:Name="KeyRows" />
+        <ui:Button Content="{i18n:T 添加 Key}" Click="AddKeyClicked" HorizontalAlignment="Left" Margin="0,8,0,0" />
+    </StackPanel>
+</drawers:DrawerPage>

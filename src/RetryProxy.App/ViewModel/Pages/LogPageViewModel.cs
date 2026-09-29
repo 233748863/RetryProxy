@@ -4,12 +4,15 @@ using RetryProxy.Core.Config;
 using RetryProxy.Core.Logging;
 using RetryProxy.Core.Workspace;
 using RetryProxy.Service;
+using RetryProxy.Service.I18n;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Globalization;
+using System.Linq;
 
 namespace RetryProxy.ViewModel.Pages;
 
@@ -22,6 +25,7 @@ public partial class LogPageViewModel : ViewModel
     private readonly List<long> _rowGlobals = new();
     private long _nextGlobal;
     private string? _lastRouteName;
+    private ClientType? _lastClient;
 
     private LogBuffer Buffer => _workspaceService.Logs;
 
@@ -55,10 +59,7 @@ public partial class LogPageViewModel : ViewModel
     [ObservableProperty]
     private string? _selectedRouteName;
 
-    [ObservableProperty]
-    private bool _hasSelectedRoute;
-
-    public bool ShowRouteFilter => HasSelectedRoute && SourceFilter is null or LogSource.ChannelProxy or LogSource.ChannelKeepAlive;
+    public bool ShowClientFilter => SourceFilter != LogSource.System;
 
     [ObservableProperty]
     private string _onlySelectedLabel = string.Empty;
@@ -70,7 +71,7 @@ public partial class LogPageViewModel : ViewModel
     private bool _isEmpty = true;
 
     [ObservableProperty]
-    private string _autoScrollToolTip = $"手动上滚后暂停跟随，连续 {ScrollResumeDelay.TotalSeconds:F0} 秒无操作自动恢复；关闭后保持手动浏览";
+    private string _autoScrollToolTip = string.Empty;
 
     /// <summary>有新行追加到列表尾部（用于跟随滚动）。</summary>
     public event Action? RowsAppended;
@@ -80,28 +81,65 @@ public partial class LogPageViewModel : ViewModel
         _workspaceService = workspaceService;
         _workspaceService.LogsChanged += OnLogsChanged;
         _workspaceService.Refreshed += OnRefreshed;
+        I18nService.Instance.PropertyChanged += (_, _) =>
+        {
+            OnRefreshed();
+            UpdateCounters();
+        };
         OnRefreshed();
         Rebuild();
     }
 
     public bool IsFilter(LogLevelFilter filter) => Filter == filter;
 
-    private string? RouteMarker => OnlySelected && ShowRouteFilter ? SelectedRouteName : null;
+    /// <summary>跳转到某项准备的完整日志；保留可见筛选项，用户仍可修改来源、级别和搜索词。</summary>
+    public void OpenPreparation(int taskNumber)
+    {
+        OnlySelected = false;
+        Filter = LogLevelFilter.All;
+        SourceFilter = LogSource.Preparation;
+        // 日志标签是稳定的中文协议文本，不能翻译；末尾分隔符避免“准备 1”匹配“准备 10”。
+        Query = "[准备 " + taskNumber.ToString(CultureInfo.InvariantCulture) + " · ";
+    }
 
     private string LowercaseQuery => Query.Trim().ToLowerInvariant();
 
     private void OnRefreshed()
     {
-        var name = _workspaceService.Workspace.SelectedRouteRef()?.Name;
+        var workspace = _workspaceService.Workspace;
+        var name = workspace.SelectedRouteRef()?.Name;
         SelectedRouteName = string.IsNullOrEmpty(name) ? null : name;
-        HasSelectedRoute = SelectedRouteName is not null;
-        OnlySelectedLabel = SelectedRouteName is null ? string.Empty : $"仅通道：{SelectedRouteName}";
-        if (OnlySelected && _lastRouteName != SelectedRouteName)
+        OnlySelectedLabel = ClientPageText.Translate("仅当前客户端：{0}", workspace.SelectedClient.Label());
+        AutoScrollToolTip = ClientPageText.Translate("手动上滚后暂停跟随，连续 {0:F0} 秒无操作自动恢复；关闭后保持手动浏览", ScrollResumeDelay.TotalSeconds);
+        if (OnlySelected && (_lastRouteName != SelectedRouteName || _lastClient != workspace.SelectedClient))
         {
             Rebuild();
         }
 
         _lastRouteName = SelectedRouteName;
+        _lastClient = workspace.SelectedClient;
+    }
+
+    private bool Matches(string line, string lowercaseQuery)
+    {
+        if (!LogLine.Matches(line, Filter, lowercaseQuery, null, SourceFilter)) return false;
+        if (!OnlySelected || !ShowClientFilter) return true;
+
+        var parts = LogLine.Split(line);
+        if (parts.Source is LogSource.ChannelProxy or LogSource.ChannelKeepAlive)
+        {
+            return string.Equals(parts.RouteName, SelectedRouteName, StringComparison.Ordinal);
+        }
+
+        if (parts.Source == LogSource.Preparation)
+        {
+            // 独立准备使用“准备 N · 客户端”标签，不属于通道；同一个客户端筛选也应覆盖它。
+            var suffix = " · " + _workspaceService.Workspace.SelectedClient.Label();
+            return parts.Tags.Any(tag => tag.StartsWith("准备 ", StringComparison.Ordinal)
+                && tag.EndsWith(suffix, StringComparison.Ordinal));
+        }
+
+        return false;
     }
 
     private void OnLogsChanged()
@@ -130,7 +168,7 @@ public partial class LogPageViewModel : ViewModel
         for (var index = (int)(_nextGlobal - Buffer.Dropped); index < Buffer.Count; index++)
         {
             var line = Buffer[index];
-            if (LogLine.Matches(line, Filter, LowercaseQuery, RouteMarker, SourceFilter))
+            if (Matches(line, LowercaseQuery))
             {
                 appendedRows.Add(line);
                 appendedGlobals.Add(Buffer.Dropped + index);
@@ -156,11 +194,10 @@ public partial class LogPageViewModel : ViewModel
         var rows = new List<string>();
         var globals = new List<long>();
         var query = LowercaseQuery;
-        var route = RouteMarker;
         for (var index = 0; index < Buffer.Count; index++)
         {
             var line = Buffer[index];
-            if (LogLine.Matches(line, Filter, query, route, SourceFilter))
+            if (Matches(line, query))
             {
                 rows.Add(line);
                 globals.Add(Buffer.Dropped + index);
@@ -181,7 +218,9 @@ public partial class LogPageViewModel : ViewModel
         Total = Buffer.Count;
         Counter = $"{Shown} / {Total}";
         IsEmpty = Rows.Count == 0;
-        EmptyText = Total == 0 ? "暂无日志，启用通道或开始一键准备后会在这里显示运行状态" : "没有匹配当前筛选条件的日志";
+        EmptyText = ClientPageText.Translate(Total == 0
+            ? "暂无日志，代理运行或开始一键准备后会在这里显示运行状态"
+            : "没有匹配当前筛选条件的日志");
     }
 
     partial void OnFilterChanged(LogLevelFilter value)
@@ -197,8 +236,6 @@ public partial class LogPageViewModel : ViewModel
 
     partial void OnOnlySelectedChanged(bool value) => Rebuild();
 
-    partial void OnHasSelectedRouteChanged(bool value) => OnPropertyChanged(nameof(ShowRouteFilter));
-
     partial void OnSourceFilterChanged(LogSource? value)
     {
         OnPropertyChanged(nameof(IsAllSources));
@@ -206,8 +243,8 @@ public partial class LogPageViewModel : ViewModel
         OnPropertyChanged(nameof(IsChannelKeepAlive));
         OnPropertyChanged(nameof(IsPreparation));
         OnPropertyChanged(nameof(IsSystem));
-        OnPropertyChanged(nameof(ShowRouteFilter));
-        if (!ShowRouteFilter)
+        OnPropertyChanged(nameof(ShowClientFilter));
+        if (!ShowClientFilter)
         {
             OnlySelected = false;
         }

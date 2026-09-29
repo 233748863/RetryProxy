@@ -32,8 +32,8 @@ public sealed class ProviderKey : IEquatable<ProviderKey>
         }
     }
 
-    /// <summary>界面与日志只显示末 4 位，例：<c>sk-****a1b2</c>。</summary>
-    public string MaskedKey => ApiKey.Length <= 4 ? "****" : $"****{ApiKey[^4..]}";
+    /// <summary>界面只显示前 4 位与末 4 位；不超过 8 位时全部遮盖，避免露出整串密钥。</summary>
+    public string MaskedKey => ApiKey.Length <= 8 ? "····" : $"{ApiKey[..4]}····{ApiKey[^4..]}";
 
     public ProviderKey Clone() => new()
     {

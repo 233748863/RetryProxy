@@ -49,7 +49,7 @@ public class ApplicationHostService(IServiceProvider serviceProvider) : IHostedS
                 _navigationWindow.ShowWindow();
             }
 
-            _ = _navigationWindow.Navigate(typeof(HomePage));
+            _ = _navigationWindow.Navigate(typeof(ProviderPage));
             (serviceProvider.GetService(typeof(WorkspaceService)) as WorkspaceService)?.Start();
         }
 

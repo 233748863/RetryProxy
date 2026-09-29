@@ -1,4 +1,4 @@
-<Page x:Class="RetryProxy.View.Pages.CachePage"
+<UserControl x:Class="RetryProxy.View.Pages.CachePage"
       xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
       xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
       xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
@@ -6,7 +6,6 @@
       xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
       xmlns:pages="clr-namespace:RetryProxy.ViewModel.Pages"
       xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
-      Title="CachePage"
       d:DataContext="{d:DesignInstance Type=pages:CachePageViewModel}"
       d:DesignHeight="700"
       d:DesignWidth="800"
@@ -16,7 +15,7 @@
       Foreground="{DynamicResource TextFillColorPrimaryBrush}"
       mc:Ignorable="d">
 
-    <Page.Resources>
+    <UserControl.Resources>
         <Style x:Key="WeakText" TargetType="TextBlock">
             <Setter Property="FontSize" Value="11.5" />
             <Setter Property="Foreground" Value="{DynamicResource TextFillColorTertiaryBrush}" />
@@ -34,34 +33,16 @@
             <Setter Property="TextWrapping" Value="Wrap" />
             <Setter Property="Margin" Value="0,0,0,6" />
         </Style>
-    </Page.Resources>
+    </UserControl.Resources>
 
-    <ScrollViewer VerticalScrollBarVisibility="Auto">
-        <StackPanel Margin="{StaticResource PagePadding}">
-            <!--  标题 + 通道选择  -->
-            <Grid Margin="0,0,0,12">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="Auto" />
-                </Grid.ColumnDefinitions>
-                <TextBlock Grid.Column="0"
-                           AutomationProperties.AutomationId="CachePageTitle"
-                           VerticalAlignment="Center"
-                           FontSize="16"
-                           FontWeight="SemiBold"
-                           Text="{Binding Title}" />
-                <ComboBox Grid.Column="1"
-                          MinWidth="220"
-                          DisplayMemberPath="Text"
-                          ItemsSource="{Binding Channels}"
-                          SelectedItem="{Binding SelectedChannel, Mode=TwoWay}"
-                          AutomationProperties.AutomationId="CacheChannelPicker"
-                          ToolTip="{i18n:T 与运行概况和通道管理选中的通道保持同步}"
-                          Visibility="{Binding HasChannel, Converter={StaticResource BooleanToVisibilityConverter}}" />
-            </Grid>
+        <StackPanel>
+            <TextBlock Margin="0,0,0,12"
+                       AutomationProperties.AutomationId="CachePageTitle"
+                       FontSize="16" FontWeight="SemiBold"
+                       Text="{i18n:T 缓存明细}" />
 
             <TextBlock Foreground="{DynamicResource TextFillColorTertiaryBrush}"
-                       Text="{i18n:T 请先新增服务商与通道，收到成功回复后这里会显示缓存记录}"
+                       Text="{i18n:T 当前客户端尚无通道，请前往供应商页配置；收到成功回复后这里会显示缓存记录}"
                        Visibility="{Binding HasChannel, Converter={StaticResource BooleanToVisibilityRevertConverter}}" />
 
             <ui:Card Padding="14" Visibility="{Binding HasChannel, Converter={StaticResource BooleanToVisibilityConverter}}">
@@ -219,7 +200,7 @@
                                                        FontSize="10.5"
                                                        TextTrimming="CharacterEllipsis"
                                                        ToolTip="{i18n:T 点击复制请求编号，可在日志文件中查找}">
-                                                <Hyperlink Command="{Binding DataContext.CopyRequestIdCommand, RelativeSource={RelativeSource AncestorType=Page}}"
+                                                <Hyperlink Command="{Binding DataContext.CopyRequestIdCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
                                                            CommandParameter="{Binding RequestId}"
                                                            Foreground="{DynamicResource AccentTextFillColorPrimaryBrush}"
                                                            TextDecorations="None">
@@ -285,5 +266,4 @@
                 </StackPanel>
             </ui:Card>
         </StackPanel>
-    </ScrollViewer>
-</Page>
+</UserControl>

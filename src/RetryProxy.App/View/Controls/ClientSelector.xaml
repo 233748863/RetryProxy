@@ -1,0 +1,15 @@
+<UserControl x:Class="RetryProxy.View.Controls.ClientSelector"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml">
+    <Border HorizontalAlignment="Left" Padding="3" CornerRadius="7"
+            Background="{DynamicResource ControlFillColorDefaultBrush}"
+            BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}" BorderThickness="1">
+        <StackPanel Orientation="Horizontal">
+            <ui:Button x:Name="ClaudeButton" Content="Claude Code" Padding="14,6" Click="OnClaude"
+                       AutomationProperties.AutomationId="SelectClaude" />
+            <ui:Button x:Name="CodexButton" Content="Codex" Margin="3,0,0,0" Padding="14,6" Click="OnCodex"
+                       AutomationProperties.AutomationId="SelectCodex" />
+        </StackPanel>
+    </Border>
+</UserControl>

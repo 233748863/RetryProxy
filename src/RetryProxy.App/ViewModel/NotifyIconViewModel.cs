@@ -37,24 +37,6 @@ public partial class NotifyIconViewModel : ObservableObject
         }
     }
 
-    /// <summary>启用全部通道。</summary>
-    [RelayCommand]
-    public void EnableAll()
-    {
-        _logger.LogInformation("托盘：全部启用");
-        _workspaceService.Workspace.StartAll();
-        _workspaceService.Flush();
-    }
-
-    /// <summary>停用全部通道。</summary>
-    [RelayCommand]
-    public void DisableAll()
-    {
-        _logger.LogInformation("托盘：全部停用");
-        _workspaceService.Workspace.StopAll();
-        _workspaceService.Flush();
-    }
-
     [RelayCommand]
     public void Exit()
     {

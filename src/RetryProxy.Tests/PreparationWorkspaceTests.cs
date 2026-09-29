@@ -96,6 +96,35 @@ public sealed class PreparationWorkspaceTests
         return task;
     }
 
+    [Theory]
+    [InlineData(ClientType.Codex)]
+    [InlineData(ClientType.Claude)]
+    public void CurrentProviderResolverIsReadAgainWithoutOpeningClientFiles(ClientType client)
+    {
+        using var fixture = new Fixture();
+        var key = "test-key-a";
+        var calls = 0;
+        var workspace = new PreparationWorkspace(fixture.Logger, currentProviderResolver: selected =>
+        {
+            Assert.Equal(client, selected);
+            calls++;
+            return CliCredential.Create(key, "https://current.example", authMode: ClaudeAuthMode.ApiKey);
+        });
+        try
+        {
+            var options = Options(client: client);
+            Assert.Equal("test-key-a", workspace.ResolveCredential(options).ApiKey);
+            key = "test-key-b";
+            var credential = workspace.ResolveCredential(options);
+            Assert.Equal("test-key-b", credential.ApiKey);
+            Assert.Equal(ClaudeAuthMode.ApiKey, credential.AuthMode);
+            Assert.Equal(2, calls);
+            Assert.Equal("sk-custom-fixture", workspace.ResolveCredential(Options(PrepareMode.CustomProvider, client)).ApiKey);
+            Assert.Equal(2, calls);
+        }
+        finally { workspace.Shutdown(); }
+    }
+
     [Fact]
     public void CustomProviderUsesOnlyTheSuppliedAddressAndKey()
     {

@@ -1,21 +1,18 @@
 ﻿param(
     [string]$ExePath = (Join-Path $PSScriptRoot '..\dist\RetryProxy.exe'),
     [switch]$Automatic,
-    [switch]$Interrupt,
-    [switch]$RetryPreparation,
-    [switch]$CancelPreparation,
     [switch]$NoScreenshot
 )
 # C# 版保活验收（移植自 D:\API-Proxy\tests\verify_keepalive_exe.ps1，PowerShell 7 + UIAutomation）。
-# 通道保活开关与间隔在「通道管理」页；独立准备的验收见 verify_preparation.ps1。
-# 通道切换通过 ComboBox 的 ExpandCollapse + SelectionItem；准备完成/终止用 Snackbar 提示而非带“确定”的弹窗，不再点“确定”；
-# 间隔文本框可访问名为“保活间隔分钟”；开关是 ToggleSwitch（TogglePattern，控件类型 Button）。
+# 默认验证通道自动保活、真实请求让行及两个客户端各自的保活设置；-Automatic 仅保留命令兼容。
+# 通道设置从供应商页的代理设置抽屉进入；独立准备成功/重试/取消由 verify_preparation.ps1 和 xUnit 覆盖。
 
 $ErrorActionPreference = 'Stop'
-if (@($Automatic.IsPresent, $Interrupt.IsPresent, $RetryPreparation.IsPresent, $CancelPreparation.IsPresent).Where({ $_ }).Count -gt 1) { throw '各保活验收模式必须分别运行' }
 $ExePath = (Resolve-Path -LiteralPath $ExePath).ProviderPath
 $distDir = Split-Path -Parent $ExePath
 $oldConfig = $env:RETRY_PROXY_CONFIG_JSON
+$oldClaudeHome = $env:CLAUDE_CONFIG_DIR
+$oldCodexHome = $env:CODEX_HOME
 $runtime = Join-Path ([IO.Path]::GetTempPath()) ('retry-client-validation-' + [guid]::NewGuid().ToString('N'))
 $oldCli = $env:RETRY_PROXY_CODEX_CLI
 $oldCliEvents = $env:RETRY_PROXY_FAKE_CLI_EVENTS
@@ -68,49 +65,35 @@ function Write-ControlDiagnostics {
     return $diagnosticPath
 }
 
-function Invoke-WindowButton([string]$Name) {
-    $deadline = [DateTime]::UtcNow.AddSeconds(10)
-    do {
-        foreach ($button in (Find-ByName $Name)) {
-            if (-not $button.Current.IsEnabled) { continue }
-            $pattern = $null
-            if ($button.TryGetCurrentPattern([Windows.Automation.InvokePattern]::Pattern, [ref]$pattern)) { $pattern.Invoke(); return }
-            if ($button.TryGetCurrentPattern([Windows.Automation.TogglePattern]::Pattern, [ref]$pattern)) { $pattern.Toggle(); return }
-            if ($button.TryGetCurrentPattern([Windows.Automation.SelectionItemPattern]::Pattern, [ref]$pattern)) { $pattern.Select(); return }
-            # 导航项：同名的是容器 DataItem / 文本，真正带 SelectionItem 的 TabItem 在其子树里。
-            foreach ($child in $button.FindAll([Windows.Automation.TreeScope]::Descendants, [Windows.Automation.Condition]::TrueCondition)) {
-                if ($child.TryGetCurrentPattern([Windows.Automation.SelectionItemPattern]::Pattern, [ref]$pattern)) { $pattern.Select(); return }
-                if ($child.TryGetCurrentPattern([Windows.Automation.InvokePattern]::Pattern, [ref]$pattern)) { $pattern.Invoke(); return }
-            }
-        }
-        Start-Sleep -Milliseconds 100
-    } while ([DateTime]::UtcNow -lt $deadline)
-    throw "找不到程序按钮：$Name；控件记录：$(Write-ControlDiagnostics)"
+function Find-ById([string]$Id) {
+    $condition = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::AutomationIdProperty, $Id)
+    return (Get-Root).FindFirst([Windows.Automation.TreeScope]::Descendants, $condition)
 }
 
-function Select-Channel([string]$ItemName) {
-    $deadline = [DateTime]::UtcNow.AddSeconds(10)
-    do {
-        foreach ($combo in (Find-ByName '通道选择')) {
-            $expand = $null
-            if (-not $combo.TryGetCurrentPattern([Windows.Automation.ExpandCollapsePattern]::Pattern, [ref]$expand)) { continue }
-            $expand.Expand()
-            Start-Sleep -Milliseconds 300
-            $condition = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::NameProperty, $ItemName)
-            $item = $combo.FindFirst([Windows.Automation.TreeScope]::Descendants, $condition)
-            if ($null -eq $item) { $item = (Get-Root).FindFirst([Windows.Automation.TreeScope]::Descendants, $condition) }
-            if ($null -ne $item) {
-                $select = $item.GetCurrentPattern([Windows.Automation.SelectionItemPattern]::Pattern)
-                $select.Select()
-                Start-Sleep -Milliseconds 200
-                try { $expand.Collapse() } catch {}
-                return
-            }
-            try { $expand.Collapse() } catch {}
-        }
-        Start-Sleep -Milliseconds 100
-    } while ([DateTime]::UtcNow -lt $deadline)
-    throw "通道选择里找不到条目：$ItemName；控件记录：$(Write-ControlDiagnostics)"
+function Invoke-ById([string]$Id) {
+    Wait-Condition { $null -ne (Find-ById $Id) } "找不到控件：$Id"
+    $element = Find-ById $Id
+    $pattern = $null
+    if ($element.TryGetCurrentPattern([Windows.Automation.InvokePattern]::Pattern, [ref]$pattern)) { $pattern.Invoke(); return }
+    if ($element.TryGetCurrentPattern([Windows.Automation.TogglePattern]::Pattern, [ref]$pattern)) { $pattern.Toggle(); return }
+    if ($element.TryGetCurrentPattern([Windows.Automation.SelectionItemPattern]::Pattern, [ref]$pattern)) { $pattern.Select(); return }
+    throw "控件不支持操作：$Id"
+}
+
+function Set-Field([string]$Id, [string]$Value) {
+    $element = Find-ById $Id
+    $pattern = $null
+    if ($element.TryGetCurrentPattern([Windows.Automation.ValuePattern]::Pattern, [ref]$pattern)) { $pattern.SetValue($Value); return }
+    $condition = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ControlTypeProperty, [Windows.Automation.ControlType]::Edit)
+    foreach ($edit in $element.FindAll([Windows.Automation.TreeScope]::Descendants, $condition)) {
+        if ($edit.TryGetCurrentPattern([Windows.Automation.ValuePattern]::Pattern, [ref]$pattern)) { $pattern.SetValue($Value); return }
+    }
+    throw "字段不可编辑：$Id"
+}
+
+function Open-ProxySettings {
+    Invoke-ById 'ProxySettings'
+    Wait-Condition { $null -ne (Find-ById 'DrawerKeepAlive') } '代理设置抽屉未打开'
 }
 
 function Invoke-NavigationItem([string]$Name) {
@@ -131,53 +114,52 @@ function Invoke-NavigationItem([string]$Name) {
     throw "找不到导航项：$Name；控件记录：$(Write-ControlDiagnostics)"
 }
 
-function Get-KeepaliveToggle {
-    foreach ($element in (Find-ByName '本通道保活')) {
-        $pattern = $null
-        if ($element.TryGetCurrentPattern([Windows.Automation.TogglePattern]::Pattern, [ref]$pattern)) { return $element }
-    }
-    return $null
-}
-
 function Assert-KeepaliveControls([bool]$Enabled, [string]$Minutes) {
     Wait-Condition {
-        $toggle = Get-KeepaliveToggle
-        if ($null -eq $toggle) { return $false }
+        $toggle = Find-ById 'DrawerKeepAlive'
+        $box = Find-ById 'ChannelKeepAliveMinutes'
+        if ($null -eq $toggle -or $null -eq $box) { return $false }
         $pattern = $toggle.GetCurrentPattern([Windows.Automation.TogglePattern]::Pattern)
         if (($pattern.Current.ToggleState -eq [Windows.Automation.ToggleState]::On) -ne $Enabled) { return $false }
-        foreach ($box in (Find-ByName '保活间隔分钟')) {
-            $value = $null
-            if ($box.TryGetCurrentPattern([Windows.Automation.ValuePattern]::Pattern, [ref]$value) -and $value.Current.Value -eq $Minutes) { return $true }
-        }
-        return $false
-    } "通道保活设置错误：开关应为 $Enabled，间隔应为 $Minutes 分钟"
-}
-
-function Toggle-Keepalive {
-    $toggle = Get-KeepaliveToggle
-    if ($null -eq $toggle) { throw "找不到本通道保活开关；控件记录：$(Write-ControlDiagnostics)" }
-    $pattern = $toggle.GetCurrentPattern([Windows.Automation.TogglePattern]::Pattern)
-    $pattern.Toggle()
+        $value = $box.GetCurrentPattern([Windows.Automation.ValuePattern]::Pattern)
+        return $value.Current.Value -eq $Minutes
+    } "保活设置错误：开关应为 $Enabled，间隔应为 $Minutes 分钟"
 }
 
 function Verify-IndependentChannelControls {
-    Assert-KeepaliveControls $Automatic.IsPresent '0.5'
-    Toggle-Keepalive
-    Assert-KeepaliveControls (-not $Automatic.IsPresent) '0.5'
-    Select-Channel "Claude Code 校验通道 · $otherProxyPort · 已停止"
+    Open-ProxySettings
+    Assert-KeepaliveControls $false '0.5'
+    Set-Field 'ChannelKeepAliveMinutes' '0.6'
+    Invoke-ById 'DrawerSave'
+    Wait-Condition { $null -eq (Find-ById 'DrawerKeepAlive') } '代理设置抽屉未关闭'
+    Open-ProxySettings
+    Assert-KeepaliveControls $false '0.6'
+    Set-Field 'ChannelKeepAliveMinutes' '0.5'
+    Invoke-ById 'DrawerSave'
+    Wait-Condition { $null -eq (Find-ById 'DrawerKeepAlive') } '代理设置抽屉未关闭'
+    Invoke-ById 'SelectClaude'
+    Open-ProxySettings
     Assert-KeepaliveControls $false '9'
-    Toggle-Keepalive
+    Invoke-ById 'DrawerKeepAlive'
+    Invoke-ById 'DrawerSave'
+    Wait-Condition { $null -eq (Find-ById 'DrawerKeepAlive') } '代理设置抽屉未关闭'
+    Invoke-ById 'SelectCodex'
+    Open-ProxySettings
+    Assert-KeepaliveControls $false '0.5'
+    Invoke-ById 'DrawerKeepAlive'
+    Invoke-ById 'DrawerSave'
+    Wait-Condition { $null -eq (Find-ById 'DrawerKeepAlive') } '代理设置抽屉未关闭'
+    Invoke-ById 'SelectClaude'
+    Open-ProxySettings
     Assert-KeepaliveControls $true '9'
-    Select-Channel "客户端校验通道 · $proxyPort · 运行中"
-    Assert-KeepaliveControls (-not $Automatic.IsPresent) '0.5'
-    Toggle-Keepalive
-    Assert-KeepaliveControls $Automatic.IsPresent '0.5'
-    Select-Channel "Claude Code 校验通道 · $otherProxyPort · 已停止"
-    Assert-KeepaliveControls $true '9'
-    Toggle-Keepalive
-    Assert-KeepaliveControls $false '9'
-    Select-Channel "客户端校验通道 · $proxyPort · 运行中"
-    Assert-KeepaliveControls $Automatic.IsPresent '0.5'
+    Invoke-ById 'DrawerKeepAlive'
+    Invoke-ById 'DrawerSave'
+    Wait-Condition { $null -eq (Find-ById 'DrawerKeepAlive') } '代理设置抽屉未关闭'
+    Invoke-ById 'SelectCodex'
+    Open-ProxySettings
+    Assert-KeepaliveControls $true '0.5'
+    Invoke-ById 'DrawerCancel'
+    Wait-Condition { $null -eq (Find-ById 'DrawerKeepAlive') } '代理设置抽屉未关闭'
 }
 
 New-Item -ItemType Directory -Path $runtime | Out-Null
@@ -198,13 +180,19 @@ public static class KeepaliveNative {
     [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr handle, uint message, UIntPtr value, IntPtr detail);
 }
 '@
-    Copy-Item -LiteralPath $ExePath -Destination (Join-Path $runtime 'RetryProxy.exe')
-    if (Test-Path -LiteralPath (Join-Path $distDir 'User')) {
-        Copy-Item -LiteralPath (Join-Path $distDir 'User') -Destination (Join-Path $runtime 'User') -Recurse
+    Get-ChildItem -LiteralPath $distDir -File | Where-Object { $_.Name -match '\.(exe|dll)$|\.(deps|runtimeconfig)\.json$' } | Copy-Item -Destination $runtime
+    $translations = Join-Path $distDir 'User\I18n'
+    if (Test-Path -LiteralPath $translations) {
+        New-Item -ItemType Directory -Path (Join-Path $runtime 'User') -Force | Out-Null
+        Copy-Item -LiteralPath $translations -Destination (Join-Path $runtime 'User\I18n') -Recurse
     }
+    $env:CLAUDE_CONFIG_DIR = Join-Path $runtime 'clients\claude'
+    $env:CODEX_HOME = Join-Path $runtime 'clients\codex'
+    New-Item -ItemType Directory -Path $env:CLAUDE_CONFIG_DIR, $env:CODEX_HOME -Force | Out-Null
+    [IO.File]::WriteAllText((Join-Path $env:CLAUDE_CONFIG_DIR 'settings.json'), '{}', [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText((Join-Path $env:CODEX_HOME 'config.toml'), '', [Text.UTF8Encoding]::new($false))
     $fakeCliPath = Join-Path $runtime 'codex.ps1'
-    if ($Interrupt -or $CancelPreparation) { New-Item -ItemType File -Path (Join-Path $runtime 'hold-second') | Out-Null }
-    if ($RetryPreparation) { Set-Content -LiteralPath (Join-Path $runtime 'bootstrap-failures') -Value '2' -Encoding ascii }
+    New-Item -ItemType File -Path (Join-Path $runtime 'hold-second') | Out-Null
     @'
 $utf8 = [Text.UTF8Encoding]::new($false)
 [Console]::InputEncoding = $utf8
@@ -226,15 +214,6 @@ while ($null -ne $line) {
         'initialize' { [Console]::WriteLine((@{ id = $id; result = @{} } | ConvertTo-Json -Depth 10 -Compress)) }
         'initialized' { $initialized = -not ($message.PSObject.Properties.Name -contains 'params') }
         'config/read' {
-            $failurePath = Join-Path (Split-Path $env:RETRY_PROXY_FAKE_CLI_EVENTS) 'bootstrap-failures'
-            if (Test-Path -LiteralPath $failurePath) {
-                $remaining = [int](Get-Content -LiteralPath $failurePath -Raw)
-                if ($remaining -gt 0) {
-                    Set-Content -LiteralPath $failurePath -Value ($remaining - 1) -Encoding ascii
-                    [Console]::WriteLine((@{ id = $id; error = @{ code = -32603; message = 'service temporarily unavailable' } } | ConvertTo-Json -Depth 10 -Compress))
-                    break
-                }
-            }
             if (-not $initialized) {
                 [Console]::WriteLine((@{ id = $id; error = @{ code = -32600; message = 'initialized notification must not contain params' } } | ConvertTo-Json -Depth 10 -Compress))
             } else {
@@ -355,13 +334,14 @@ while ($null -ne $line) {
     }
     Wait-Condition { Test-Path -LiteralPath (Join-Path $runtime 'upstream.ready') } '模拟上游未启动'
     $config = @{
-        schema_version = 6; upstream_base_url = "http://127.0.0.1:$upstreamPort"; listen_port = $proxyPort
-        max_retries = 0; timeout_seconds = 10.0; base_delay_seconds = 0.0; max_delay_seconds = 0.0
-        desired_running = $true; selected_route_id = 'client-test'
-        providers = @(@{ name = '客户端格式验证'; base_url = "http://127.0.0.1:$upstreamPort" })
+        schema_version = 7; selected_route_id = 'client-test'
+        providers = @(
+            @{ id = 'codex-provider'; client_type = 'codex'; name = '客户端格式验证'; base_url = "http://127.0.0.1:$upstreamPort"; keys = @(@{ id = 'codex-key'; name = '测试'; api_key = 'local-validation-token' }) },
+            @{ id = 'claude-provider'; client_type = 'claude'; name = 'Claude 设置验证'; base_url = "http://127.0.0.1:$upstreamPort"; keys = @(@{ id = 'claude-key'; name = '测试'; api_key = 'fixture-claude-key' }) }
+        )
         routes = @(
-            @{ id = 'client-test'; name = '客户端校验通道'; provider_name = '客户端格式验证'; client_type = 'codex'; listen_port = $proxyPort; max_retries = 0; timeout_seconds = 10.0; base_delay_seconds = 0.0; max_delay_seconds = 0.0; desired_running = $true; keepalive_enabled = $Automatic.IsPresent; keepalive_idle_minutes = 0.5 },
-            @{ id = 'claude-test'; name = 'Claude Code 校验通道'; provider_name = '客户端格式验证'; client_type = 'claude'; listen_port = $otherProxyPort; desired_running = $false; keepalive_enabled = $false; keepalive_idle_minutes = 9.0 }
+            @{ id = 'client-test'; name = 'Codex'; current_provider_id = 'codex-provider'; current_key_id = 'codex-key'; local_token = '00112233445566778899aabbccddeeff'; client_type = 'codex'; listen_port = $proxyPort; max_retries = 0; timeout_seconds = 10.0; base_delay_seconds = 0.0; max_delay_seconds = 0.0; desired_running = $true; keepalive_enabled = $false; keepalive_idle_minutes = 0.5 },
+            @{ id = 'claude-test'; name = 'Claude Code'; current_provider_id = 'claude-provider'; current_key_id = 'claude-key'; local_token = 'ffeeddccbbaa99887766554433221100'; client_type = 'claude'; listen_port = $otherProxyPort; desired_running = $true; keepalive_enabled = $false; keepalive_idle_minutes = 9.0 }
         )
     } | ConvertTo-Json -Depth 8
     $env:RETRY_PROXY_CONFIG_JSON = $config
@@ -371,49 +351,32 @@ while ($null -ne $line) {
         catch { return $false }
     } '程序监听未启动' 30
     Wait-Condition { $app.Refresh(); $app.MainWindowHandle -ne 0 -and $app.MainWindowTitle -eq 'LLM Retry Proxy' } '程序窗口未创建'
-    Invoke-NavigationItem '通道管理'
-    Wait-Condition { $null -ne (Get-KeepaliveToggle) } '通道管理页未显示保活控件'
+    Wait-Condition { $null -ne (Find-ById 'ProxySettings') } '默认供应商页未显示代理设置'
+    Invoke-ById 'SelectCodex'
     Verify-IndependentChannelControls
     Write-Host '通道独立设置检查通过。'
     $request = @{ model = 'client-format-model'; stream = $true; store = $false; instructions = 'required client system instructions'; tools = @(@{ type = 'function'; name = 'client_tool'; parameters = @{ type = 'object' } }); input = @(@{ role = 'user'; content = @(@{ type = 'input_text'; text = '正常客户端验证消息' }) }) } | ConvertTo-Json -Depth 10
     $null = Invoke-WebRequest "http://127.0.0.1:$proxyPort/v1/responses?beta=a%20b" -Method Post -ContentType 'application/json; charset=utf-8' -Headers @{ 'User-Agent' = 'client-validation/1'; originator = 'cli-client'; Authorization = 'Bearer local-validation-token' } -Body ([Text.Encoding]::UTF8.GetBytes($request)) -TimeoutSec 15
     Wait-Condition { (Get-Content -LiteralPath $logPath -Raw) -match '输入 40 / 输出 12 token' } '正常客户端请求未完成'
-    if ($Automatic) {
-        Wait-Condition { (Get-Content -LiteralPath $logPath -Raw) -match '供应商保活.*回答：' } '空闲 30 秒后未执行自动保活' 45
-    } else {
-        for ($round = 1; $round -le 2; $round++) {
-            Invoke-WindowButton '一键准备'
-            if (($Interrupt -or $CancelPreparation) -and $round -eq 2) {
-                Wait-Condition { (Get-Content -LiteralPath $cliEventPath -Raw) -match 'HELD' } '第二轮保活没有进入等待状态'
-            }
-            if ($CancelPreparation -and $round -eq 2) {
-                Invoke-WindowButton '终止准备'
-                Wait-Condition { (Get-Content -LiteralPath $logPath -Raw) -match '准备已终止' } '主动终止准备没有生效'
-                Start-Sleep -Seconds 3
-                continue
-            }
-            if ($Interrupt -and $round -eq 2) {
-                $null = Invoke-WebRequest "http://127.0.0.1:$proxyPort/v1/responses?beta=a%20b" -Method Post -ContentType 'application/json; charset=utf-8' -Headers @{ 'User-Agent' = 'client-validation/1'; originator = 'cli-client'; Authorization = 'Bearer local-validation-token' } -Body ([Text.Encoding]::UTF8.GetBytes($request)) -TimeoutSec 15
-                Wait-Condition { (Get-Content -LiteralPath $logPath -Raw) -match '本轮已中断：已让行真实请求' } '新请求没有正常中断保活'
-            }
-            Wait-Condition { @((Get-Content -LiteralPath $logPath) | Where-Object { $_ -match '准备完成' }).Count -eq $round } '一键准备未完成'
-        }
-    }
+    Wait-Condition { (Get-Content -LiteralPath $logPath -Raw) -match '\[通道保活\].*回答：' } '空闲 30 秒后未执行自动保活' 45
+    # 第二轮由模拟 CLI 卡住，真实请求到达后必须让行，不以旧手动准备入口代替。
+    Wait-Condition { (Get-Content -LiteralPath $cliEventPath -Raw) -match 'HELD' } '第二轮自动保活没有进入等待状态' 45
+    $null = Invoke-WebRequest "http://127.0.0.1:$proxyPort/v1/responses?beta=a%20b" -Method Post -ContentType 'application/json; charset=utf-8' -Headers @{ 'User-Agent' = 'client-validation/1'; originator = 'cli-client'; Authorization = 'Bearer local-validation-token' } -Body ([Text.Encoding]::UTF8.GetBytes($request)) -TimeoutSec 15
+    Wait-Condition { (Get-Content -LiteralPath $logPath -Raw) -match '本轮已中断：已让行真实请求' } '真实请求没有中断自动保活'
+    Invoke-ById 'ChannelKeepAlive'
+    Wait-Condition { (Invoke-RestMethod "http://127.0.0.1:$proxyPort/_retry/health" -TimeoutSec 2).metrics.active_requests -eq 0 } '真实请求尚未结束'
     $events = @(Get-Content -LiteralPath $eventPath | ForEach-Object { $_ | ConvertFrom-Json })
     $cliEvents = @(Get-Content -LiteralPath $cliEventPath | Where-Object { $_ -match '^\{' } | ForEach-Object { $_ | ConvertFrom-Json })
-    $expectedRealCount = if ($Interrupt) { 2 } else { 1 }
-    $expectedCliCount = if ($Automatic) { 1 } elseif ($Interrupt) { 3 } else { 2 }
+    $expectedRealCount = 2
+    $expectedCliCount = 2
     $expectedCount = $expectedRealCount + $expectedCliCount
     if ($events.Count -ne $expectedCount -or @($events | Where-Object { $_.issues.Count -gt 0 }).Count -ne 0) { throw "客户端请求格式校验失败：$($events.Count)/$expectedCount，issues=$(($events | ForEach-Object { $_.issues -join '+' }) -join ';')" }
     if ($cliEvents.Count -ne $expectedCliCount) { throw "CLI 后台消息数量错误：$($cliEvents.Count)" }
     $health = Invoke-RestMethod "http://127.0.0.1:$proxyPort/_retry/health" -TimeoutSec 2
     if (@($events | Where-Object background).Count -ne $expectedCliCount) { throw 'CLI 保活没有完整经过本地代理' }
     if ($health.metrics.total_requests -ne $expectedRealCount) { throw '保活被计入真实请求统计' }
-    $expectedCompleted = if ($Automatic -or $CancelPreparation) { 1 } else { 2 }
-    $expectedInterrupted = if ($Interrupt -or $CancelPreparation) { 1 } else { 0 }
-    $expectedFailed = if ($RetryPreparation) { 2 } else { 0 }
-    $expectedStatistics = "成功 $expectedCompleted 轮 · 失败 $expectedFailed 轮 · 中断 $expectedInterrupted 轮"
-    if ($RetryPreparation -and @((Get-Content -LiteralPath $cliEventPath) | Where-Object { $_ -eq 'START' }).Count -ne 3) { throw '一键准备没有在前两次失败后重新启动客户端' }
+    $expectedStatistics = '成功 1 轮 · 失败 0 轮 · 中断 1 轮'
+    Invoke-NavigationItem '统计'
     Wait-Condition {
         $root = Get-Root
         $elements = $root.FindAll([Windows.Automation.TreeScope]::Descendants, [Windows.Automation.Condition]::TrueCondition)
@@ -451,7 +414,7 @@ public static class ValidationWindow {
             $image.Save($screenshotPath, [Drawing.Imaging.ImageFormat]::Png)
         } finally { $graphics.Dispose(); $image.Dispose() }
     }
-    [pscustomobject]@{ IndependentChannels = $true; Requests = $events.Count; CliMessages = $cliEvents.Count; Automatic = $Automatic.IsPresent; Interrupted = $Interrupt.IsPresent; Retried = $RetryPreparation.IsPresent; Cancelled = $CancelPreparation.IsPresent; Statistics = $expectedStatistics; RealRequests = $health.metrics.total_requests; LogPath = $logPath; EventsPath = $eventPath; CliEventsPath = $cliEventPath; Screenshot = $screenshotPath }
+    [pscustomobject]@{ IndependentChannels = $true; Requests = $events.Count; CliMessages = $cliEvents.Count; Automatic = $true; Interrupted = $true; Statistics = $expectedStatistics; RealRequests = $health.metrics.total_requests; LogPath = $logPath; EventsPath = $eventPath; CliEventsPath = $cliEventPath; Screenshot = $screenshotPath }
 } catch {
     if (Test-Path -LiteralPath $logPath) { Get-Content -LiteralPath $logPath -Encoding UTF8 -Tail 30 | Write-Host }
     throw
@@ -460,6 +423,10 @@ public static class ValidationWindow {
     else { Remove-Item Env:RETRY_PROXY_CONFIG_JSON -ErrorAction SilentlyContinue }
     if ($null -ne $oldCli) { $env:RETRY_PROXY_CODEX_CLI = $oldCli }
     else { Remove-Item Env:RETRY_PROXY_CODEX_CLI -ErrorAction SilentlyContinue }
+    if ($null -ne $oldClaudeHome) { $env:CLAUDE_CONFIG_DIR = $oldClaudeHome }
+    else { Remove-Item Env:CLAUDE_CONFIG_DIR -ErrorAction SilentlyContinue }
+    if ($null -ne $oldCodexHome) { $env:CODEX_HOME = $oldCodexHome }
+    else { Remove-Item Env:CODEX_HOME -ErrorAction SilentlyContinue }
     $env:PATH = $oldPath
     if ($null -ne $oldCliEvents) { $env:RETRY_PROXY_FAKE_CLI_EVENTS = $oldCliEvents }
     else { Remove-Item Env:RETRY_PROXY_FAKE_CLI_EVENTS -ErrorAction SilentlyContinue }

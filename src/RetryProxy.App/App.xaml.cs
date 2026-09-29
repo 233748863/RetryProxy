@@ -69,18 +69,20 @@ public partial class App : Application
             services.AddSingleton<IContentDialogService, ContentDialogService>();
             services.AddSingleton<WorkspaceService>();
             services.AddSingleton<Dialogs>();
+            services.AddSingleton<DrawerService>();
+            services.AddSingleton<KeySwitchService>();
 
             // Main window with navigation
             services.AddView<INavigationWindow, MainWindow, MainWindowViewModel>();
             services.AddSingleton<NotifyIconViewModel>();
 
             // Pages
-            services.AddView<HomePage, HomePageViewModel>();
-            services.AddView<OverviewPage, OverviewPageViewModel>();
-            services.AddView<ChannelPage, ChannelPageViewModel>();
+            services.AddView<ProviderPage, ProviderPageViewModel>();
+            services.AddView<StatisticsPage, StatisticsPageViewModel>();
+            services.AddSingleton<OverviewPageViewModel>();
             services.AddView<PreparationPage, PreparationPageViewModel>();
             services.AddView<LogPage, LogPageViewModel>();
-            services.AddView<CachePage, CachePageViewModel>();
+            services.AddSingleton<CachePageViewModel>();
             services.AddView<SettingsPage, SettingsPageViewModel>();
             services.AddView<AboutPage, AboutPageViewModel>();
 

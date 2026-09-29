@@ -1,0 +1,253 @@
+using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.Input;
+using RetryProxy.Core.Config;
+using RetryProxy.Core.Metrics;
+using RetryProxy.Core.Service;
+using RetryProxy.Core.Workspace;
+using RetryProxy.Service;
+using RetryProxy.Service.I18n;
+using System;
+using System.Collections.Generic;
+using System.Collections.ObjectModel;
+using System.Diagnostics;
+using System.Linq;
+using System.Threading.Tasks;
+using System.Windows;
+
+namespace RetryProxy.ViewModel.Pages;
+
+public partial class ProviderPageViewModel : ViewModel
+{
+    private readonly WorkspaceService _service;
+    private readonly DrawerService _drawers;
+    private readonly Dialogs _dialogs;
+    private readonly KeySwitchService _switches;
+    private ProxyConfig? _displayedConfig;
+    private ClientType? _displayedClient;
+    private long _languageRevision = -1;
+    private bool _syncing;
+    internal ProxyWorkspace Workspace => _service.Workspace;
+    public ObservableCollection<ProviderCardViewModel> Providers { get; } = [];
+    [ObservableProperty] private string _query = string.Empty;
+    [ObservableProperty] private bool _showSearch;
+    [ObservableProperty] private bool _hasProviders;
+    [ObservableProperty] private bool _hasResults;
+    [ObservableProperty] private string _stateText = string.Empty;
+    [ObservableProperty] private string _stateReason = string.Empty;
+    [ObservableProperty] private bool _canStart;
+    [ObservableProperty] private string _address = string.Empty;
+    [ObservableProperty] private string _currentKey = string.Empty;
+    [ObservableProperty] private string _today = string.Empty;
+    [ObservableProperty] private bool _keepAliveEnabled;
+    [ObservableProperty] private bool _hasCurrentProvider;
+    public event Action<string>? LocateRequested;
+    internal static string T(string text) => I18nService.Instance.Translate(text);
+
+    public ProviderPageViewModel(WorkspaceService service, DrawerService drawers, Dialogs dialogs, KeySwitchService switches)
+    {
+        _service = service;
+        _drawers = drawers;
+        _dialogs = dialogs;
+        _switches = switches;
+        service.Refreshed += Refresh;
+        Refresh();
+    }
+
+    public override void OnNavigatedTo() => Refresh();
+
+    private void Refresh()
+    {
+        var route = Workspace.SelectedRouteRef();
+        var provider = route is null ? null : Workspace.Config.ProviderById(route.CurrentProviderId);
+        var state = route is null ? ServiceState.Stopped : Workspace.RouteState(route.Id);
+        StateText = T(UiText.StateLabel(state));
+        StateReason = provider is null ? T("请先添加供应商和 Key")
+            : state == ServiceState.Error ? Workspace.Services.GetValueOrDefault(route!.Id)?.StartupError ?? T("代理启动失败")
+            : state == ServiceState.Stopped ? T("代理已手动停止或尚未启动") : string.Empty;
+        CanStart = provider is not null && state is ServiceState.Stopped or ServiceState.Error;
+        var localUrl = route?.LocalUrl ?? string.Empty;
+        if (route is not null && provider is not null)
+        {
+            try { localUrl = Workspace.Config.RuntimeConfigFor(route.Id).LocalUrl; }
+            catch (ConfigException) { }
+        }
+        Address = route?.ClientType == ClientType.Codex ? localUrl + "/v1" : localUrl;
+        var key = route is null ? null : Workspace.Config.CurrentKeyOf(route);
+        CurrentKey = provider is null ? T("未选择供应商") : key is null ? $"{provider.Name} · {T("尚无 Key")}" : $"{provider.Name} · {key.Name}";
+        HasCurrentProvider = provider is not null;
+        var metrics = route is not null && Workspace.Services.TryGetValue(route.Id, out var service) ? service.Metrics.Snapshot() : new MetricsSnapshot();
+        Today = string.Format(T("今日 {0} · 成功 {1} · 重试 {2} · 失败 {3}"), metrics.TotalRequests, metrics.SuccessfulRequests, metrics.RetryCount, metrics.FailedRequests);
+        _syncing = true;
+        KeepAliveEnabled = route?.KeepaliveEnabled ?? false;
+        _syncing = false;
+        if (!ReferenceEquals(_displayedConfig, Workspace.Config) || _displayedClient != Workspace.SelectedClient
+            || _languageRevision != I18nService.Instance.Revision)
+        {
+            _displayedConfig = Workspace.Config;
+            _displayedClient = Workspace.SelectedClient;
+            _languageRevision = I18nService.Instance.Revision;
+            RefreshCards();
+        }
+    }
+
+    private void RefreshCards()
+    {
+        var all = Workspace.Config.ProvidersFor(Workspace.SelectedClient).ToList();
+        HasProviders = all.Count > 0;
+        ShowSearch = all.Count > 8;
+        var query = ShowSearch ? Query.Trim() : string.Empty;
+        var visible = all.Where(provider => query.Length == 0 || new[] { provider.Name, provider.BaseUrl, provider.Notes }
+            .Concat(provider.Keys.SelectMany(key => new[] { key.Name, key.Notes })).Any(value => value.Contains(query, StringComparison.OrdinalIgnoreCase))).ToList();
+        // 仅在配置/筛选变化时更新卡片，后台请求统计刷新不重建 50×5 个 Key 行。
+        var existing = Providers.ToDictionary(item => item.Id);
+        var rows = visible.Select(provider =>
+        {
+            var row = existing.GetValueOrDefault(provider.Id) ?? new ProviderCardViewModel(this, provider.Id);
+            row.Refresh(provider);
+            return row;
+        }).ToList();
+        CollectionSync.Update(Providers, rows);
+        HasResults = Providers.Count > 0;
+    }
+
+    partial void OnQueryChanged(string value) => RefreshCards();
+    partial void OnKeepAliveEnabledChanged(bool value)
+    {
+        if (_syncing || Workspace.SelectedRouteRef() is not { } route) return;
+        Workspace.SetKeepAlive(route.Id, value, route.KeepaliveIdleMinutes, route.KeepaliveContextLimit, route.KeepaliveReasoningEffort);
+        _service.Flush();
+    }
+
+    [RelayCommand] private Task AddProvider() => _drawers.EditProviderAsync(null, Workspace.SelectedClient);
+    [RelayCommand] private Task ProxySettings() => Workspace.SelectedRouteRef() is { } route ? _drawers.EditProxyAsync(route.Id) : Task.CompletedTask;
+    [RelayCommand] private void StartProxy()
+    {
+        if (Workspace.SelectedRouteRef() is { } route) Workspace.StartRoute(route.Id);
+        _service.Flush();
+    }
+    [RelayCommand] private void CopyAddress() => Copy(Address);
+    [RelayCommand] private void Locate()
+    {
+        Query = string.Empty;
+        if (Workspace.SelectedRouteRef() is { } route) LocateRequested?.Invoke(route.CurrentProviderId);
+    }
+
+    internal Task EditProvider(string id) => _drawers.EditProviderAsync(Workspace.Config.ProviderById(id), Workspace.SelectedClient);
+    internal Task EditKey(string providerId, string? keyId) => _drawers.EditKeyAsync(providerId, keyId);
+    internal void Switch(string providerId, string keyId)
+    {
+        if (Workspace.SelectedRouteRef() is { } route) _switches.Switch(route.Id, providerId, keyId);
+    }
+    internal void Duplicate(string id) => Apply(Workspace.DuplicateProvider(id));
+    internal async Task DeleteProvider(string id)
+    {
+        var provider = Workspace.Config.ProviderById(id);
+        if (provider is null) return;
+        if (Workspace.Config.Routes.Any(route => route.CurrentProviderId == id)) { Apply(T("请先切换到其他供应商的 Key")); return; }
+        if (await _dialogs.ConfirmDeleteAsync("删除供应商", string.Format(T("确认删除供应商“{0}”及其全部 Key？"), provider.Name)))
+            Apply(Workspace.RemoveProvider(id));
+    }
+    internal async Task DeleteKey(string providerId, string keyId)
+    {
+        var provider = Workspace.Config.ProviderById(providerId);
+        var key = provider?.KeyById(keyId);
+        if (key is null) return;
+        if (Workspace.Config.Routes.Any(route => route.CurrentProviderId == providerId && route.CurrentKeyId == keyId)) { Apply(T("请先切换到其他 Key")); return; }
+        if (provider!.Keys.Count == 1) { Apply(T("每个供应商至少保留一个 Key，请改为删除供应商")); return; }
+        if (await _dialogs.ConfirmDeleteAsync("删除 Key", string.Format(T("确认删除 Key“{0}”？"), key.Name)))
+            Apply(Workspace.DeleteKey(providerId, keyId));
+    }
+    internal void CopyKey(string providerId, string keyId) => Copy(Workspace.Config.ProviderById(providerId)?.KeyById(keyId)?.ApiKey ?? string.Empty);
+    private void Copy(string text)
+    {
+        if (text.Length == 0) return;
+        try { Clipboard.SetText(text); }
+        catch (Exception) { Workspace.Notice = T("复制失败，请稍后重试"); }
+    }
+    internal void OpenWebsite(string id)
+    {
+        var url = Workspace.Config.ProviderById(id)?.WebsiteUrl;
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || uri.Scheme is not ("https" or "http")) return;
+        try { Process.Start(new ProcessStartInfo(uri.AbsoluteUri) { UseShellExecute = true }); }
+        catch (Exception) { Workspace.Notice = T("无法打开官网"); }
+    }
+    public void MoveProvider(string id, string target) => Apply(Workspace.MoveProvider(id, target));
+    public void MoveKey(string providerId, string id, string target) => Apply(Workspace.MoveKey(providerId, id, target));
+    private void Apply(string? error)
+    {
+        if (error is not null) Workspace.Notice = error;
+        _service.Flush();
+    }
+}
+
+public partial class ProviderCardViewModel : ObservableObject
+{
+    private readonly ProviderPageViewModel _owner;
+    private ProviderEndpoint? _provider;
+    public string Id { get; }
+    [ObservableProperty] private string _name = string.Empty;
+    [ObservableProperty] private string _host = string.Empty;
+    [ObservableProperty] private string _url = string.Empty;
+    [ObservableProperty] private string _model = string.Empty;
+    [ObservableProperty] private bool _isCurrent;
+    [ObservableProperty] private bool _hasWebsite;
+    [ObservableProperty] private bool _expanded;
+    [ObservableProperty] private bool _canFold;
+    [ObservableProperty] private string _foldText = string.Empty;
+    public ObservableCollection<ProviderKeyRowViewModel> Keys { get; } = [];
+    public ProviderCardViewModel(ProviderPageViewModel owner, string id) { _owner = owner; Id = id; }
+    public void Refresh(ProviderEndpoint provider)
+    {
+        _provider = provider;
+        Name = provider.Name;
+        Url = provider.BaseUrl;
+        Host = Uri.TryCreate(Url, UriKind.Absolute, out var uri) ? uri.Host : Url;
+        Model = provider.Models.Model;
+        HasWebsite = Uri.TryCreate(provider.WebsiteUrl, UriKind.Absolute, out var site) && site.Scheme is "https" or "http";
+        IsCurrent = _owner.Workspace.SelectedRouteRef()?.CurrentProviderId == Id;
+        RefreshKeys();
+    }
+    partial void OnExpandedChanged(bool value) => RefreshKeys();
+    private void RefreshKeys()
+    {
+        if (_provider is null) return;
+        var current = _owner.Workspace.SelectedRouteRef();
+        var selectedKey = IsCurrent ? current?.CurrentKeyId : null;
+        var visible = _provider.Keys.Where((key, index) => Expanded || index < 3 || key.Id == selectedKey).ToList();
+        CanFold = _provider.Keys.Count > 3;
+        FoldText = Expanded ? ProviderPageViewModel.T("收起") : string.Format(ProviderPageViewModel.T("还有 {0} 个 Key"), _provider.Keys.Count - visible.Count);
+        // 当前 Key 排在第 4 位时不显示“还有 0 个”。
+        CanFold = Expanded ? _provider.Keys.Count > 3 : _provider.Keys.Count > visible.Count;
+        Keys.Clear();
+        foreach (var key in visible) Keys.Add(new ProviderKeyRowViewModel(_owner, Id, key, key.Id == selectedKey));
+    }
+    [RelayCommand] private void Fold() => Expanded = !Expanded;
+    [RelayCommand] private Task Edit() => _owner.EditProvider(Id);
+    [RelayCommand] private Task AddKey() => _owner.EditKey(Id, null);
+    [RelayCommand] private void Duplicate() => _owner.Duplicate(Id);
+    [RelayCommand] private Task Delete() => _owner.DeleteProvider(Id);
+    [RelayCommand] private void Website() => _owner.OpenWebsite(Id);
+}
+
+public sealed class ProviderKeyRowViewModel
+{
+    public string ProviderId { get; }
+    public string Id { get; }
+    public string Name { get; }
+    public string MaskedKey { get; }
+    public bool IsCurrent { get; }
+    public string Marker => IsCurrent ? "●" : "○";
+    public string SwitchText => ProviderPageViewModel.T(IsCurrent ? "使用中" : "切换");
+    public IRelayCommand SwitchCommand { get; }
+    public IAsyncRelayCommand EditCommand { get; }
+    public IRelayCommand CopyCommand { get; }
+    public IAsyncRelayCommand DeleteCommand { get; }
+    public ProviderKeyRowViewModel(ProviderPageViewModel owner, string providerId, ProviderKey key, bool current)
+    {
+        ProviderId = providerId; Id = key.Id; Name = key.Name; MaskedKey = key.MaskedKey; IsCurrent = current;
+        SwitchCommand = new RelayCommand(() => owner.Switch(providerId, Id), () => !IsCurrent);
+        EditCommand = new AsyncRelayCommand(() => owner.EditKey(providerId, Id));
+        CopyCommand = new RelayCommand(() => owner.CopyKey(providerId, Id));
+        DeleteCommand = new AsyncRelayCommand(() => owner.DeleteKey(providerId, Id));
+    }
+}

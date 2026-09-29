@@ -2,8 +2,10 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Net.Http;
+using System.Net.Sockets;
 using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
@@ -49,17 +51,25 @@ public sealed class RetryProxy
         "ddd MMM  d HH:mm:ss yyyy",
     };
 
-    private readonly HttpClient _client;
-    private readonly PromptCache _promptCache;
+    /// <summary>Claude 通道多久看一次是否该核对 TLS 指纹；真正的抓取仍由指纹库按 12 小时节流。</summary>
+    private static readonly TimeSpan FingerprintCheckInterval = TimeSpan.FromMinutes(1);
+
+    private static readonly string[] AuthHeaders = { "authorization", "x-api-key", "api-key" };
+
+    /// <summary>http 上游（本机测试、本机另一个程序）。</summary>
+    private readonly HttpClient _httpClient;
+    /// <summary>https 上游：Claude 走 TLS 指纹连接器，Codex 走系统 TLS；两者都按客户端原顺序重排请求头。</summary>
+    private readonly HttpClient _httpsClient;
+    private readonly PromptCache _promptCache = new();
+    private readonly ChannelState _channel;
+    /// <summary>Claude 通道一律创建（默认全应用共用 <see cref="TlsFingerprintStore.Shared"/>），其他通道不触碰指纹组件。</summary>
     private readonly TlsFingerprintConnector? _tlsConnector;
-    /// <summary>连接外层套了 <see cref="HeaderOrderStream"/>：https 的 Claude / Codex 通道。</summary>
-    private readonly bool _reorderHeaders;
     private X509Certificate2? _trustedTestCertificate;
-    /// <summary>只在 Claude 通道连 https 上游时赋值（默认全应用共用 <see cref="TlsFingerprintStore.Shared"/>），其他通道不触碰指纹组件。</summary>
     private TlsFingerprintStore? _tlsFingerprints;
-    private string? _upstreamApiKey;
-    private ClaudeAuthMode _upstreamAuthMode;
-    private string? _localAccessKey;
+    /// <summary>一键准备的后台临时代理：只接受带访问密钥的请求，不按通道参数重试（见 <see cref="AsPreparationProxy"/>）。</summary>
+    private bool _preparationProxy;
+    private long _lastRejectionLogMs;
+    private int _suppressedRejections;
     private Func<double> _randomValue = () => Random.Shared.NextDouble();
 
     public RetryProxy(ProxyConfig config, ProxyLogger logger, ProxyMetrics metrics, CancellationToken cancel, IProxyResolver? proxyResolver = null)
@@ -70,49 +80,43 @@ public sealed class RetryProxy
         Metrics = metrics;
         Cancel = cancel;
         ProxyResolver = proxyResolver ?? SystemProxyResolver.Shared;
-        var timeout = TimeSpan.FromSeconds(config.TimeoutSeconds);
+        _channel = new ChannelState(ChannelSnapshot.FromRuntime(config));
         try
         {
-            var handler = new SocketsHttpHandler
+            // 每条通道按 http / https 各一个客户端；连接超时在连接回调里按当前快照计时，改参数后新连接立即生效。
+            var plain = UpstreamHandler();
+            plain.UseProxy = true;
+            plain.Proxy = new ResolverWebProxy(ProxyResolver);
+            plain.ConnectCallback = (context, token) => TimedConnectAsync(context, token, DialAsync);
+            _httpClient = new HttpClient(plain, disposeHandler: true) { Timeout = Timeout.InfiniteTimeSpan };
+
+            var secure = UpstreamHandler();
+            if (config.ClientType == ClientType.Claude)
             {
-                AllowAutoRedirect = false,
-                AutomaticDecompression = DecompressionMethods.None,
-                UseCookies = false,
-                ConnectTimeout = timeout,
-                UseProxy = true,
-                Proxy = new ResolverWebProxy(ProxyResolver),
-                PooledConnectionIdleTimeout = TimeSpan.FromSeconds(90),
-            };
-            // Claude 通道默认模拟 Claude Code 指纹（TLS 握手 + 请求头原顺序）；供应商都是 https，本机 http 上游（测试）不套 TLS。
-            if (config.ClientType == ClientType.Claude
-                && config.UpstreamBaseUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
-            {
-                // 连接器自行处理系统代理与 TLS；请求改写成 http:// 后 HttpClient 只负责 HTTP/1.1。
+                // Claude 通道模拟 Claude Code 指纹（TLS 握手 + 请求头原顺序）。连接器自行处理系统代理与 TLS，
+                // 请求改写成 http:// 后 HttpClient 只负责 HTTP/1.1。一律创建，切到 https 供应商时不用重建通道。
                 _tlsFingerprints = TlsFingerprintStore.Shared;
-                _tlsConnector = new TlsFingerprintConnector(ProxyResolver, () => _tlsFingerprints!.Current);
-                handler.UseProxy = false;
-                handler.Proxy = null;
-                handler.ConnectCallback = _tlsConnector.ConnectAsync;
-                _reorderHeaders = true;
+                var connector = new TlsFingerprintConnector(ProxyResolver, () => _tlsFingerprints!.Current);
+                _tlsConnector = connector;
+                secure.UseProxy = false;
+                secure.ConnectCallback = (context, token) => TimedConnectAsync(context, token, connector.ConnectAsync);
             }
-            else if (config.ClientType == ClientType.Codex
-                && config.UpstreamBaseUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+            else
             {
                 // Codex 在 Windows 上走 SChannel，TLS 握手与 .NET 默认一致，只需在系统 TLS 之上按 Codex 原顺序重排请求头。
                 // 经 HTTP 系统代理时，到代理的 CONNECT 连接也会经过这里，隧道建好后其上跑的是 TLS 握手字节，不能套重排层。
-                handler.PlaintextStreamFilter = (context, _) => ValueTask.FromResult(context.InitialRequestMessage.Method == HttpMethod.Connect
+                secure.UseProxy = true;
+                secure.Proxy = new ResolverWebProxy(ProxyResolver);
+                secure.ConnectCallback = (context, token) => TimedConnectAsync(context, token, DialAsync);
+                secure.PlaintextStreamFilter = (context, _) => ValueTask.FromResult(context.InitialRequestMessage.Method == HttpMethod.Connect
                     ? context.PlaintextStream
                     : new HeaderOrderStream(context.PlaintextStream));
-                handler.SslOptions.RemoteCertificateValidationCallback = (_, certificate, _, errors) =>
+                secure.SslOptions.RemoteCertificateValidationCallback = (_, certificate, _, errors) =>
                     errors == System.Net.Security.SslPolicyErrors.None
                     || (_trustedTestCertificate is not null && certificate is not null && certificate.GetCertHashString() == _trustedTestCertificate.Thumbprint);
-                _reorderHeaders = true;
             }
 
-            _client = new HttpClient(handler, disposeHandler: true)
-            {
-                Timeout = Timeout.InfiniteTimeSpan,
-            };
+            _httpsClient = new HttpClient(secure, disposeHandler: true) { Timeout = Timeout.InfiniteTimeSpan };
         }
         catch (Exception error)
         {
@@ -121,7 +125,48 @@ public sealed class RetryProxy
 
         KeepAlive = new KeepAliveWatchdog(config.KeepaliveEnabled, TimeSpan.FromSeconds(config.KeepaliveIdleMinutes * 60.0));
         KeepAlive.SetContextLimit((ulong)Math.Max(config.KeepaliveContextLimit, 1));
-        _promptCache = new PromptCache(config.UpstreamBaseUrl);
+    }
+
+    private static SocketsHttpHandler UpstreamHandler() => new()
+    {
+        AllowAutoRedirect = false,
+        AutomaticDecompression = DecompressionMethods.None,
+        UseCookies = false,
+        PooledConnectionIdleTimeout = TimeSpan.FromSeconds(90),
+    };
+
+    /// <summary>
+    /// 建立连接限时：取当前快照的单次超时。到时抛 <see cref="TimeoutException"/>，日志归为“连上游一直连不上”。
+    /// </summary>
+    private async ValueTask<Stream> TimedConnectAsync(SocketsHttpConnectionContext context, CancellationToken token,
+        Func<SocketsHttpConnectionContext, CancellationToken, ValueTask<Stream>> connect)
+    {
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
+        timeout.CancelAfter(TimeSpan.FromSeconds(_channel.Current.TimeoutSeconds));
+        try
+        {
+            return await connect(context, timeout.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException error) when (!token.IsCancellationRequested && timeout.IsCancellationRequested)
+        {
+            throw new TimeoutException("连接上游超时", error);
+        }
+    }
+
+    /// <summary>与 SocketsHttpHandler 默认一致的 TCP 连接（双栈套接字，关闭 Nagle）。</summary>
+    private static async ValueTask<Stream> DialAsync(SocketsHttpConnectionContext context, CancellationToken token)
+    {
+        var socket = new Socket(SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
+        try
+        {
+            await socket.ConnectAsync(context.DnsEndPoint, token).ConfigureAwait(false);
+            return new NetworkStream(socket, ownsSocket: true);
+        }
+        catch
+        {
+            socket.Dispose();
+            throw;
+        }
     }
 
     public ProxyConfig Config { get; }
@@ -155,13 +200,19 @@ public sealed class RetryProxy
         return this;
     }
 
-    /// <summary>是否用 Claude Code 的 TLS 指纹连上游。</summary>
-    public bool UsesTlsFingerprint => _tlsConnector is not null;
+    /// <summary>是否用 Claude Code 的 TLS 指纹连上游：Claude 通道且当前供应商是 https。</summary>
+    public bool UsesTlsFingerprint => _tlsConnector is not null
+        && _channel.Current.UpstreamBaseUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase);
 
-    /// <summary>是否按客户端原顺序与大小写转发请求头（https 的 Claude / Codex 通道）。</summary>
-    public bool ReordersHeaders => _reorderHeaders;
+    /// <summary>当前快照（地址、Key、参数）。</summary>
+    public ChannelSnapshot Snapshot => _channel.Current;
 
-    /// <summary>仅供测试：替换指纹来源，并额外信任测试证书。</summary>
+    /// <summary>
+    /// 换上新快照，之后的每次尝试都用它（PRD-供应商管理 §4.2）。换了"供应商 · Key"时，
+    /// 还没向客户端输出的请求立即放弃当前尝试（含退避等待、等待生成）改用新 Key 重发，返回这类请求的个数；没换 Key 时返回 null。
+    /// </summary>
+    public int? UpdateSnapshot(ChannelSnapshot snapshot) => _channel.Update(snapshot);
+
     /// <summary>仅供测试：Codex 通道的系统 TLS 额外信任这张自签证书。</summary>
     internal RetryProxy WithTrustedTestCertificate(X509Certificate2 certificate)
     {
@@ -169,6 +220,7 @@ public sealed class RetryProxy
         return this;
     }
 
+    /// <summary>仅供测试：替换指纹来源，并额外信任测试证书。</summary>
     internal RetryProxy WithTlsFingerprint(TlsFingerprintStore store, X509Certificate2? trustedRoot)
     {
         if (_tlsConnector is not null)
@@ -181,7 +233,8 @@ public sealed class RetryProxy
     }
 
     /// <summary>
-    /// 使用 TLS 指纹的通道在运行期间定期核对本机 Claude Code 的指纹（多个通道共用一次抓取）。
+    /// Claude 通道在运行期间定期核对本机 Claude Code 的指纹（多个通道共用一次抓取，每 12 小时一次）。
+    /// 核对常开：当前供应商不是 https（本机测试）时跳过，切到 https 供应商后一分钟内开始。
     /// </summary>
     public async Task RefreshTlsFingerprintLoopAsync(CancellationToken cancel)
     {
@@ -191,13 +244,23 @@ public sealed class RetryProxy
         }
 
         var logger = Logger.WithActivity(LogActivity.Service);
-        logger.Info($"上游握手使用 Claude Code TLS 指纹（{_tlsFingerprints.Source}，JA4 {_tlsFingerprints.Current.Ja4}）");
+        var announced = false;
         while (!cancel.IsCancellationRequested)
         {
             try
             {
-                await _tlsFingerprints.RefreshAsync(logger, cancel).ConfigureAwait(false);
-                await Task.Delay(TlsFingerprintStore.RefreshInterval, cancel).ConfigureAwait(false);
+                if (UsesTlsFingerprint)
+                {
+                    if (!announced)
+                    {
+                        announced = true;
+                        logger.Info($"上游握手使用 Claude Code TLS 指纹（{_tlsFingerprints.Source}，JA4 {_tlsFingerprints.Current.Ja4}）");
+                    }
+
+                    await _tlsFingerprints.RefreshAsync(logger, cancel).ConfigureAwait(false);
+                }
+
+                await Task.Delay(FingerprintCheckInterval, cancel).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
@@ -206,11 +269,14 @@ public sealed class RetryProxy
         }
     }
 
-    public RetryProxy WithUpstreamApiKey(string? apiKey, string? localAccessKey, ClaudeAuthMode authMode = ClaudeAuthMode.Bearer)
+    /// <summary>
+    /// 作为一键准备的后台临时代理：只接受带 <paramref name="localAccessKey"/> 的请求（其余返回 401），并为它们注入
+    /// <paramref name="apiKey"/>；Claude 请求禁止调用工具；不按通道参数重试，准备中的请求改为一直重试到拿到有效上下文。
+    /// </summary>
+    public RetryProxy AsPreparationProxy(string apiKey, string localAccessKey, ClaudeAuthMode authMode = ClaudeAuthMode.Bearer)
     {
-        _upstreamApiKey = apiKey;
-        _localAccessKey = localAccessKey;
-        _upstreamAuthMode = authMode;
+        _preparationProxy = true;
+        _channel.Update(_channel.Current.WithKey(apiKey, localAccessKey, authMode));
         return this;
     }
 
@@ -238,11 +304,15 @@ public sealed class RetryProxy
     {
         using var _ = probe;
         var startedAt = MonotonicInstant.Now;
-        var timeoutSeconds = probe.IsPreparation && _localAccessKey is not null
-            ? Config.TotalTimeoutSeconds + 30
-            : Math.Min(Config.TimeoutSeconds, Config.TotalTimeoutSeconds);
+        var snapshot = _channel.Current;
+        var timeoutSeconds = probe.IsPreparation && _preparationProxy
+            ? snapshot.TotalTimeoutSeconds + 30
+            : Math.Min(snapshot.TimeoutSeconds, snapshot.TotalTimeoutSeconds);
         var sessionLabel = probe.SessionId.Length > 8 ? probe.SessionId[..8] : probe.SessionId;
-        var configuration = _localAccessKey is not null ? "经后台临时代理转发" : probe.UsesSuppliedKey ? "使用本次输入的 Key 经本通道转发" : "沿用本机客户端配置";
+        var configuration = _preparationProxy ? "经后台临时代理转发"
+            : probe.UsesChannelToken ? "经本通道使用当前 Key"
+            : probe.UsesSuppliedKey ? "使用本次输入的 Key 经本通道转发"
+            : "沿用本机客户端配置";
         var preparing = probe.IsPreparation;
         var logger = Logger.WithActivity(preparing ? LogActivity.Preparation : LogActivity.KeepAlive);
         logger.Info($"[会话 {sessionLabel}] 第 {probe.Turn} 轮，随机题号 {probe.QuestionIndex + 1}/{KeepAliveQuestions.Count}，{probe.Flavor.Label()} CLI，{configuration}，问题：{probe.Question}");
@@ -349,7 +419,7 @@ public sealed class RetryProxy
         private Task? _cancelled;
 
         public RequestContext(ProxyMetrics metrics, RouteLogger logger, CancellationToken cancel, CancellationToken token, string requestId, string method, string safePath, Deadline deadline, MonotonicInstant startedAt,
-            IReadOnlyList<string> headerOrder)
+            IReadOnlyList<string> headerOrder, double totalTimeoutSeconds, bool followsSwitch)
         {
             HeaderOrder = headerOrder;
             Metrics = metrics;
@@ -361,6 +431,8 @@ public sealed class RetryProxy
             SafePath = safePath;
             Deadline = deadline;
             StartedAt = startedAt;
+            TotalTimeoutSeconds = totalTimeoutSeconds;
+            FollowsSwitch = followsSwitch;
         }
 
         /// <summary>本次请求的统计对象；内部请求换成一次性的空对象。</summary>
@@ -390,6 +462,124 @@ public sealed class RetryProxy
 
         /// <summary>客户端请求头的原顺序（含 Host、Content-Length），指纹连接按它重排上游请求头。</summary>
         public IReadOnlyList<string> HeaderOrder { get; }
+
+        /// <summary>请求开始时的总等待上限（秒）；之后改参数不影响已开始的请求。</summary>
+        public double TotalTimeoutSeconds { get; }
+
+        /// <summary>真实请求：输出前跟随切换，切换 Key 时改用新 Key 重发。保活、准备等内部请求不跟随。</summary>
+        public bool FollowsSwitch { get; }
+    }
+
+    /// <summary>
+    /// 按一份快照算好的上游请求（PRD-供应商管理 §9 的 BuildAttempt）：请求头、正文、目标地址等；快照版本不变时各次尝试共用。
+    /// </summary>
+    private sealed class AttemptPlan
+    {
+        public required long Version { get; init; }
+
+        public required ChannelSnapshot Snapshot { get; init; }
+
+        /// <summary>带本地口令、但当前供应商没有 Key：不转发，在本地返回错误。</summary>
+        public bool MissingKey { get; init; }
+
+        /// <summary>带本地口令、注入了当前 Key；为 false 表示原样透传客户端自带的凭据。</summary>
+        public bool Injects { get; init; }
+
+        public HeaderList Headers { get; init; } = new();
+
+        /// <summary>Claude 注入 Key 后被 401 / 403 拒绝时改用的另一种认证格式；不能转换时为 null。</summary>
+        public HeaderList? AlternateHeaders { get; init; }
+
+        public IReadOnlyList<string> HeaderOrder { get; init; } = Array.Empty<string>();
+
+        public IReadOnlyList<string> AlternateHeaderOrder { get; init; } = Array.Empty<string>();
+
+        public CacheRequestBody CacheRequest { get; init; } = new(ReadOnlyMemory<byte>.Empty);
+
+        public string TargetUrl { get; init; } = string.Empty;
+
+        public bool UsingSystemProxy { get; init; }
+
+        /// <summary>发往上游的模型（改写后），统计与日志用。</summary>
+        public string? Model { get; init; }
+
+        /// <summary>请求行附加的"供应商 · Key"与模型改写，例：<c>，Any · 主号，模型改写 claude-opus-5 → glm-5</c>；旧用法与测试为空。</summary>
+        public string LogFields { get; init; } = string.Empty;
+    }
+
+    /// <summary>一次尝试：用哪份计划、哪种认证格式，以及“请求取消或切换 Key”都会触发的令牌。</summary>
+    private sealed class AttemptScope
+    {
+        private readonly RequestContext _request;
+        private Task? _cancelled;
+
+        public AttemptScope(RequestContext request, AttemptPlan plan, CancellationToken token, bool alternate)
+        {
+            _request = request;
+            Plan = plan;
+            Token = token;
+            Alternate = alternate;
+        }
+
+        public AttemptPlan Plan { get; }
+
+        public CancellationToken Token { get; }
+
+        public bool Alternate { get; }
+
+        public HeaderList Headers => Alternate ? Plan.AlternateHeaders! : Plan.Headers;
+
+        public IReadOnlyList<string> HeaderOrder => Alternate ? Plan.AlternateHeaderOrder : Plan.HeaderOrder;
+
+        public Task Cancelled => Token == _request.Token ? _request.Cancelled : _cancelled ??= Task.Delay(Timeout.Infinite, Token);
+    }
+
+    /// <summary>
+    /// 访问限制（PRD-供应商管理 §7）：只接受 Host 为 127.0.0.1 / localhost 的请求，拒绝带 Origin 头的请求，
+    /// 防止网页借 DNS 重绑定或跨站请求使用本机端口。健康检查也受限。拒绝时返回 403，日志不记请求里的原值。
+    /// </summary>
+    internal async Task GuardLocalAccessAsync(HttpContext context, RequestDelegate next)
+    {
+        var reason = LocalAccessRejection(context.Request);
+        if (reason is null)
+        {
+            await next(context).ConfigureAwait(false);
+            return;
+        }
+
+        LogRejectedAccess(reason);
+        await WriteSimpleResponseAsync(context, 403, "application/json; charset=utf-8",
+            JsonBody.Error("forbidden", "只接受本机客户端的请求")).ConfigureAwait(false);
+    }
+
+    /// <summary>不符合访问限制时返回原因，例：Host 为 <c>evil.example:18081</c> → “Host 不是 127.0.0.1 或 localhost”。</summary>
+    internal static string? LocalAccessRejection(HttpRequest request)
+    {
+        if (request.Headers.ContainsKey("Origin"))
+        {
+            return "请求带有 Origin 头（来自网页）";
+        }
+
+        var host = request.Host.Host;
+        return string.Equals(host, "127.0.0.1", StringComparison.Ordinal) || string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase)
+            ? null
+            : "Host 不是 127.0.0.1 或 localhost";
+    }
+
+    /// <summary>拒绝日志每分钟最多一条，其间的次数并入下一条，避免网页反复请求刷屏。</summary>
+    private void LogRejectedAccess(string reason)
+    {
+        var now = Environment.TickCount64;
+        var last = Interlocked.Read(ref _lastRejectionLogMs);
+        if ((last != 0 && now - last < 60_000) || Interlocked.CompareExchange(ref _lastRejectionLogMs, now, last) != last)
+        {
+            Interlocked.Increment(ref _suppressedRejections);
+            return;
+        }
+
+        var suppressed = Interlocked.Exchange(ref _suppressedRejections, 0);
+        Logger.WithActivity(LogActivity.Service).Warn($"已拒绝非本机客户端的请求：{reason}，返回 HTTP 403"
+            + (suppressed > 0 ? $"（此前一分钟内另有 {suppressed} 次拒绝未逐条记录）" : string.Empty));
     }
 
     /// <summary>健康检查：返回当前统计快照。</summary>
@@ -423,7 +613,7 @@ public sealed class RetryProxy
     /// <summary>转发入口（对应 proxy_handler + handle_request）。</summary>
     public async Task HandleAsync(HttpContext context)
     {
-        if (_localAccessKey is { } localAccessKey)
+        if (_preparationProxy)
         {
             if (HttpMethods.IsHead(context.Request.Method) && context.Request.Path == "/api/hello")
             {
@@ -431,9 +621,7 @@ public sealed class RetryProxy
                 return;
             }
 
-            var authorization = context.Request.Headers.Authorization.ToString();
-            var apiKey = context.Request.Headers["x-api-key"].ToString();
-            if (!AccessKeyMatches(authorization, $"Bearer {localAccessKey}") && !AccessKeyMatches(apiKey, localAccessKey))
+            if (!CarriesToken(context.Request.Headers.Authorization.ToString(), context.Request.Headers["x-api-key"].ToString(), _channel.Current.LocalToken))
             {
                 await WriteSimpleResponseAsync(context, 401, "application/json; charset=utf-8",
                     JsonBody.Error("unauthorized", "后台临时代理拒绝未授权请求")).ConfigureAwait(false);
@@ -441,7 +629,9 @@ public sealed class RetryProxy
             }
         }
 
-        var deadline = Deadline.AfterSeconds(Config.TotalTimeoutSeconds);
+        // 总等待按请求开始时的参数计算，之后改参数只影响新请求。
+        var totalTimeoutSeconds = _channel.Current.TotalTimeoutSeconds;
+        var deadline = Deadline.AfterSeconds(totalTimeoutSeconds);
         var startedAt = MonotonicInstant.Now;
         // 当日统计日志跨进程存活，保留完整 UUID，重启后不同请求不会被旧的 32 位显示 ID 合并。
         var requestId = Guid.NewGuid().ToString("N");
@@ -500,7 +690,8 @@ public sealed class RetryProxy
                 body = HeaderRules.StripInternalRequestMetadata(body);
             }
 
-            ctx = new RequestContext(metrics, requestLogger, cancel, token, requestId, method, safePath, deadline, startedAt, HeaderOrder(requestHeaders));
+            ctx = new RequestContext(metrics, requestLogger, cancel, token, requestId, method, safePath, deadline, startedAt, HeaderOrder(requestHeaders),
+                totalTimeoutSeconds, guard.KeepAlive is not null);
             response = await HandleRequestInnerAsync(ctx, requestHeaders, rawQuery, body).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
@@ -537,7 +728,7 @@ public sealed class RetryProxy
                 break;
             case ProxyErrorKind.DeadlineExceeded:
                 metrics.Failure(requestId);
-                requestLogger.Warn($"[{requestId}] {method} {safePath} -> 请求总等待达到 {StreamLifecycle.Format(Config.TotalTimeoutSeconds)} 秒，已取消当前请求，不再重试，向客户端返回 HTTP 504，耗时 {startedAt.ElapsedSeconds:F2} 秒");
+                requestLogger.Warn($"[{requestId}] {method} {safePath} -> 请求总等待达到 {StreamLifecycle.Format(totalTimeoutSeconds)} 秒，已取消当前请求，不再重试，向客户端返回 HTTP 504，耗时 {startedAt.ElapsedSeconds:F2} 秒");
                 break;
             case ProxyErrorKind.Body:
                 metrics.Failure(requestId);
@@ -584,6 +775,27 @@ public sealed class RetryProxy
         var suppliedBytes = Encoding.UTF8.GetBytes(supplied);
         var expectedBytes = Encoding.UTF8.GetBytes(expected);
         return suppliedBytes.Length == expectedBytes.Length && CryptographicOperations.FixedTimeEquals(suppliedBytes, expectedBytes);
+    }
+
+    /// <summary>
+    /// 请求是否带着本地口令（或后台临时代理的访问密钥）：<c>Authorization: Bearer {口令}</c> 或 <c>x-api-key: {口令}</c>，定长比较。
+    /// 口令为空时一律不算。
+    /// </summary>
+    private static bool CarriesToken(string? authorization, string? apiKey, string token)
+    {
+        if (token.Length == 0)
+        {
+            return false;
+        }
+
+        const string bearer = "Bearer ";
+        if (authorization is { Length: > 7 } && authorization.StartsWith(bearer, StringComparison.OrdinalIgnoreCase)
+            && AccessKeyMatches(authorization[bearer.Length..].Trim(), token))
+        {
+            return true;
+        }
+
+        return !string.IsNullOrEmpty(apiKey) && AccessKeyMatches(apiKey.Trim(), token);
     }
 
     private static async Task DeliverAsync(HttpContext context, ProxyResponse response, CancellationToken token)
@@ -791,261 +1003,385 @@ public sealed class RetryProxy
         var requestId = ctx.RequestId;
         var method = ctx.Method;
         var safePath = ctx.SafePath;
-        var headers = HeaderRules.CopyRequestHeaders(requestHeaders);
-        if (_localAccessKey is not null && Config.ClientType == ClientType.Claude
+        var baseHeaders = HeaderRules.CopyRequestHeaders(requestHeaders);
+        if (_preparationProxy && Config.ClientType == ClientType.Claude
             && HttpMethods.IsPost(method) && KeepAliveFlavorExtensions.Detect(safePath) == KeepAliveFlavor.Claude)
         {
             body = HeaderRules.DisableClaudeToolUse(body);
         }
-        if (_upstreamApiKey is { } apiKey)
-        {
-            headers.Remove("authorization");
-            headers.Remove("x-api-key");
-            headers.Remove("api-key");
-            if (Config.ClientType == ClientType.Claude && _upstreamAuthMode == ClaudeAuthMode.ApiKey)
-            {
-                headers.Set("x-api-key", apiKey);
-            }
-            else
-            {
-                headers.Set("authorization", $"Bearer {apiKey}");
-            }
-        }
+
         var metadata = RequestMetadata.Parse(body);
         var pathAndQuery = rawQuery.Length > 0 ? $"{safePath}?{rawQuery}" : safePath;
-        var keepAliveTemplate = HttpMethods.IsPost(method) ? new KeepAliveTemplate(method, pathAndQuery, headers, body) : null;
-        var accept = headers.Get("accept");
+        // 模板取注入前的请求头，内存里不留真实 Key。
+        var keepAliveTemplate = HttpMethods.IsPost(method) ? new KeepAliveTemplate(method, pathAndQuery, baseHeaders, body) : null;
+        var accept = baseHeaders.Get("accept");
         var streaming = metadata.Stream || (accept is not null && accept.ToLowerInvariant().Contains("text/event-stream", StringComparison.Ordinal));
-        var model = metadata.Model;
-        var cacheRequest = _promptCache.Prepare(method, safePath, headers, body, requestId.StartsWith(ProxyMetrics.KeepAlivePrefix, StringComparison.Ordinal));
-        ctx.Metrics.CacheKey(requestId, cacheRequest.State);
+        var requireValidContext = _preparationProxy && KeepAlive.Snapshot().Preparing
+            && HttpMethods.IsPost(method) && KeepAliveFlavorExtensions.Detect(safePath) != KeepAliveFlavor.Unknown;
+        // 只有带本地口令、由代理注入 Key 的真实请求在输出前跟随切换；
+        // 透传客户端自带凭据的请求不改投：原供应商的密钥不能发给新供应商。
+        var followsSwitch = ctx.FollowsSwitch && CarriesToken(baseHeaders.Get("authorization"), baseHeaders.Get("x-api-key"), _channel.Current.LocalToken);
+        using var undelivered = followsSwitch ? _channel.EnterUndelivered() : null;
+        AttemptPlan? plan = null;
+        // Claude 注入 Key 被拒后改用另一种认证格式；换了"供应商 · Key"后重新从供应商设置的格式开始。
+        var alternate = false;
+        // attemptNumber 数全部尝试（日志、统计）；retries 只数计入重试上限的失败，认证格式切换与切换 Key 改投都不计。
+        ulong attemptNumber = 0;
+        ulong retries = 0;
+        BufferedResponse? lastResponse = null;
+
+        while (true)
+        {
+            var (current, version, switchToken) = _channel.Read();
+            // 透传请求换了供应商后，剩下的重试留在开始时的供应商上走完；同一供应商内改参数、改地址照常用于下一次尝试。
+            if (plan is null || (plan.Version != version && (plan.Injects || plan.Snapshot.ProviderId == current.ProviderId)))
+            {
+                if (plan is not null && !plan.Snapshot.SameKeyAs(current))
+                {
+                    alternate = false;
+                }
+
+                var first = plan is null;
+                plan = BuildAttempt(ctx, current, version, baseHeaders, body, metadata.Model, streaming, rawQuery);
+                if (first)
+                {
+                    ctx.Metrics.CacheKey(requestId, plan.CacheRequest.State);
+                }
+            }
+
+            var snapshot = plan.Snapshot;
+            if (plan.MissingKey)
+            {
+                return MissingKeyResponse(ctx, snapshot);
+            }
+
+            var maxRetries = _preparationProxy && !requireValidContext ? 0UL : (ulong)Math.Max(snapshot.MaxRetries, 0);
+            var canRetry = requireValidContext || retries < maxRetries;
+            attemptNumber = Saturating.Add(attemptNumber, 1);
+            ctx.Metrics.RequestAttempt(requestId, attemptNumber);
+            // 真实请求在输出前跟随切换：切换 Key 时本次尝试（含退避等待、等待生成）立即作废，改用新 Key 重发。
+            using var attemptCts = followsSwitch ? CancellationTokenSource.CreateLinkedTokenSource(ctx.Token, switchToken) : null;
+            var attempt = new AttemptScope(ctx, plan, attemptCts?.Token ?? ctx.Token, alternate && plan.AlternateHeaders is not null);
+            var startedAt = MonotonicInstant.Now;
+            try
+            {
+                UpstreamResponse upstream;
+                try
+                {
+                    upstream = await SendCacheAwareAsync(ctx, attempt, streaming).ConfigureAwait(false);
+                }
+                catch (UpstreamException failure)
+                {
+                    if (await HandleAttemptFailureAsync(ctx, attempt, attemptNumber, canRetry, retries, null, startedAt, failure).ConfigureAwait(false))
+                    {
+                        return RetryExhaustedResponse(ctx, attemptNumber, lastResponse);
+                    }
+
+                    retries++;
+                    continue;
+                }
+
+                var status = upstream.Status;
+                var responseHeaders = upstream.Headers;
+                var expectedBodyBytes = upstream.ExpectedBodyBytes;
+                var reader = new ChunkReader(upstream.Source);
+                try
+                {
+                    if (status is 401 or 403 && plan.AlternateHeaders is not null && !attempt.Alternate)
+                    {
+                        reader.Dispose();
+                        // 认证方式切换不受配置的重试次数限制；即使 max_retries=0，也必须给另一种格式一次机会。
+                        alternate = true;
+                        ctx.Logger.Info($"[{requestId}] {LogText.UpstreamStatus(status)} 拒绝当前 Claude 鉴权，改用另一种认证格式重试一次");
+                        continue;
+                    }
+
+                    if (requireValidContext)
+                    {
+                        RetryResponseBody buffered;
+                        try
+                        {
+                            buffered = expectedBodyBytes > MaxRetryResponseBodyBytes
+                                ? RetryResponseBody.Overflow(ReadOnlyMemory<byte>.Empty, ReadOnlyMemory<byte>.Empty)
+                                : await BufferUpstreamResponseAsync(reader, requestId, startedAt, ctx.Metrics, attempt.Token).ConfigureAwait(false);
+                        }
+                        catch (UpstreamException failure)
+                        {
+                            reader.Dispose();
+                            if (await HandleAttemptFailureAsync(ctx, attempt, attemptNumber, canRetry, retries, status, startedAt, failure).ConfigureAwait(false))
+                            {
+                                return RetryExhaustedResponse(ctx, attemptNumber, lastResponse);
+                            }
+
+                            retries++;
+                            continue;
+                        }
+
+                        var stats = new ResponseStats(responseHeaders, safePath, plan.Model).WithAnswerCapture();
+                        if (!buffered.TooLarge)
+                        {
+                            stats.Observe(buffered.Body.Span, ctx.StartedAt.ElapsedSeconds);
+                            stats.Finish(ctx.StartedAt.ElapsedSeconds);
+                        }
+
+                        if (!buffered.TooLarge && status is >= 200 and < 300
+                            && stats.Outcome is { IsFailed: false }
+                            && stats.ContextTokens(Config.ClientType == ClientType.Claude) is > 0
+                            && stats.Answer() is not null)
+                        {
+                            reader = new ChunkReader(new ReplayChunkSource(
+                                new (ReadOnlyMemory<byte>?, Exception?)[] { (buffered.Body, null) }, upstream.Source));
+                        }
+                        else
+                        {
+                            reader.Dispose();
+                            var summary = buffered.TooLarge ? null : stats.FailureSummary();
+                            var reason = buffered.TooLarge ? $"响应超过 {MaxRetryResponseBodyBytes} 字节暂存上限"
+                                : summary ?? stats.Outcome?.Reason ?? "未返回完整回复及有效上下文";
+                            var delay = RetryDelay(retries, status, responseHeaders, snapshot);
+                            ctx.Metrics.Retry(requestId, attemptNumber);
+                            ctx.Metrics.RequestPhase(requestId, RequestPhase.WaitingRetry);
+                            var failureText = summary is not null && status is < 200 or >= 300 ? LogText.UpstreamStatus(status, summary) : $"{LogText.UpstreamStatus(status)}，{reason}";
+                            LogRetry(ctx, failureText, $"[{requestId}] {LogText.AttemptText(attemptNumber)} {method} {safePath} -> {failureText}，未交给客户端{stats.FailureLogFields()}，{LogText.RetryDelayText(delay)}");
+                            await WaitDelayAsync(delay, ctx, attempt.Token).ConfigureAwait(false);
+                            retries++;
+                            continue;
+                        }
+                    }
+
+                    var retryable = IsRetryableStatus(status);
+                    if (retryable && canRetry)
+                    {
+                        if (expectedBodyBytes is null || expectedBodyBytes <= MaxRetryResponseBodyBytes)
+                        {
+                            RetryResponseBody buffered;
+                            try
+                            {
+                                buffered = await BufferUpstreamResponseAsync(reader, requestId, startedAt, ctx.Metrics, attempt.Token).ConfigureAwait(false);
+                            }
+                            catch (UpstreamException failure)
+                            {
+                                reader.Dispose();
+                                if (await HandleAttemptFailureAsync(ctx, attempt, attemptNumber, canRetry, retries, status, startedAt, failure).ConfigureAwait(false))
+                                {
+                                    return RetryExhaustedResponse(ctx, attemptNumber, lastResponse);
+                                }
+
+                                retries++;
+                                continue;
+                            }
+
+                            if (!buffered.TooLarge)
+                            {
+                                reader.Dispose();
+                                // 与一键准备一样解析暂存的错误正文：状态后写上游错误码对应的具体原因，并附上错误码、上游请求 ID 等诊断字段。
+                                // 例：上游 HTTP 500（当前需求量高，模型负载已达上限），上游错误码 get_channel_failed，…
+                                var stats = new ResponseStats(responseHeaders, safePath, plan.Model);
+                                stats.Observe(buffered.Body.Span, ctx.StartedAt.ElapsedSeconds);
+                                stats.Finish(ctx.StartedAt.ElapsedSeconds);
+                                var summary = stats.FailureSummary();
+                                var response = new BufferedResponse(status, responseHeaders, buffered.Body, summary);
+                                lastResponse = response;
+                                var delay = RetryDelay(retries, status, response.Headers, snapshot);
+                                var failureText = LogText.UpstreamStatus(status, summary);
+                                LogRetry(ctx, failureText, $"[{requestId}] {LogText.AttemptText(attemptNumber)} {method} {safePath} -> {failureText}{stats.FailureLogFields()}，{LogText.RetryDelayText(delay)}");
+                                ctx.Metrics.Retry(requestId, attemptNumber);
+                                ctx.Metrics.RequestPhase(requestId, RequestPhase.WaitingRetry);
+                                await WaitDelayAsync(delay, ctx, attempt.Token).ConfigureAwait(false);
+                                retries++;
+                                continue;
+                            }
+
+                            reader = new ChunkReader(new ReplayChunkSource(
+                                new (ReadOnlyMemory<byte>?, Exception?)[] { (buffered.Body, null), (buffered.Chunk, null) },
+                                upstream.Source));
+                        }
+
+                        ctx.Logger.Warn($"[{requestId}] {LogText.UpstreamStatus(status)} 错误正文超过 {MaxRetryResponseBodyBytes} 字节暂存上限，改为完整流式转发，不再因本次状态码重试");
+                    }
+                    else if (retryable)
+                    {
+                        if (!_preparationProxy || !requestId.StartsWith(ProxyMetrics.KeepAlivePrefix, StringComparison.Ordinal))
+                        {
+                            ctx.Logger.Warn($"[{requestId}] 重试耗尽，向客户端返回最后一次上游响应 HTTP {status}");
+                        }
+                    }
+
+                    try
+                    {
+                        return await PrepareStreamResponseAsync(
+                            ctx, attempt, reader, expectedBodyBytes, responseHeaders, attemptNumber, status, keepAliveTemplate, true).ConfigureAwait(false);
+                    }
+                    catch (Exception failure) when (failure is UpstreamException or NoGenerationException)
+                    {
+                        reader.Dispose();
+                        if (await HandleAttemptFailureAsync(ctx, attempt, attemptNumber, canRetry, retries, status, startedAt, failure).ConfigureAwait(false))
+                        {
+                            return RetryExhaustedResponse(ctx, attemptNumber, lastResponse);
+                        }
+
+                        retries++;
+                    }
+                }
+                catch (OperationCanceledException)
+                {
+                    reader.Dispose();
+                    throw;
+                }
+            }
+            catch (OperationCanceledException) when (followsSwitch && switchToken.IsCancellationRequested && !ctx.Token.IsCancellationRequested)
+            {
+                // 旧 Key 的错误响应与重试日志节流都不再适用，改投后从头计。
+                lastResponse = null;
+                ctx.Retries.Reset();
+                var label = _channel.Current.Label;
+                ctx.Logger.Info($"[{requestId}] 已切换{(label.Length > 0 ? $"到 {label}" : " Key")}，本请求尚未向客户端输出，立即改用新 Key 重发（不计入重试次数）");
+            }
+        }
+    }
+
+    /// <summary>
+    /// 按快照算出本次尝试的上游请求（PRD-供应商管理 §6、§7、§9）：带本地口令的请求注入当前 Key 并映射模型，
+    /// 其余请求原样透传客户端自带的凭据；目标地址按客户端的地址规则拼接。
+    /// </summary>
+    private AttemptPlan BuildAttempt(RequestContext ctx, ChannelSnapshot snapshot, long version, HeaderList baseHeaders, ReadOnlyMemory<byte> body,
+        string? requestModel, bool streaming, string rawQuery)
+    {
+        var inject = CarriesToken(baseHeaders.Get("authorization"), baseHeaders.Get("x-api-key"), snapshot.LocalToken);
+        if (inject && !snapshot.HasKey)
+        {
+            return new AttemptPlan { Version = version, Snapshot = snapshot, Injects = true, MissingKey = true };
+        }
+
+        var headers = baseHeaders.Clone();
+        var order = ctx.HeaderOrder;
+        var model = requestModel;
+        var rewrite = string.Empty;
+        // Codex 固定 Bearer；Claude 按供应商设置。
+        var authMode = Config.ClientType == ClientType.Claude ? snapshot.AuthMode : ClaudeAuthMode.Bearer;
+        if (inject)
+        {
+            headers.ReplaceAll(AuthHeaders, AuthHeaderName(authMode), AuthHeaderValue(authMode, snapshot.ApiKey));
+            order = RenameAuthHeader(order, AuthHeaderName(authMode));
+            if (HttpMethods.IsPost(ctx.Method))
+            {
+                var result = ModelRewriter.Apply(Config.ClientType, snapshot, headers, body);
+                if (result.From is { } from)
+                {
+                    body = result.Body;
+                    model = DiagnosticText.CleanModel(result.To);
+                    rewrite = $"，模型改写 {DiagnosticText.CleanModel(from)} → {model}";
+                }
+            }
+        }
+
+        var cacheRequest = _promptCache.Prepare(snapshot.UpstreamBaseUrl, ctx.Method, ctx.SafePath, headers, body,
+            ctx.RequestId.StartsWith(ProxyMetrics.KeepAlivePrefix, StringComparison.Ordinal));
         if (streaming || model is not null)
         {
             // 客户端声明了压缩时默认改成要求上游不压缩以便解析；开启压缩透传后保留客户端的声明（其中编码须都能由代理解压）。
             // 客户端没发这个头（如 Codex）时也不补，与直连一致；上游若仍压缩，响应按 Content-Encoding 解压解析。
             var acceptEncoding = string.Join(",", headers.GetAll("accept-encoding"));
-            if (acceptEncoding.Length > 0 && (!Config.PassThroughCompression || !ContentDecoder.AcceptsOnlySupported(acceptEncoding)))
+            if (acceptEncoding.Length > 0 && (!snapshot.PassThroughCompression || !ContentDecoder.AcceptsOnlySupported(acceptEncoding)))
             {
                 headers.Set("accept-encoding", "identity");
             }
         }
-        var alternateClaudeHeaders = _upstreamApiKey is not null && Config.ClientType == ClientType.Claude
-            ? ClaudeAuthenticationFallback(headers)
-            : null;
-        var usedAlternateClaudeAuthentication = false;
 
-        var targetUrl = BuildTargetUrl(Config.UpstreamBaseUrl, safePath, rawQuery);
+        HeaderList? alternate = null;
+        var alternateOrder = order;
+        if (inject && Config.ClientType == ClientType.Claude)
+        {
+            // Claude Code 与多数中转站默认 Bearer，也有只认 x-api-key 的；被拒时换另一种格式再试一次。
+            var other = authMode == ClaudeAuthMode.ApiKey ? ClaudeAuthMode.Bearer : ClaudeAuthMode.ApiKey;
+            alternate = headers.Clone();
+            alternate.ReplaceAll(AuthHeaders, AuthHeaderName(other), AuthHeaderValue(other, snapshot.ApiKey));
+            alternateOrder = RenameAuthHeader(order, AuthHeaderName(other));
+        }
+
+        var targetUrl = UrlRules.UpstreamTarget(Config.ClientType, snapshot.UpstreamBaseUrl, ctx.SafePath, rawQuery);
         if (!Uri.TryCreate(targetUrl, UriKind.Absolute, out var parsedTarget))
         {
             throw new ProxyBodyException("目标 URL 无效");
         }
 
-        var usingSystemProxy = ProxyResolver.Resolve(parsedTarget) is not null;
-        var requireValidContext = _localAccessKey is not null && KeepAlive.Snapshot().Preparing
-            && HttpMethods.IsPost(method) && KeepAliveFlavorExtensions.Detect(safePath) != KeepAliveFlavor.Unknown;
-        var maxRetries = (ulong)Math.Max(Config.MaxRetries, 0);
-        if (_localAccessKey is not null && !requireValidContext)
+        var label = snapshot.ProviderName.Length == 0 ? string.Empty
+            : inject ? snapshot.Label
+            : $"{snapshot.ProviderName} · 客户端凭据";
+        return new AttemptPlan
         {
-            maxRetries = 0;
-        }
-        var totalAttempts = requireValidContext ? 0UL : Saturating.Add(maxRetries, 1);
-        BufferedResponse? lastResponse = null;
-
-        for (ulong attempt = 0; totalAttempts == 0 || attempt < totalAttempts; attempt++)
-        {
-            var attemptNumber = attempt + 1;
-            ctx.Metrics.RequestAttempt(requestId, attemptNumber);
-            var startedAt = MonotonicInstant.Now;
-            UpstreamResponse upstream;
-            try
-            {
-                upstream = await SendCacheAwareAsync(ctx, method, targetUrl, headers, cacheRequest, streaming).ConfigureAwait(false);
-            }
-            catch (UpstreamException failure)
-            {
-                if (await HandleAttemptFailureAsync(ctx, attemptNumber, totalAttempts, null, startedAt, usingSystemProxy, failure).ConfigureAwait(false))
-                {
-                    return RetryExhaustedResponse(ctx, totalAttempts, lastResponse);
-                }
-
-                continue;
-            }
-
-            var status = upstream.Status;
-            var responseHeaders = upstream.Headers;
-            var expectedBodyBytes = upstream.ExpectedBodyBytes;
-            var reader = new ChunkReader(upstream.Source);
-            try
-            {
-                if (status is 401 or 403 && alternateClaudeHeaders is not null && !usedAlternateClaudeAuthentication)
-                {
-                    reader.Dispose();
-                    headers = alternateClaudeHeaders;
-                    usedAlternateClaudeAuthentication = true;
-                    // 认证方式切换不受配置的重试次数限制；即使 max_retries=0，也必须给另一种格式一次机会。
-                    if (totalAttempts is > 0 and < ulong.MaxValue)
-                    {
-                        totalAttempts++;
-                    }
-
-                    ctx.Logger.Info($"[{requestId}] {LogText.UpstreamStatus(status)} 拒绝当前 Claude 鉴权，改用另一种认证格式重试一次");
-                    if (keepAliveTemplate is not null)
-                    {
-                        keepAliveTemplate = new KeepAliveTemplate(method, pathAndQuery, headers, body);
-                    }
-
-                    continue;
-                }
-
-                if (requireValidContext)
-                {
-                    RetryResponseBody buffered;
-                    try
-                    {
-                        buffered = expectedBodyBytes > MaxRetryResponseBodyBytes
-                            ? RetryResponseBody.Overflow(ReadOnlyMemory<byte>.Empty, ReadOnlyMemory<byte>.Empty)
-                            : await BufferUpstreamResponseAsync(reader, requestId, startedAt, ctx.Metrics, ctx.Token).ConfigureAwait(false);
-                    }
-                    catch (UpstreamException failure)
-                    {
-                        reader.Dispose();
-                        if (await HandleAttemptFailureAsync(ctx, attemptNumber, totalAttempts, status, startedAt, usingSystemProxy, failure).ConfigureAwait(false))
-                        {
-                            return RetryExhaustedResponse(ctx, totalAttempts, lastResponse);
-                        }
-
-                        continue;
-                    }
-
-                    var stats = new ResponseStats(responseHeaders, safePath, model).WithAnswerCapture();
-                    if (!buffered.TooLarge)
-                    {
-                        stats.Observe(buffered.Body.Span, ctx.StartedAt.ElapsedSeconds);
-                        stats.Finish(ctx.StartedAt.ElapsedSeconds);
-                    }
-
-                    if (!buffered.TooLarge && status is >= 200 and < 300
-                        && stats.Outcome is { IsFailed: false }
-                        && stats.ContextTokens(Config.ClientType == ClientType.Claude) is > 0
-                        && stats.Answer() is not null)
-                    {
-                        reader = new ChunkReader(new ReplayChunkSource(
-                            new (ReadOnlyMemory<byte>?, Exception?)[] { (buffered.Body, null) }, upstream.Source));
-                    }
-                    else
-                    {
-                        reader.Dispose();
-                        var summary = buffered.TooLarge ? null : stats.FailureSummary();
-                        var reason = buffered.TooLarge ? $"响应超过 {MaxRetryResponseBodyBytes} 字节暂存上限"
-                            : summary ?? stats.Outcome?.Reason ?? "未返回完整回复及有效上下文";
-                        if (totalAttempts != 0 && attempt >= maxRetries)
-                        {
-                            ctx.Metrics.Failure(requestId);
-                            return RetryExhaustedResponse(ctx, totalAttempts, lastResponse);
-                        }
-
-                        var delay = RetryDelay(attempt, status, responseHeaders);
-                        ctx.Metrics.Retry(requestId, attemptNumber);
-                        ctx.Metrics.RequestPhase(requestId, RequestPhase.WaitingRetry);
-                        var failureText = summary is not null && status is < 200 or >= 300 ? LogText.UpstreamStatus(status, summary) : $"{LogText.UpstreamStatus(status)}，{reason}";
-                        LogRetry(ctx, failureText, $"[{requestId}] {LogText.AttemptText(attemptNumber)} {method} {safePath} -> {failureText}，未交给客户端{stats.FailureLogFields()}，{LogText.RetryDelayText(delay)}");
-                        await WaitDelayAsync(delay, ctx.Token).ConfigureAwait(false);
-                        continue;
-                    }
-                }
-
-                var retryable = IsRetryableStatus(status);
-                if (retryable && attempt < maxRetries)
-                {
-                    if (expectedBodyBytes is null || expectedBodyBytes <= MaxRetryResponseBodyBytes)
-                    {
-                        RetryResponseBody buffered;
-                        try
-                        {
-                            buffered = await BufferUpstreamResponseAsync(reader, requestId, startedAt, ctx.Metrics, ctx.Token).ConfigureAwait(false);
-                        }
-                        catch (UpstreamException failure)
-                        {
-                            reader.Dispose();
-                            if (await HandleAttemptFailureAsync(ctx, attemptNumber, totalAttempts, status, startedAt, usingSystemProxy, failure).ConfigureAwait(false))
-                            {
-                                return RetryExhaustedResponse(ctx, totalAttempts, lastResponse);
-                            }
-
-                            continue;
-                        }
-
-                        if (!buffered.TooLarge)
-                        {
-                            reader.Dispose();
-                            // 与一键准备一样解析暂存的错误正文：状态后写上游错误码对应的具体原因，并附上错误码、上游请求 ID 等诊断字段。
-                            // 例：上游 HTTP 500（当前需求量高，模型负载已达上限），上游错误码 get_channel_failed，…
-                            var stats = new ResponseStats(responseHeaders, safePath, model);
-                            stats.Observe(buffered.Body.Span, ctx.StartedAt.ElapsedSeconds);
-                            stats.Finish(ctx.StartedAt.ElapsedSeconds);
-                            var summary = stats.FailureSummary();
-                            var response = new BufferedResponse(status, responseHeaders, buffered.Body, summary);
-                            lastResponse = response;
-                            var delay = RetryDelay(attempt, status, response.Headers);
-                            var failureText = LogText.UpstreamStatus(status, summary);
-                            LogRetry(ctx, failureText, $"[{requestId}] {LogText.AttemptText(attemptNumber)} {method} {safePath} -> {failureText}{stats.FailureLogFields()}，{LogText.RetryDelayText(delay)}");
-                            ctx.Metrics.Retry(requestId, attemptNumber);
-                            ctx.Metrics.RequestPhase(requestId, RequestPhase.WaitingRetry);
-                            await WaitDelayAsync(delay, ctx.Token).ConfigureAwait(false);
-                            continue;
-                        }
-
-                        reader = new ChunkReader(new ReplayChunkSource(
-                            new (ReadOnlyMemory<byte>?, Exception?)[] { (buffered.Body, null), (buffered.Chunk, null) },
-                            upstream.Source));
-                    }
-
-                    ctx.Logger.Warn($"[{requestId}] {LogText.UpstreamStatus(status)} 错误正文超过 {MaxRetryResponseBodyBytes} 字节暂存上限，改为完整流式转发，不再因本次状态码重试");
-                }
-                else if (retryable)
-                {
-                    if (_localAccessKey is null || !requestId.StartsWith(ProxyMetrics.KeepAlivePrefix, StringComparison.Ordinal))
-                    {
-                        ctx.Logger.Warn($"[{requestId}] 重试耗尽，向客户端返回最后一次上游响应 HTTP {status}");
-                    }
-                }
-
-                try
-                {
-                    return await PrepareStreamResponseAsync(
-                        ctx, reader, expectedBodyBytes, responseHeaders, attemptNumber, totalAttempts, status, usingSystemProxy, model, cacheRequest.State, keepAliveTemplate, true).ConfigureAwait(false);
-                }
-                catch (Exception failure) when (failure is UpstreamException or NoGenerationException)
-                {
-                    reader.Dispose();
-                    if (await HandleAttemptFailureAsync(ctx, attemptNumber, totalAttempts, status, startedAt, usingSystemProxy, failure).ConfigureAwait(false))
-                    {
-                        return RetryExhaustedResponse(ctx, totalAttempts, lastResponse);
-                    }
-                }
-            }
-            catch (OperationCanceledException)
-            {
-                reader.Dispose();
-                throw;
-            }
-        }
-
-        return RetryExhaustedResponse(ctx, totalAttempts, lastResponse);
+            Version = version,
+            Snapshot = snapshot,
+            Injects = inject,
+            Headers = headers,
+            AlternateHeaders = alternate,
+            HeaderOrder = order,
+            AlternateHeaderOrder = alternateOrder,
+            CacheRequest = cacheRequest,
+            TargetUrl = targetUrl,
+            UsingSystemProxy = ProxyResolver.Resolve(parsedTarget) is not null,
+            Model = model,
+            LogFields = (label.Length > 0 ? $"，{label}" : string.Empty) + rewrite,
+        };
     }
 
-    private async Task<UpstreamResponse> SendUpstreamAsync(RequestContext ctx, string method, string targetUrl, HeaderList headers, ReadOnlyMemory<byte> body, bool streaming)
+    private static string AuthHeaderName(ClaudeAuthMode mode) => mode == ClaudeAuthMode.ApiKey ? "x-api-key" : "authorization";
+
+    private static string AuthHeaderValue(ClaudeAuthMode mode, string apiKey) => mode == ClaudeAuthMode.ApiKey ? apiKey : $"Bearer {apiKey}";
+
+    /// <summary>
+    /// 在客户端的头序表里把认证头原位改名（PRD-供应商管理 §9 头序）：第一个认证头换成 <paramref name="name"/>，大小写风格跟随原头，
+    /// 其余认证头删去。例：<c>accept, authorization, content-type</c> → <c>accept, x-api-key, content-type</c>；
+    /// <c>Accept, Authorization</c> → <c>Accept, X-Api-Key</c>。
+    /// </summary>
+    internal static IReadOnlyList<string> RenameAuthHeader(IReadOnlyList<string> order, string name)
     {
-        var timeout = TimeSpan.FromSeconds(Config.TimeoutSeconds);
-        var requestUri = new Uri(targetUrl);
+        var renamed = new List<string>(order.Count);
+        var replaced = false;
+        foreach (var header in order)
+        {
+            if (!Array.Exists(AuthHeaders, auth => string.Equals(auth, header, StringComparison.OrdinalIgnoreCase)))
+            {
+                renamed.Add(header);
+            }
+            else if (!replaced)
+            {
+                replaced = true;
+                renamed.Add(header == header.ToLowerInvariant() ? name : TitleCase(name));
+            }
+        }
+
+        return renamed;
+    }
+
+    private static string TitleCase(string name) =>
+        string.Join('-', name.Split('-').Select(part => part.Length == 0 ? part : char.ToUpperInvariant(part[0]) + part[1..]));
+
+    /// <summary>带本地口令、但当前供应商没有 Key：不转发，直接告诉客户端（PRD-供应商管理 §7）。</summary>
+    private static ProxyResponse MissingKeyResponse(RequestContext ctx, ChannelSnapshot snapshot)
+    {
+        var provider = snapshot.ProviderName.Length > 0 ? $"“{snapshot.ProviderName}”" : string.Empty;
+        ctx.Logger.Warn($"[{ctx.RequestId}] {ctx.Method} {ctx.SafePath} -> 当前供应商{provider}没有 Key，未转发，向客户端返回 HTTP 403");
+        ctx.Metrics.Failure(ctx.RequestId);
+        var headers = new HeaderList();
+        headers.Set("content-type", "application/json; charset=utf-8");
+        return ProxyResponse.Buffered(403, headers, JsonBody.Error("no_provider_key", $"当前供应商{provider}没有 Key，请先在 RetryProxy 中为它添加 Key"));
+    }
+
+    private async Task<UpstreamResponse> SendUpstreamAsync(RequestContext ctx, AttemptScope attempt, ReadOnlyMemory<byte> body, bool streaming)
+    {
+        var plan = attempt.Plan;
+        var timeout = TimeSpan.FromSeconds(plan.Snapshot.TimeoutSeconds);
+        var requestUri = new Uri(plan.TargetUrl);
+        var secure = requestUri.Scheme == Uri.UriSchemeHttps;
         string? hostHeader = null;
-        if (_tlsConnector is not null && requestUri.Scheme == Uri.UriSchemeHttps)
+        if (secure && _tlsConnector is not null)
         {
             hostHeader = TlsFingerprintConnector.HostHeader(requestUri);
             requestUri = TlsFingerprintConnector.PlainRequestUri(requestUri);
         }
 
-        var request = new HttpRequestMessage(new HttpMethod(method), requestUri)
+        var request = new HttpRequestMessage(new HttpMethod(ctx.Method), requestUri)
         {
             Version = HttpVersion.Version11,
             VersionPolicy = HttpVersionPolicy.RequestVersionOrLower,
@@ -1057,7 +1393,7 @@ public sealed class RetryProxy
             request.Content = content;
         }
 
-        foreach (var (name, value) in headers)
+        foreach (var (name, value) in attempt.Headers)
         {
             if (!request.Headers.TryAddWithoutValidation(name, value))
             {
@@ -1070,17 +1406,18 @@ public sealed class RetryProxy
             request.Headers.Host = hostHeader;
         }
 
-        // 连接外层的 HeaderOrderStream 读取并删掉这个内部头，按其顺序重排请求头（HttpClient 自己会把 Host 放最前、Content-* 放最后）。
-        if (_reorderHeaders && ctx.HeaderOrder.Count > 0)
+        // https 连接外层的 HeaderOrderStream 读取并删掉这个内部头，按其顺序重排请求头（HttpClient 自己会把 Host 放最前、Content-* 放最后）。
+        // http 连接没有这一层，不能加，否则会原样发到上游。
+        if (secure && attempt.HeaderOrder.Count > 0)
         {
-            request.Headers.TryAddWithoutValidation(HeaderOrderStream.PlanHeader, string.Join(",", ctx.HeaderOrder));
+            request.Headers.TryAddWithoutValidation(HeaderOrderStream.PlanHeader, string.Join(",", attempt.HeaderOrder));
         }
 
         // 非流式请求整体受单次超时约束；流式请求只在等响应头与每次读取上各自计时。
         var overall = streaming ? null : new CancellationTokenSource(timeout);
         using var sendCts = overall is null
-            ? CancellationTokenSource.CreateLinkedTokenSource(ctx.Token)
-            : CancellationTokenSource.CreateLinkedTokenSource(ctx.Token, overall.Token);
+            ? CancellationTokenSource.CreateLinkedTokenSource(attempt.Token)
+            : CancellationTokenSource.CreateLinkedTokenSource(attempt.Token, overall.Token);
         if (overall is null)
         {
             sendCts.CancelAfter(timeout);
@@ -1090,13 +1427,13 @@ public sealed class RetryProxy
         Stream stream;
         try
         {
-            response = await _client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, sendCts.Token).ConfigureAwait(false);
+            response = await (secure ? _httpsClient : _httpClient).SendAsync(request, HttpCompletionOption.ResponseHeadersRead, sendCts.Token).ConfigureAwait(false);
             stream = await response.Content.ReadAsStreamAsync(sendCts.Token).ConfigureAwait(false);
         }
         catch (OperationCanceledException failure)
         {
             overall?.Dispose();
-            if (ctx.Token.IsCancellationRequested)
+            if (attempt.Token.IsCancellationRequested)
             {
                 throw;
             }
@@ -1133,11 +1470,12 @@ public sealed class RetryProxy
             new HttpChunkSource(response, stream, timeout, overall));
     }
 
-    private async Task<UpstreamResponse> SendCacheAwareAsync(RequestContext ctx, string method, string targetUrl, HeaderList headers, CacheRequestBody request, bool streaming)
+    private async Task<UpstreamResponse> SendCacheAwareAsync(RequestContext ctx, AttemptScope attempt, bool streaming)
     {
+        var request = attempt.Plan.CacheRequest;
         while (true)
         {
-            var response = await SendUpstreamAsync(ctx, method, targetUrl, headers, request.Body, streaming).ConfigureAwait(false);
+            var response = await SendUpstreamAsync(ctx, attempt, request.Body, streaming).ConfigureAwait(false);
             var contentType = response.Headers.Get("content-type");
             var jsonError = contentType is null || IsJsonMime(contentType);
             var encoding = response.Headers.Get("content-encoding");
@@ -1150,7 +1488,7 @@ public sealed class RetryProxy
                 List<(ReadOnlyMemory<byte>?, Exception?)>? replay;
                 try
                 {
-                    replay = await ProbeCacheErrorAsync(response.Source, encoding, ctx.Token).ConfigureAwait(false);
+                    replay = await ProbeCacheErrorAsync(response.Source, encoding, attempt.Token).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException)
                 {
@@ -1292,24 +1630,24 @@ public sealed class RetryProxy
 
     private async Task<ProxyResponse> PrepareStreamResponseAsync(
         RequestContext ctx,
+        AttemptScope attempt,
         ChunkReader reader,
         long? expectedBodyBytes,
         HeaderList responseHeaders,
         ulong attemptNumber,
-        ulong totalAttempts,
         int status,
-        bool usingSystemProxy,
-        string? model,
-        CacheKeyState cacheKeyState,
         KeepAliveTemplate? keepAliveTemplate,
         bool logCompletion)
     {
         var requestId = ctx.RequestId;
-        var stats = new ResponseStats(responseHeaders, ctx.SafePath, model).WithCacheKeyState(cacheKeyState);
+        var plan = attempt.Plan;
+        var usingSystemProxy = plan.UsingSystemProxy;
+        var generationTimeoutSeconds = plan.Snapshot.GenerationTimeoutSeconds;
+        var stats = new ResponseStats(responseHeaders, ctx.SafePath, plan.Model).WithCacheKeyState(plan.CacheRequest.State);
         var generationGate = status is >= 200 and < 300 && stats.IsApiEventStream
             ? new GenerationGate(ContentDecoder.Create(responseHeaders.Get("content-encoding")))
             : null;
-        var generationDeadline = Deadline.AfterSeconds(Config.GenerationTimeoutSeconds);
+        var generationDeadline = Deadline.AfterSeconds(generationTimeoutSeconds);
         var prefix = new ByteBuffer();
         ulong receivedBodyBytes = 0;
         var upstreamFinished = false;
@@ -1318,7 +1656,8 @@ public sealed class RetryProxy
             ctx.Metrics.RequestPhase(requestId, RequestPhase.WaitingGeneration);
         }
 
-        Task? generationTimer = generationGate is null ? null : generationDeadline.WaitAsync(ctx.Token);
+        // 等待生成期间也跟随切换：切换 Key 时这里抛出取消，由主循环改用新 Key 重发。
+        Task? generationTimer = generationGate is null ? null : generationDeadline.WaitAsync(attempt.Token);
         ReadOnlyMemory<byte>? firstChunk = null;
         while (true)
         {
@@ -1326,11 +1665,11 @@ public sealed class RetryProxy
             if (!readTask.IsCompleted)
             {
                 await (generationTimer is null
-                    ? Task.WhenAny(readTask, ctx.Cancelled)
-                    : Task.WhenAny(readTask, ctx.Cancelled, generationTimer)).ConfigureAwait(false);
+                    ? Task.WhenAny(readTask, attempt.Cancelled)
+                    : Task.WhenAny(readTask, attempt.Cancelled, generationTimer)).ConfigureAwait(false);
             }
 
-            ctx.Token.ThrowIfCancellationRequested();
+            attempt.Token.ThrowIfCancellationRequested();
             if (generationGate is not null && generationDeadline.HasPassed)
             {
                 if (generationGate.Finish())
@@ -1339,7 +1678,7 @@ public sealed class RetryProxy
                     break;
                 }
 
-                throw new NoGenerationException($"等待生成达到 {StreamLifecycle.Format(Config.GenerationTimeoutSeconds)} 秒，尚未向客户端转发响应", stats.FailureLogFields());
+                throw new NoGenerationException($"等待生成达到 {StreamLifecycle.Format(generationTimeoutSeconds)} 秒，尚未向客户端转发响应", stats.FailureLogFields());
             }
 
             if (!readTask.IsCompleted)
@@ -1400,10 +1739,11 @@ public sealed class RetryProxy
             KeepAlive,
             keepAliveTemplate,
             logCompletion,
-            _localAccessKey is not null && requestId.StartsWith(ProxyMetrics.KeepAlivePrefix, StringComparison.Ordinal) && IsRetryableStatus(status),
+            _preparationProxy && requestId.StartsWith(ProxyMetrics.KeepAlivePrefix, StringComparison.Ordinal) && IsRetryableStatus(status),
             ctx.Deadline,
-            Config.TotalTimeoutSeconds,
-            ctx.Cancel);
+            ctx.TotalTimeoutSeconds,
+            ctx.Cancel,
+            plan.LogFields);
         if (upstreamFinished)
         {
             lifecycle.Finish();
@@ -1513,27 +1853,31 @@ public sealed class RetryProxy
         }
     }
 
-    /// <summary>记录一次失败的尝试；返回 true 表示已到重试上限。</summary>
+    /// <summary>
+    /// 记录一次失败的尝试；<paramref name="canRetry"/> 为 false 或已无重试机会时返回 true（已到重试上限），
+    /// 否则按第 <paramref name="retries"/> 次重试的间隔等待后返回 false。
+    /// </summary>
     private async Task<bool> HandleAttemptFailureAsync(
         RequestContext ctx,
+        AttemptScope attempt,
         ulong attemptNumber,
-        ulong totalAttempts,
+        bool canRetry,
+        ulong retries,
         int? status,
         MonotonicInstant startedAt,
-        bool usingSystemProxy,
         Exception error)
     {
         var elapsed = startedAt.ElapsedSeconds;
         var phase = status is null ? NetworkPhase.AwaitingResponse : NetworkPhase.ReadingResponse;
         var (label, fields) = error switch
         {
-            UpstreamException network => (NetworkErrorLabel.Describe(network, usingSystemProxy, phase), string.Empty),
+            UpstreamException network => (NetworkErrorLabel.Describe(network, attempt.Plan.UsingSystemProxy, phase), string.Empty),
             NoGenerationException generation => (generation.Reason, generation.Fields),
             _ => throw error,
         };
         var statusText = status is { } value ? LogText.UpstreamStatus(value) : "上游状态码：无";
-        double? delay = totalAttempts == 0 || attemptNumber < totalAttempts ? RetryDelay(attemptNumber - 1, null, null) : null;
-        var isTemporaryKeepAlive = _localAccessKey is not null && ctx.RequestId.StartsWith(ProxyMetrics.KeepAlivePrefix, StringComparison.Ordinal);
+        double? delay = canRetry ? RetryDelay(retries, null, null, attempt.Plan.Snapshot) : null;
+        var isTemporaryKeepAlive = _preparationProxy && ctx.RequestId.StartsWith(ProxyMetrics.KeepAlivePrefix, StringComparison.Ordinal);
         var attemptText = isTemporaryKeepAlive ? "本轮" : LogText.AttemptText(attemptNumber);
         var failureText = $"{statusText}，{label}";
         var message = $"[{ctx.RequestId}] {attemptText} {ctx.Method} {ctx.SafePath} -> {failureText}{fields}，耗时 {elapsed:F2} 秒";
@@ -1549,7 +1893,7 @@ public sealed class RetryProxy
         LogRetry(ctx, failureText, $"{message}，{LogText.RetryDelayText(wait)}");
         ctx.Metrics.Retry(ctx.RequestId, attemptNumber);
         ctx.Metrics.RequestPhase(ctx.RequestId, RequestPhase.WaitingRetry);
-        await WaitDelayAsync(wait, ctx.Token).ConfigureAwait(false);
+        await WaitDelayAsync(wait, ctx, attempt.Token).ConfigureAwait(false);
         return false;
     }
 
@@ -1567,10 +1911,11 @@ public sealed class RetryProxy
         }
     }
 
-    private async Task WaitDelayAsync(double delay, CancellationToken token)
+    /// <summary>退避等待；切换 Key 时 <paramref name="token"/> 取消，等待立即结束。</summary>
+    private static async Task WaitDelayAsync(double delay, RequestContext ctx, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
-        var seconds = Math.Min(Math.Max(delay, 0.0), Config.TotalTimeoutSeconds);
+        var seconds = Math.Min(Math.Max(delay, 0.0), ctx.TotalTimeoutSeconds);
         if (double.IsNaN(seconds))
         {
             seconds = 0;
@@ -1579,7 +1924,10 @@ public sealed class RetryProxy
         await Task.Delay(TimeSpan.FromSeconds(seconds), token).ConfigureAwait(false);
     }
 
-    public double RetryDelay(ulong attempt, int? status, HeaderList? headers)
+    /// <summary>第 <paramref name="attempt"/> 次重试（从 0 起）前的等待秒数，按当前快照的退避间隔计算。</summary>
+    public double RetryDelay(ulong attempt, int? status, HeaderList? headers) => RetryDelay(attempt, status, headers, _channel.Current);
+
+    private double RetryDelay(ulong attempt, int? status, HeaderList? headers, ChannelSnapshot snapshot)
     {
         if (status is 429 or 503 && headers?.Get("retry-after") is { } value && ParseRetryAfter(value) is { } retryAfter)
         {
@@ -1587,15 +1935,15 @@ public sealed class RetryProxy
             return retryAfter + _randomValue() * RetryJitterSeconds;
         }
 
-        var baseDelay = Config.BaseDelaySeconds;
+        var baseDelay = snapshot.BaseDelaySeconds;
         for (ulong index = 0; index < attempt; index++)
         {
-            if (baseDelay == 0.0 || baseDelay >= Config.MaxDelaySeconds)
+            if (baseDelay == 0.0 || baseDelay >= snapshot.MaxDelaySeconds)
             {
                 break;
             }
 
-            baseDelay = Math.Min(baseDelay * 2.0, Config.MaxDelaySeconds);
+            baseDelay = Math.Min(baseDelay * 2.0, snapshot.MaxDelaySeconds);
         }
 
         if (baseDelay == 0.0)
@@ -1605,7 +1953,7 @@ public sealed class RetryProxy
 
         // 在允许区间内采样，到达上限后仍保留抖动。
         var minimum = Math.Max(baseDelay - RetryJitterSeconds, 0.0);
-        var maximum = Math.Min(baseDelay + RetryJitterSeconds, Config.MaxDelaySeconds);
+        var maximum = Math.Min(baseDelay + RetryJitterSeconds, snapshot.MaxDelaySeconds);
         return minimum + _randomValue() * (maximum - minimum);
     }
 
@@ -1643,49 +1991,9 @@ public sealed class RetryProxy
         return Array.IndexOf(RetryableStatusCodes, status) >= 0 || status is >= 500 and <= 599;
     }
 
-    /// <summary>
-    /// Claude Code and CCSwitch default to Bearer; some compatible providers still accept only x-api-key.
-    /// Returns the other format for the current request, or null when no conversion is possible.
-    /// </summary>
-    private static HeaderList? ClaudeAuthenticationFallback(HeaderList headers)
-    {
-        var apiKey = headers.Get("x-api-key") ?? headers.Get("api-key");
-        if (!string.IsNullOrWhiteSpace(apiKey))
-        {
-            var fallback = headers.Clone();
-            fallback.Remove("authorization");
-            fallback.Remove("x-api-key");
-            fallback.Remove("api-key");
-            fallback.Set("authorization", $"Bearer {apiKey}");
-            return fallback;
-        }
-
-        var authorization = headers.Get("authorization");
-        const string bearerPrefix = "Bearer ";
-        if (authorization is null || !authorization.StartsWith(bearerPrefix, StringComparison.OrdinalIgnoreCase))
-        {
-            return null;
-        }
-
-        var token = authorization[bearerPrefix.Length..].Trim();
-        if (token.Length == 0)
-        {
-            return null;
-        }
-
-        var alternate = headers.Clone();
-        alternate.Remove("authorization");
-        alternate.Remove("x-api-key");
-        alternate.Remove("api-key");
-        alternate.Set("x-api-key", token);
-        return alternate;
-    }
-
-    internal static string BuildTargetUrl(string baseUrl, string path, string query)
-    {
-        var target = $"{baseUrl.TrimEnd('/')}/{path.TrimStart('/')}";
-        return query.Length > 0 ? $"{target}?{query}" : target;
-    }
+    /// <summary>上游地址按客户端规则拼接，见 <see cref="UrlRules.UpstreamTarget"/>。</summary>
+    internal static string BuildTargetUrl(ClientType clientType, string baseUrl, string path, string query) =>
+        UrlRules.UpstreamTarget(clientType, baseUrl, path, query);
 }
 
 internal sealed class ProxyBodyException : Exception

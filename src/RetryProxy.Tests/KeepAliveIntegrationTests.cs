@@ -66,7 +66,8 @@ public class KeepAliveIntegrationTests
         var reached = new Notify();
         await using var fixture = await LifecycleProxy.StartAsync(async context =>
         {
-            if (context.Request.Path == "/pending")
+            // 测试通道是 Codex：没有路径的上游地址按 {地址}/v1 拼接（PRD-供应商管理 §6.1）。
+            if (context.Request.Path == "/v1/pending")
             {
                 reached.NotifyOne();
                 await Upstream.Pending(context);

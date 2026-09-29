@@ -44,10 +44,10 @@
 | D4 | 发布形态 | **已确认**：框架依赖（`SelfContained=false`）+ `PublishSingleFile=true` + win-x64，产物 `dist\RetryProxy.exe`（约 10 MB）。运行需要 .NET 9 Desktop Runtime 与 ASP.NET Core Runtime（Kestrel 依赖 `Microsoft.AspNetCore.App`）。 | 首次启动缺运行时时，.NET 宿主会弹出下载提示；README 写明安装 "ASP.NET Core Runtime 9 (Hosting Bundle)" 或分别安装两个运行时。 |
 | D5 | 配置存储 | **已确认：完全沿用 BetterGI 方式**，`{exe 目录}\User\config.json`，System.Text.Json 缩进输出，`ConfigService` 读失败时把坏文件备份到 `User\backup\` 后用默认值重建；`AllConfig` 任一属性变更即整体落盘（200 ms 防抖）。代理配置（`ProxyConfig`：providers/routes/selected_route_id/schema_version）作为 `AllConfig.Proxy` 子对象存放，界面偏好（主题、语言、托盘行为、窗口尺寸）作为 `AllConfig.Common` 等同级子对象。 | 与 Rust 版**不再共用**配置。首次启动若 `config.json` 不存在而注册表 `HKCU\Software\LLM Retry Proxy\ConfigJson` 存在，则读取并迁移一次（走同一套 schema 6 迁移逻辑），写入 config.json 后不再回写注册表；日志记录 `已从注册表导入旧配置`。`RETRY_PROXY_CONFIG_JSON` 环境变量注入仍保留供测试使用，此时保存为空操作。**schema、读失败处理与写入方式已被《PRD-供应商管理》§8 取代（2026-09-29）**：schema 7、迁移前备份、原子写、读失败不再用默认值重建落盘。 |
 | D6 | HTTP 服务端 | 每条通道一个独立 Kestrel `WebApplication`，绑定 `127.0.0.1:port`；停用即硬停（不做优雅关闭），与 Rust 语义一致。 | 用 `<FrameworkReference Include="Microsoft.AspNetCore.App"/>`。不用 HttpListener（http.sys 无法精细控制流式与 499）。 |
-| D7 | HTTP 客户端 | 每通道一个 `HttpClient`（`SocketsHttpHandler`：禁重定向、ConnectTimeout=单次超时、自定义 `IWebProxy` 复刻 `system_proxy.rs` 规则、TLS 走 SChannel）。连续无数据超时用逐段读取 + `CancellationTokenSource` 实现。 | .NET 无原生 read-timeout。 |
+| D7 | HTTP 客户端 | 每通道一个 `HttpClient`（`SocketsHttpHandler`：禁重定向、ConnectTimeout=单次超时、自定义 `IWebProxy` 复刻 `system_proxy.rs` 规则、TLS 走 SChannel）。连续无数据超时用逐段读取 + `CancellationTokenSource` 实现。**客户端个数与连接超时已被《PRD-供应商管理》§9 取代（2026-09-29）**：每通道按 http / https 各一个 `HttpClient`，连接超时在连接回调里按当前快照计时，改参数后新连接立即生效。 | .NET 无原生 read-timeout。 |
 | D8 | 页面结构 | **已确认（2026-09-22，用户明确"首页要和参考项目一致"；同日拍板落点）**：NavigationView 六页：**首页**（照搬 BetterGI 首页：横幅 + 一张「代理服务，启动！」折叠卡，卡内含服务商/通道的新增/编辑/删除按钮，见 5.2）、**运行状态**（新增：通道计数与全部启停、状态胶囊、保活状态、统计瓦片、缓存摘要、请求明细、策略行）、**运行日志**（新增：日志面板独占一页）、**缓存明细**（原独立窗口改为页面，只从左侧导航进入）、**设置**（语言 + 「开机自动启动」折叠组）、**关于**。 | 首页视觉与 BetterGI 一致优先于沿用 Rust 工作流。M0 已按此实现首页/设置页并截图验证；运行状态、运行日志两页在 M5 实现。 |
 | D9 | 日志面板 | 不用 Serilog RichTextBox sink；自实现 `LogPage` 控件：虚拟化 `ListView` + 按行着色（等价 Rust `log_line_job`）。文件日志沿用 Rust 格式（自实现轮转 5 MiB × 3），**不用 Serilog 按日滚动**，否则 legacy 恢复解析失效。 | 旧日志恢复逻辑依赖 `retry-proxy.log(.1/.2/.3)` 与 `WARNING` 级别字样。 |
-| D10 | JSON 库 | 统一 `System.Text.Json`；prompt_cache_key 插入采用字节级操作，不反序列化重写。 | AGENTS.md 偏好 Newtonsoft，但本项目需要保留原始字节，STJ 足够。 |
+| D10 | JSON 库 | 统一 `System.Text.Json`；prompt_cache_key 插入采用字节级操作，不反序列化重写。适用范围已被《PRD-供应商管理》§6.2 扩展（2026-09-29）：顶层 `model` 改写同样按字节替换。 | AGENTS.md 偏好 Newtonsoft，但本项目需要保留原始字节，STJ 足够。 |
 | D11 | 图标 | 用 Rust `icon.rs` 的配色重新绘制静态 `logo.ico`/`logo.png`（深靛底、青绿链路、橙色箭头）。 | 不复用 BetterGI 的原神图标。 |
 
 ---
@@ -206,13 +206,13 @@ D:\RetryProxy\
 ### 6.2 服务生命周期（Core/Service）
 - 状态机 `Stopped/Starting/Running/Stopping/Error`；`request_start` 仅在 Stopped/Error 时生效；绑定失败置 Error `无法监听 http://127.0.0.1:{port}：{err}`。
 - 停止为硬停：取消所有处理中请求，日志 `代理服务已停止，丢弃 {N} 个处理中的请求`。
-- 启动日志 `代理服务已启动：{url}（上游请求跟随系统代理）`。
+- 启动日志 `代理服务已启动：{url}（上游请求跟随系统代理）`。已被《PRD-供应商管理》§4.2 调整（2026-09-29）：写明当前"供应商 · Key"，例 `代理服务已启动：http://127.0.0.1:18081，当前 Any · 主号（上游请求跟随系统代理）`。
 - 每通道恢复当日统计并写 `已恢复 {date} 当日统计：…`。
 - UI 重建服务对象时复用 `ProxyMetrics` 实例。
 
 ### 6.3 代理核心（Core/Proxy）
 - 路由：`GET /_retry/health` → 健康 JSON；其余全部转发；请求体上限 100 MiB。
-- 请求头：删 hop-by-hop 8 项、`Connection` 列出的 token、`host`、`content-length`、`x-retry-keepalive`、`x-retry-preparation-id`；`x-codex-turn-metadata` 中剔除 `retry_proxy_keepalive`；其余含鉴权头原样透传；流式或有 model 时加 `Accept-Encoding: identity`。
+- 请求头：删 hop-by-hop 8 项、`Connection` 列出的 token、`host`、`content-length`、`x-retry-keepalive`、`x-retry-preparation-id`；`x-codex-turn-metadata` 中剔除 `retry_proxy_keepalive`；其余含鉴权头原样透传（鉴权头处理已被《PRD-供应商管理》§7 取代（2026-09-29）：带本地口令的请求注入当前 Key，其余原样透传；新增 Host / Origin 校验，健康检查同样受限；上游地址按该文 §6.1 拼接）；流式或有 model 时加 `Accept-Encoding: identity`。
 - 正文：`strip_internal_request_metadata` 剔除内部标记；`prompt_cache_key` 补全（§6.5）。
 - 错误映射：取消 499 空体；总等待到期 504 `proxy_timeout`；正文错误 400 `invalid_request`；重试耗尽无完整响应 502 `upstream_unavailable`。
 - 重试判定：网络错误、408、425、429、5xx；`Retry-After` 仅对 429/503 HTTP 重试生效（数字或 HTTP 日期，+0～500 ms）。
@@ -236,7 +236,7 @@ D:\RetryProxy\
 - 仅 POST `/responses`、`/v1/responses`、`/chat/completions`、`/v1/chat/completions`（允许尾斜杠）；GPT 模型（`gpt-` 前缀）；排除保活、>4 MiB、压缩、非 JSON、签名/校验头。
 - 客户端已有 `prompt_cache_key`（含 null/空）→ `client`。
 - 会话来源优先级：`thread_id`/`session_id` 请求头 → `x-codex-turn-metadata` 头 → 正文 `client_metadata` → `conversation`；无 → `missing_session`。
-- scope = SHA-256(namespace, endpoint, model, 五个鉴权头名/数量/值，长度前缀编码)；key = `rp1_` + SHA-256(前缀, scope, session)[:60]。
+- scope = SHA-256(namespace, endpoint, model, 五个鉴权头名/数量/值，长度前缀编码)（namespace 已被《PRD-供应商管理》§9 取代（2026-09-29）：按每次尝试快照里的上游地址计算，切换供应商后随之改变）；key = `rp1_` + SHA-256(前缀, scope, session)[:60]。
 - 字节级插入 `,"prompt_cache_key":"…"` 于末尾 `}` 前。
 - 400/422 拒绝识别三种形态；兼容重发一次不计重试；scope 进 128 容量 LRU；错误检查 64 KiB 上限。
 
@@ -244,6 +244,7 @@ D:\RetryProxy\
 - 文件 `logs\retry-proxy.log`，行格式 `YYYY-MM-DD HH:MM:SS LEVEL message`，LEVEL 为 `INFO/WARNING/ERROR`；5 MiB 轮转 × 3。
 - 通道前缀规则：消息以 `[` 开头 → `[通道]` 紧贴；否则 `[通道] `。
 - UI 队列 10000 行有界，满则丢弃。
+- 已被《PRD-供应商管理》§4.2、§7 扩展（2026-09-29）：请求完成行追加"供应商 · Key"（客户端自带密钥时为"供应商 · 客户端凭据"）与模型改写；新增切换、改投与拒绝非本机访问三类日志。
 - **精简（2026-09-28 用户确认）**：请求编号只显示前 8 位（缓存页同步，统计仍存完整 ID）；同一请求同一原因的重试只写第 1 次完整行（`第 N 次 … -> 原因，诊断字段，X.X 秒后重试`），之后每 20 次一条 `已重试 N 次，仍是…`，原因变化时重新写完整行；成功行不再写 `第 N/总数 次`，改为 `上游 HTTP 200（重试 N 次后成功）`；失败时用量全缺就不写 `输入 未获取 / 输出 未获取`；缓存用量合并为 `缓存 95.9%（命中 X / 写入 Y）`。此后新日志与 Rust 格式不再逐字一致，legacy 恢复只用于旧 Rust 日志。
 
 ### 6.7 每日统计（Core/Metrics）
@@ -266,13 +267,14 @@ D:\RetryProxy\
 - 5 秒轮询 + 准备唤醒；单轮超时 `min(timeout, total_timeout)`。
 - 日志文案（`供应商保活 [会话 xxxxxxxx] 第 N 轮，随机题号 i/250，…`、响应未完成/本轮已中断两类）逐字沿用。
 - （2026-09-28 用户要求）本轮成功改为 `第 N 轮 {CLI} CLI 完成，当前会话 x/y token，耗时 z 秒，回答：…`：模型、token、首字只记在代理的请求行，避免一次请求看似两次；准备转入保活只由“准备完成”一行说明。
+- 已被《PRD-供应商管理》§4.2、§7 扩展（2026-09-29）：当前供应商有 Key 时保活 CLI 带本地口令经本通道（`CliCredential.ForChannel`）；切换 Key 只重置会话（`ResetSession`），不清准备状态；换服务商不再重建看门狗。
 - 内部请求识别：`x-retry-keepalive` 头、`x-codex-turn-metadata` 头/正文中的 `retry_proxy_keepalive`，全局会话表登记；内部请求用独立空 metrics、`保活-` 前缀 id，不计统计。
 
 ### 6.10 CLI 驱动（Core/Cli）
 - 定位：`RETRY_PROXY_CLAUDE_CLI` / `RETRY_PROXY_CODEX_CLI` 绝对路径优先；否则 PATH 上 `.exe/.cmd/.bat/.ps1`，`.ps1` 用 `powershell -NoProfile -ExecutionPolicy Bypass -File` 包装。
 - 启动：临时目录 cwd、三路管道、`CREATE_NO_WINDOW`、Job Object `KILL_ON_JOB_CLOSE`；释放时 `TerminateJobObject` + 等待 5 s + Kill。
-- Codex：`codex app-server --listen stdio://` + 9 项 `-c` 禁用工具；指定 Key 时 `model_provider=retry_proxy_prepare` 五项 + 环境变量 `RETRY_PROXY_PREPARE_KEY`；握手 `initialize` → `initialized` → `config/read` 生成 `mcp_servers.*.enabled=false` → `thread/start`（ephemeral、never、read-only、developerInstructions）；`turn/start` 带 `responsesapiClientMetadata.retry_proxy_keepalive`；事件解析（delta/首字、item/completed 答案、tokenUsage、turn/completed、工具请求拒绝 `-32601`）。
-- Claude Code：`claude --print --input-format stream-json --output-format stream-json --verbose --include-partial-messages --no-session-persistence --tools "" --strict-mcp-config --mcp-config {"mcpServers":{}} --disable-slash-commands --settings {…} --append-system-prompt …`；`ANTHROPIC_CUSTOM_HEADERS` 追加 `x-retry-keepalive`；指定 Key 时 settings.env + 进程环境双重覆盖，移除 `CLAUDECODE`、`ANTHROPIC_API_KEY`；事件解析（session_id、control_request 拒绝、message_start/delta、result 判定）。
+- Codex：`codex app-server --listen stdio://` + 9 项 `-c` 禁用工具；指定 Key 时 `model_provider=retry_proxy_prepare` 五项 + 环境变量 `RETRY_PROXY_PREPARE_KEY`（地址规则已被《PRD-供应商管理》§6.1 取代（2026-09-29）：按 `UrlRules.ClientBaseUrl` 补 `/v1`；通道保活时 provider 名称为"Retry Proxy 通道保活"，Claude 通道保活同样不给工具）；握手 `initialize` → `initialized` → `config/read` 生成 `mcp_servers.*.enabled=false` → `thread/start`（ephemeral、never、read-only、developerInstructions）；`turn/start` 带 `responsesapiClientMetadata.retry_proxy_keepalive`；事件解析（delta/首字、item/completed 答案、tokenUsage、turn/completed、工具请求拒绝 `-32601`）。
+- Claude Code：`claude --print --input-format stream-json --output-format stream-json --verbose --include-partial-messages --no-session-persistence --tools "" --strict-mcp-config --mcp-config {"mcpServers":{}} --disable-slash-commands --settings {…} --append-system-prompt …`；`ANTHROPIC_CUSTOM_HEADERS` 追加 `x-retry-keepalive`；指定 Key 时 settings.env + 进程环境双重覆盖（带密钥或本地口令的 settings 改为写入会话工作目录的文件再传路径，2026-09-29，见《PRD-供应商管理》§7），移除 `CLAUDECODE`、`ANTHROPIC_API_KEY`；事件解析（session_id、control_request 拒绝、message_start/delta、result 判定）。
 - 单条输出 2 MiB 保护；答案 512 KiB；伪响应喂 `ResponseStats` 复用 usage 解析。
 - `SafeCliError`：JSON-RPC 码表 5 项、协议细节分类（缺少字段/不支持字段/类型/取值 + 15 个字段白名单）、关键字分类 7 项、诊断编号 16 位十六进制、兜底文案。Key 与原始错误不落日志。
 - `CliCredential` 校验三条文案；`ToString` 脱敏。

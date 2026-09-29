@@ -84,6 +84,7 @@ public sealed class PreparationWorkspace
         ? $"开始时读取 {options.ClientType.Label()} 当前供应商的地址与密钥，运行中的任务沿用开始时的配置。"
         : $"使用 {options.ClientType.Label()} 为填写的供应商准备，地址与密钥随任务保存。";
 
+    /// <summary>后台临时代理的运行时配置；供应商地址原样保存，按客户端的地址规则拼接（PRD-供应商管理 §6.1）。</summary>
     internal static ProxyConfig CreateRuntimeConfig(string baseUrl, int port, double idleMinutes, ClientType clientType,
         ReasoningEffort reasoningEffort = ReasoningEffort.Default) => new()
     {
@@ -94,7 +95,7 @@ public sealed class PreparationWorkspace
         KeepaliveIdleMinutes = idleMinutes,
         KeepaliveContextLimit = (long)KeepAliveWatchdog.DefaultContextLimit,
         KeepaliveReasoningEffort = reasoningEffort,
-        UpstreamBaseUrl = baseUrl.EndsWith("/v1", StringComparison.OrdinalIgnoreCase) ? baseUrl[..^3] : baseUrl,
+        UpstreamBaseUrl = baseUrl,
     };
 
     public bool SubmitPrepareDialog(PreparationDialogState dialog)
@@ -161,7 +162,7 @@ public sealed class PreparationWorkspace
         var service = new ProxyService(_logger, marker)
             .WithKeepAliveWatchdog(watchdog)
             .WithRouteLogger(logger)
-            .WithUpstreamApiKey(upstream.ApiKey, credential.ApiKey, upstream.AuthMode);
+            .AsPreparationProxy(upstream.ApiKey, credential.ApiKey, upstream.AuthMode);
         service.SetUiNotifier(_uiNotifier);
         service.RequestStart(runtime);
         if (task is null)

@@ -109,12 +109,12 @@
 
 ### 4.2 切换
 
-- 入口：供应商页 Key 行的「切换」、托盘菜单、「撤销」。
+- 入口：供应商页 Key 行的「切换」、托盘菜单、「撤销」。M2 已提供 `ProxyWorkspace.SwitchKey`，界面入口随 M3 接入（2026-09-29 调整）。
 - 生效时间：从点击开始，之后的每一次尝试都读取新快照（地址、认证方式、Key、模型映射），通道不重启。
-- 在途请求（P2）：凡是还没有写给客户端任何字节的请求，都取消当前尝试和退避等待，立即用新 Key 重发；已开始输出的请求不受影响。
+- 在途请求（P2）：凡是还没有写给客户端任何字节的请求，都取消当前尝试和退避等待，立即用新 Key 重发；已开始输出的请求不受影响。改投不占重试次数，请求的总等待仍从开始时算起；只改参数（同一个 Key）时，正在进行的等待照常走完，下一次尝试再用新参数（2026-09-29 调整）。不带本地口令、透传客户端自带凭据的请求不改投：换了供应商后，在途的请求留在开始时的供应商上走完重试（客户端的密钥不能发给新供应商），之后的新请求按当前供应商转发（2026-09-29 调整）。
 - 客户端配置：地址和本地口令不动。只有模型设置变化时，才更新模型相关字段（见 §6.2）。
-- 保活：本通道的保活会话重置，下一轮用新 Key 重新建立会话。
-- 日志：沿用现有前缀规则 `[来源][通道][行为]`，示例：`[通道代理][Claude Code] 已切换：Any · 主号 → Any · 群号，2 个未输出的请求改用新 Key 重发`。
+- 保活：本通道的保活会话重置，下一轮用新 Key 重新建立会话。通道未运行时切换同样丢弃旧会话（2026-09-29 调整）。
+- 日志：沿用现有前缀规则 `[来源][通道][行为]`，示例：`[通道代理][Claude Code] 已切换：Any · 主号 → Any · 群号，2 个未输出的请求改用新 Key 重发`。每个改投的请求另记一行：`[编号] 已切换到 Any · 群号，本请求尚未向客户端输出，立即改用新 Key 重发（不计入重试次数）`；请求完成行写明"供应商 · Key"，客户端自带密钥时写"供应商 · 客户端凭据"（2026-09-29 调整）。
 - 撤销：提示条上的「撤销」等同于切回上一个 Key，走同一套流程。
 
 ### 4.3 自动换 Key（已取消，2026-09-28）
@@ -263,7 +263,7 @@
   - 透传压缩。
   - 本通道保活：开关、间隔、思考强度、会话上限。
   - 「启动代理」/「停止代理」：停止时说明"客户端将改回直连"。代理随软件启动自动运行，「停止代理」只对本次运行有效。
-  - 生效方式：除端口外，保存后对新的尝试立即生效，不再要求先停用通道；改端口按 §4.4 执行。
+  - 生效方式：除端口外，保存后对新的尝试立即生效，不再要求先停用通道；改端口按 §4.4 执行。M2 已实现热更新；运行中改端口暂时提示先停用通道，§4.4 的改端口流程随 M3 代理设置抽屉一起做（2026-09-29 调整）。
 - 准备任务抽屉：取代现在的 `PrepareOptionsDialog`，字段按 §4.7。选"从列表选择"时显示 Key 勾选表。
 
 ### 5.4 统计页（U12）
@@ -317,16 +317,16 @@
     - `https://x666.me/v1` → `https://x666.me/v1/responses`
     - `https://new.sharedchat.cc/codex` → `https://new.sharedchat.cc/codex/responses`
 - 余额查询：用供应商地址去掉末尾 `/v1` 后的查询地址（§4.6）。
-- 现有约定要一起调整：`CliSession.cs` 追加 `/v1`、`PreparationWorkspace.cs` 去掉 `/v1`，改为统一使用上面的规则。
+- 现有约定要一起调整：`CliSession.cs` 追加 `/v1`、`PreparationWorkspace.cs` 去掉 `/v1`，改为统一使用上面的规则。M2 已完成：保活 CLI 连 Codex 通道时按 `UrlRules.ClientBaseUrl` 补 `/v1`，后台临时准备代理不再去掉供应商地址的 `/v1`（2026-09-29）。
 
 ### 6.2 模型映射
 
 - Claude：
-  - 接管后，客户端配置里写的是固定的官方角色名（§4.4）。代理按请求模型名里的关键字 opus / sonnet / haiku / fable，映射到当前 Key 对应角色的模型；没有单独指定的角色用主模型；关键字都不匹配时，也用主模型。
-  - 1M 处理：Claude Code 发请求时会去掉 `[1M]` 后缀，改为带 `anthropic-beta: context-1m-*` 头。目标角色没有勾选 1M 时，删掉这个头。
-  - 改写范围：所有带顶层 `model` 字段的 JSON POST，包括 `/v1/messages/count_tokens`。
-- Codex：只有当请求的模型不在当前供应商的已知模型列表里时，才改写成当前 Key 的模型。已知模型列表包括供应商模型、各 Key 的覆盖模型、最近一次「获取模型」的结果。用户在 Codex 里手选的有效模型保持不变。
-- 改写方式：按字节替换顶层 `model` 字符串（用 JSON 读取器定位），不重新序列化，与 D10 原则一致。日志记录改写前后的模型名。
+  - 接管后，客户端配置里写的是固定的官方角色名（§4.4）。代理按请求模型名里的关键字 opus / sonnet / haiku / fable，映射到当前 Key 对应角色的模型；没有单独指定的角色用主模型；关键字都不匹配时，也用主模型。Key 的模型覆盖代替主模型和主模型的 1M，单独指定了模型的角色不受影响（2026-09-29 调整）。
+  - 1M 处理：Claude Code 发请求时会去掉 `[1M]` 后缀，改为带 `anthropic-beta: context-1m-*` 头。目标角色没有勾选 1M 时，删掉这个头。只删不加：头里的版本号由客户端决定，客户端没带时不补；勾了 1M 的角色由接管时写入的 `[1M]` 让 Claude Code 自己带上（2026-09-29 调整）。
+  - 改写范围：所有带顶层 `model` 字段的 JSON POST，包括 `/v1/messages/count_tokens`。只改带本地口令、已注入 Key 的请求；供应商没设模型、正文压缩或带完整性校验头时不改（2026-09-29 调整）。
+- Codex：只有当请求的模型不在当前供应商的已知模型列表里时，才改写成当前 Key 的模型。已知模型列表包括供应商模型、各 Key 的覆盖模型、最近一次「获取模型」的结果。用户在 Codex 里手选的有效模型保持不变。「获取模型」的结果写入配置：每个供应商保存最近一次获取到的模型列表，重启后仍算已知模型（2026-09-29 陛下确认）；M2 先存在内存里，写入配置随 M3 接入「获取模型」时完成。
+- 改写方式：按字节替换顶层 `model` 字符串（用 JSON 读取器定位），不重新序列化，与 D10 原则一致。日志记录改写前后的模型名，写在请求完成行，例：`，Any · 主号，模型改写 claude-opus-5 → glm-5`（2026-09-29 调整）。
 - 客户端配置同步（P1）：切换后如果模型设置有变化，只更新模型相关字段。
   - Claude：`*_MODEL_NAME` 和各角色的 `[1M]`。
   - Codex：`model`、上下文窗口、自动压缩阈值。
@@ -340,21 +340,22 @@
   - 每条通道随机生成，保存在 config.json，接管时写进客户端配置。
   - 代理只对带本地口令的请求注入真实 Key；口令绝不外发。
   - 带其他凭据的请求（未接管的旧用法）原样透传，不注入。
-  - 带本地口令、但当前供应商没有 Key 时，在本地直接返回明确错误"当前供应商没有 Key"。
-- 访问限制：只接受 Host 为 `127.0.0.1` / `localhost` 的请求，拒绝带 `Origin` 头的请求（防止网页通过 DNS 重绑定借用端口）。
-- 通道保活的 CLI：始终显式指向本通道并带上本地口令，是否接管都能经过本通道。
+  - 带本地口令、但当前供应商没有 Key 时，在本地直接返回明确错误"当前供应商没有 Key"：HTTP 403，错误类型 `no_provider_key`，提示先为该供应商添加 Key（2026-09-29 调整）。
+- 访问限制：只接受 Host 为 `127.0.0.1` / `localhost` 的请求，拒绝带 `Origin` 头的请求（防止网页通过 DNS 重绑定借用端口）。健康检查同样受限；拒绝时返回 HTTP 403，日志每分钟最多一条，不记录请求里的原值（2026-09-29 调整）。
+- 通道保活的 CLI：始终显式指向本通道并带上本地口令，是否接管都能经过本通道。当前供应商还没有 Key 时沿用本机 CLI 默认配置（2026-09-29 调整）。
 - 明文 Key（P5）：`config.json`、`User\backup\` 下的各种备份、直连时写回的客户端配置都含明文 Key；设置页在备份目录旁加提示。
 - 脱敏：
   - 日志、统计、异常报告、`/_retry/health` 中都不出现 Key 或本地口令。
   - 余额查询的错误信息按 Key 值精确打码。
   - 界面列表只显示 Key 末 4 位。
+  - 保活 CLI 需要的密钥或本地口令写进会话工作目录里的设置文件再传路径，不出现在命令行上；工作目录在会话结束时删除（2026-09-29 调整）。
 
 ---
 
 ## 8. 数据与配置
 
 - `User\config.json` 的 `proxy` 节点升级到 schema 7，写法仍为 snake_case、固定键序：
-  - `providers[]`：`id`、`client_type`、`name`、`base_url`、`auth_mode`、`models`、`website_url`、`notes`、`balance_query`、`sort_index`，以及 `keys[]`。
+  - `providers[]`：`id`、`client_type`、`name`、`base_url`、`auth_mode`、`models`、`website_url`、`notes`、`balance_query`、`sort_index`，以及 `keys[]`；M3 起另存 `fetched_models`（最近一次「获取模型」的结果，见 §6.2，2026-09-29 陛下确认）。
   - `keys[]`：`id`、`name`、`api_key`、`model_override`、`notes`。
   - `models`：
     - Claude：主模型、主模型的 1M 标记，以及 Opus / Sonnet / Haiku / Fable 四个角色各自的模型与 1M 标记。
@@ -385,15 +386,15 @@
   - 首字节在 `DeliverAsync`（约 L612/L620）才写出，所以不需要额外的锁定逻辑。
   - 切换时，通过取消令牌中止还没交付的尝试。
 - 构造时就固定下来的东西要拆开：
-  - HttpClient：改为每条通道按 http / https 各一个；连接超时（约 L81）要随参数更新。
+  - HttpClient：改为每条通道按 http / https 各一个；连接超时（约 L81）要随参数更新。（已实现：连接回调按当前快照的单次超时计时，到时归为连接超时；Codex 走 https 时 TLS 握手与代理隧道在连接回调之后进行，仍受单次超时约束，到时记为等待响应超时）
   - 入站头序记录器（`ProxyHost.cs` L50-53）：一律安装。
-  - Claude 的 TLS 指纹连接器（约 L87-97）：一律创建，每 12 小时一次的抓取也常开。
+  - Claude 的 TLS 指纹连接器（约 L87-97）：一律创建，每 12 小时一次的抓取也常开。（已实现：核对循环每分钟看一次当前供应商是否 https，抓取仍按 12 小时节流，2026-09-29 调整）
   - PromptCache 命名空间（约 L124）：改为按快照中的地址计算。
 - 注入 Key：
-  - 复用 L800-813 的注入逻辑和 `WithUpstreamApiKey`（约 L209）。
+  - 复用 L800-813 的注入逻辑和 `WithUpstreamApiKey`（约 L209）。（已实现：`WithUpstreamApiKey` 改名 `AsPreparationProxy`，只用于后台临时准备代理；普通通道按快照注入）
   - `_localAccessKey != null` 同时被当作"临时准备代理"的标志，要拆开。涉及的位置有：约 L241/L245、L426-442、L795、L844-851、L1007、L1403、L1536。拆开后，普通通道注入 Key 仍按通道参数重试。
 - 头序：客户端占位用的是 Authorization。当供应商要求 x-api-key 时，在客户端的头序表里原位改名，不要追加到末尾（参见 `Core\Tls\HeaderOrderStream.cs` L110-113）。
-- 保活：`KeepAliveWatchdog` 新增"只重置会话"的方法。现有的 `ConfigureFlavor`（L401-429）会把准备状态一起清掉，不能直接复用。
+- 保活：`KeepAliveWatchdog` 新增"只重置会话"的方法。现有的 `ConfigureFlavor`（L401-429）会把准备状态一起清掉，不能直接复用。（已实现 `ResetSession`）
 - 一键准备：`PreparationWorkspace` 注入"供应商 ID + Key ID → 凭据"的解析器，替换 L36。
 - 配置文件读写：
   - Codex 用 Tomlyn（BSD-2-Clause，与 GPL-3.0 兼容，纯托管代码）的无损语法树读写 config.toml，同时替换 `LocalProviderCredentials` 的正则读取。
@@ -429,7 +430,7 @@
 | 阶段 | 内容 | 主要改动 | 需要调整或新增的测试 | 状态 |
 |---|---|---|---|---|
 | M1 | schema 7、迁移、安全落盘。行为不变：没有 Key 时透传 | `Core\Config\*`、`ProxyConfigJson`、`SavedPreparation`、`App\Service\ConfigService.cs` | `ProxyConfigTests`、`ProxyConfigLoaderTests`、`WorkspaceTests`、`PreparationWorkspaceTests`；新增：按 dist 配置结构的迁移用例、通道 ID 保留 | 已完成（2026-09-29）：新增 `ProviderKey`、`ProviderModels`（Claude 主模型 + 1M + 四角色，Codex 模型 + 上下文窗口 + 压缩阈值）、`BalanceQuery`、`ClientTakeoverState`；`ProviderEndpoint` 加 ID、客户端、认证方式（复用 `ClaudeAuthMode`）、Key 列表；通道以 `current_provider_id` / `current_key_id` / `local_token` 取代 `provider_name`；`ProxyConfig.EnsureClientRoutes` 保证每客户端一条通道与口令；`ConfigService` 单独解析 `proxy` 节点以拿到迁移记录，迁移前备份（留 5 份）、临时文件替换写入、读取失败阻止写盘；准备任务 `local` 读作 `current`，新增 `providerId` / `keyId` / `wasRunning` 字段（M5 使用）。过渡界面：通道管理页去掉新增 / 删除通道，编辑通道时若正在查看同客户端的另一个服务商则改用它，新增服务商可选客户端，某客户端的第一个服务商自动成为其通道的当前服务商；`SelectRouteAcrossProviders` 并入 `SelectRoute`。语义映射：旧"服务商名称引用"→ 服务商 ID；旧"同服务商多通道"→ 每客户端一条通道。踩坑：`OrderBy` 稳定排序使不同客户端的同序号服务商保持原相对顺序；迁移时保留通道集合须按引用比较（之后会改通道名）；本机注册表存有 Rust 旧版配置，无 config.json 时走导入而非内置配置。用例：WorkspaceTests 删去 7 条旧模型用例（新增 / 删除通道、同服务商多通道），新增 8 条（每客户端一条通道、编辑时换服务商、首个服务商自动绑定等），38 → 39；ProxyConfigTests 新增 6 条（dist 结构迁移、多通道取舍与无主服务商、schema 7 往返、排序、非法字段、每客户端一条通道校验），22 → 28；Loader、准备、推理强度、透传压缩、TLS 各有用例按新模型调整断言；总数 418 → 425 全部通过；另用临时控制台程序对 dist 配置副本离线验证 `ConfigService` 18 项（迁移备份、二次启动不改写、损坏 / 无效配置不覆盖、备份保留 5 份） |
-| M2 | 按尝试取快照：注入、本地口令、Host / Origin 校验、模型映射、地址规则、在途改投、参数热更新、保活会话重置 | `RetryProxy.cs`、`ProxyHost.cs`、`ProxyService.cs`、`PromptCache.cs`、`KeepAliveWatchdog.cs`、`CliSession.cs` | 请求生命周期、日志、集成、头序、TLS 指纹、PromptCache、保活等现有用例；新增 A / B 两个假上游的切换用例 | 未开始 |
+| M2 | 按尝试取快照：注入、本地口令、Host / Origin 校验、模型映射、地址规则、在途改投、参数热更新、保活会话重置 | `RetryProxy.cs`、`ProxyHost.cs`、`ProxyService.cs`、`PromptCache.cs`、`KeepAliveWatchdog.cs`、`CliSession.cs` | 请求生命周期、日志、集成、头序、TLS 指纹、PromptCache、保活等现有用例；新增 A / B 两个假上游的切换用例 | 已完成（2026-09-29）：新增 `ChannelSnapshot`（当前"供应商 · Key"加通道参数，由 `ProxyConfig.SnapshotFor` 生成）与 `ChannelState`（版本号、切换信号、未输出请求计数）；`RetryProxy` 每次尝试开头读快照，版本变了才重新 `BuildAttempt`（注入、模型改写、缓存标识、目标地址、认证头在头序表里原位改名）；http / https 各一个 HttpClient，连接超时在连接回调里按当前快照计时；入站头序记录器与 Claude 指纹连接器一律安装。带本地口令的请求注入当前 Key（Claude 被 401 / 403 拒绝时换另一种认证格式再试一次，不占重试次数），不带口令的原样透传，带口令但没有 Key 时本地返回 403 `no_provider_key`；`ProxyHost` 加 Host / Origin 校验（健康检查同样受限）；新增 `ModelRewriter` 按字节替换顶层 model。切换 Key 时，还没返回响应的真实请求（发送中、退避、等待生成）立即改用新 Key 重发且不计重试，已开始输出的留在原 Key；`ProxyService.UpdateSnapshot`、`ProxyWorkspace.SwitchKey` / `RememberFetchedModels` 让运行中的通道不重启就生效，编辑供应商与通道参数不再要求先停用（端口除外）。保活新增 `ResetSession`、`SetChannelCredential`，当前供应商有 Key 时保活 CLI 用 `CliCredential.ForChannel` 带本地口令经本通道；`CliSession` 与 `PreparationWorkspace` 统一 `/v1` 规则；`WithUpstreamApiKey` 改名 `AsPreparationProxy`，与普通通道的注入拆开。语义映射：旧"通道启动时固定上游、改参数要停用"→ 每次尝试读快照；旧"准备代理的访问密钥"→ 通用的本地口令注入加准备代理标志；旧"换服务商重建保活看门狗"→ 保留看门狗、只重置会话。踩坑：切换信号只接在每次尝试的令牌上，流式正文用请求自己的令牌，已输出的请求不受切换影响；切换信号在锁外触发，界面线程不会同步执行改投；Codex 按新规则会给上游路径加 `/v1`，3 条旧用例的路径断言随之调整。独立审查另发现：切换时透传请求会带着客户端密钥改投到新供应商（已改为不改投）；Claude 保活把本地口令放在命令行上（已改为设置文件）；model 里有无效 UTF-8 时请求异常退出、不释放处理中登记（既有问题，已让 `JsonText.AsString` 返回 null）；Codex https 的 TLS 握手超时归类与切换日志的重发数在极短时间窗内可能多算，保留。用例：新增 `ChannelRulesTests` 22 条（地址规则、角色映射、1M、字节替换、认证头改名、快照与切换信号、缓存命名空间、保活凭据）、`ChannelSwitchTests` 10 条（透传请求不改投、A / B 假上游在发送中 / 退避 / 等待生成三个阶段改投、流式请求留在 A、同 Key 改参数、注入与透传、Claude 认证格式与角色映射、无 Key 返回 403、Host / Origin）、`WorkspaceTests` 3 条（切换校验与撤销、运行中改参数、不许改端口）、`KeepAliveWatchdogTests` 与 `CliReasoningEffortTests` 各 1 条；改写 2 条（运行中改供应商改为立即生效、换供应商保留看门狗），路径断言调整 3 条；总数 425 → 462 全部通过 |
 | M3 | 界面：供应商页、各抽屉、统计页、一键准备页分组、导航、托盘、手动切换与撤销、`en.json` | `ProxyWorkspace`、`App\View*`、`App\ViewModel*` | `WorkspaceTests`；`verify_exe.ps1`、`verify_keepalive.ps1` | 未开始 |
 | M4 | 客户端接管、直连恢复、检测、首次使用向导 | 新建 `Core\Client\*`；`LocalProviderCredentials`；引入 Tomlyn | 按本机配置结构准备的对照文件、语义比对、备份与回滚 | 未开始 |
 | M5 | 多 Key 准备、状态回显、重启恢复 | `PreparationWorkspace`、`PreparationTask`、`SavedPreparation`、准备任务抽屉 | `PreparationWorkspaceTests`、`verify_preparation.ps1`；新增：一次勾选多 Key 批量建任务、每 Key 只一项任务、重启恢复、删除 Key 联动停止 | 未开始 |
@@ -454,7 +455,7 @@
    - 已经开始输出的请求留在 A。
    - 「撤销」能切回 A。
 5. 模型映射：
-   - Claude 按角色映射；1M 头按目标角色增删；`count_tokens` 也会改写。
+   - Claude 按角色映射；1M 头按目标角色删除（只删不加，见 §6.2，2026-09-29 调整）；`count_tokens` 也会改写。
    - Codex 请求有效的手选模型时不改写。
 6. 安全：
    - 不带本地口令的请求不会被注入 Key。

@@ -46,14 +46,13 @@ public sealed class ProxyHost : IAsyncDisposable
             options.Limits.MaxResponseBufferSize = 0;
             options.Listen(IPAddress.Loopback, port, listen =>
             {
-                // https 的 Claude / Codex 通道要按客户端原顺序转发请求头，先在连接层记下原始顺序（Kestrel 会重排）。
-                if (proxy.ReordersHeaders)
-                {
-                    listen.Use(InboundHeaderRecorder.Middleware);
-                }
+                // 按客户端原顺序转发请求头要先在连接层记下原始顺序（Kestrel 会重排）；一律安装，切到 https 供应商时不用重建通道。
+                listen.Use(InboundHeaderRecorder.Middleware);
             });
         });
         var app = builder.Build();
+        // 访问限制在路由之后、处理之前生效，健康检查也受限。
+        app.Use(next => context => proxy.GuardLocalAccessAsync(context, next));
         app.MapGet("/_retry/health", (RequestDelegate)proxy.HealthAsync);
         app.MapFallback((RequestDelegate)proxy.HandleAsync);
         try

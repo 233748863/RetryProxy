@@ -696,7 +696,7 @@ public class ProxyConfigTests
         var saved = Canonical(config).GetProperty("providers");
         Assert.Equal(
             new[] { ("claude", 0), ("first", 0), ("second", 1) },
-            saved.EnumerateArray().Select(provider => (provider.GetProperty("name").GetString(), provider.GetProperty("sort_index").GetInt32())));
+            saved.EnumerateArray().Select(provider => (provider.GetProperty("name").GetString()!, provider.GetProperty("sort_index").GetInt32())));
     }
 
     [Fact]

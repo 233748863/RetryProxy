@@ -101,19 +101,26 @@ public sealed class CliCommand
 }
 
 /// <summary>
-/// 仅本次后台准备使用的密钥与入口地址。只注入到拉起的 CLI 子进程，不写入本机 CLI 配置、代理配置或日志。
+/// 后台 CLI 使用的密钥与入口地址：一键准备的临时密钥，或通道保活用的本地口令。
+/// 只注入到拉起的 CLI 子进程，不写入本机 CLI 配置、代理配置或日志。
 /// </summary>
 public sealed class CliCredential : IEquatable<CliCredential>
 {
-    private CliCredential(string apiKey, string baseUrl, string? model, ClaudeAuthMode authMode)
+    private CliCredential(string apiKey, string baseUrl, string? model, ClaudeAuthMode authMode, bool isChannelToken = false)
     {
         ApiKey = apiKey;
         BaseUrl = baseUrl;
         Model = model;
         AuthMode = authMode;
+        IsChannelToken = isChannelToken;
     }
 
     public string ApiKey { get; }
+
+    /// <summary>
+    /// <see cref="ApiKey"/> 是本通道的本地口令（通道保活）：代理注入当前 Key、映射模型，CLI 沿用自己的模型设置（PRD-供应商管理 §7）。
+    /// </summary>
+    public bool IsChannelToken { get; }
 
     /// <summary>代理本通道的本地监听地址，例如 <c>http://127.0.0.1:18081</c>。</summary>
     public string BaseUrl { get; }
@@ -148,6 +155,22 @@ public sealed class CliCredential : IEquatable<CliCredential>
         return new CliCredential(apiKey, baseUrl, model, authMode);
     }
 
+    /// <summary>
+    /// 通道保活的凭据：带本地口令连本通道，例：口令 9f86…d015、地址 http://127.0.0.1:18081。
+    /// 不管客户端是否已接管，保活都经过本通道并由代理注入当前 Key。
+    /// </summary>
+    public static CliCredential ForChannel(string localToken, string channelUrl)
+    {
+        localToken = localToken.Trim();
+        channelUrl = channelUrl.Trim().TrimEnd('/');
+        if (localToken.Length == 0 || channelUrl.Length == 0)
+        {
+            throw new CliException("通道缺少本地口令或地址");
+        }
+
+        return new CliCredential(localToken, channelUrl, null, ClaudeAuthMode.Bearer, isChannelToken: true);
+    }
+
     public static CliCredential CreateLocal(string baseUrl, string? model = null, ClaudeAuthMode authMode = ClaudeAuthMode.Bearer)
     {
         baseUrl = baseUrl.Trim().TrimEnd('/');
@@ -159,11 +182,12 @@ public sealed class CliCredential : IEquatable<CliCredential>
         return new CliCredential(string.Empty, baseUrl, model, authMode);
     }
 
-    public bool Equals(CliCredential? other) => other is not null && ApiKey == other.ApiKey && BaseUrl == other.BaseUrl && Model == other.Model && AuthMode == other.AuthMode;
+    public bool Equals(CliCredential? other) => other is not null && ApiKey == other.ApiKey && BaseUrl == other.BaseUrl && Model == other.Model
+        && AuthMode == other.AuthMode && IsChannelToken == other.IsChannelToken;
 
     public override bool Equals(object? obj) => Equals(obj as CliCredential);
 
-    public override int GetHashCode() => HashCode.Combine(ApiKey, BaseUrl, Model, AuthMode);
+    public override int GetHashCode() => HashCode.Combine(ApiKey, BaseUrl, Model, AuthMode, IsChannelToken);
 
     /// <summary>调试输出绝不带出密钥。</summary>
     public override string ToString() => $"CliCredential {{ ApiKey = <redacted>, BaseUrl = {BaseUrl}, Model = {Model} }}";

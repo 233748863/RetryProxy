@@ -128,7 +128,7 @@
                         </Grid.ColumnDefinitions>
                         <TextBlock VerticalAlignment="Center" Text="{i18n:T 本地监听端口}" />
                         <ui:TextBox Grid.Column="1" Width="88" AutomationProperties.AutomationId="ChannelListenPort"
-                                    IsReadOnly="{Binding CanEditChannel, Converter={StaticResource InverseBooleanConverter}}"
+                                    IsReadOnly="{Binding CanEditPort, Converter={StaticResource InverseBooleanConverter}}"
                                     Text="{Binding ListenPort, Mode=TwoWay}" />
                     </Grid>
                     <Grid Margin="0,10,0,0">

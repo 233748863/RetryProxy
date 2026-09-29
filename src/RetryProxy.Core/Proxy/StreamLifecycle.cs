@@ -32,6 +32,7 @@ internal sealed class StreamLifecycle : IDisposable
     private readonly Deadline _deadline;
     private readonly double _totalTimeoutSeconds;
     private readonly CancellationToken _cancel;
+    private readonly string _routeFields;
 
     public StreamLifecycle(
         RouteLogger logger,
@@ -51,7 +52,8 @@ internal sealed class StreamLifecycle : IDisposable
         bool warnOnHttpFailure,
         Deadline deadline,
         double totalTimeoutSeconds,
-        CancellationToken cancel)
+        CancellationToken cancel,
+        string routeFields = "")
     {
         _logger = logger;
         _metrics = metrics;
@@ -71,6 +73,7 @@ internal sealed class StreamLifecycle : IDisposable
         _deadline = deadline;
         _totalTimeoutSeconds = totalTimeoutSeconds;
         _cancel = cancel;
+        _routeFields = routeFields;
     }
 
     public ResponseStats Stats { get; }
@@ -137,7 +140,7 @@ internal sealed class StreamLifecycle : IDisposable
                 _status,
                 Stats.FirstContentSeconds(),
                 elapsed,
-                Stats.LogFields());
+                _routeFields + Stats.LogFields());
             if (_warnOnHttpFailure)
             {
                 _logger.Warn(message);
@@ -182,7 +185,7 @@ internal sealed class StreamLifecycle : IDisposable
         var summary = Stats.FailureSummary();
         var reasonText = summary is not null && _status is < 200 or >= 300 ? string.Empty : $"，原因：{summary ?? reason}";
         _logger.Warn(
-            $"[{_requestId}] {_method} {_safePath} -> {LogText.UpstreamStatus(_status, summary)}{LogText.RetriedNote(_attemptNumber, false)}，响应未完成{reasonText}，不再重试（已进入响应转发阶段）{Stats.FailureLogFields()}，{LogText.TimingText(Stats.FirstContentSeconds(), elapsed)}");
+            $"[{_requestId}] {_method} {_safePath} -> {LogText.UpstreamStatus(_status, summary)}{LogText.RetriedNote(_attemptNumber, false)}{_routeFields}，响应未完成{reasonText}，不再重试（已进入响应转发阶段）{Stats.FailureLogFields()}，{LogText.TimingText(Stats.FirstContentSeconds(), elapsed)}");
     }
 
     /// <summary>对应 Drop：正文流没走完就被丢弃。</summary>
@@ -240,6 +243,13 @@ internal sealed class RetryLog
     }
 
     public string ProgressText(string requestId, string reason) => $"[{requestId}] 已重试 {Retries} 次，仍是{reason}";
+
+    /// <summary>切换 Key 改投后重新开始节流：换了 Key，下一次失败即使原因相同也写完整行。</summary>
+    public void Reset()
+    {
+        _reason = null;
+        _sameReason = 0;
+    }
 }
 
 internal enum RetryLogKind

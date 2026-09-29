@@ -611,6 +611,46 @@ public class KeepAliveWatchdogTests
     }
 
     [Fact]
+    public void ChannelCredentialDrivesProbesAndResettingOnlyDropsTheSession()
+    {
+        var (watchdog, service) = Running(true);
+        using var _ = service;
+        var channel = CliCredential.ForChannel("local-token", "http://127.0.0.1:18080");
+        watchdog.SetChannelCredential(channel);
+        Assert.Equal((true, false), (watchdog.Snapshot().ThroughChannel, watchdog.Snapshot().WithKey));
+        watchdog.MakeDueForTest();
+        var probe = watchdog.BeginDueProbe()!;
+        Assert.Equal((true, false), (probe.UsesChannelToken, probe.UsesSuppliedKey));
+        Assert.Equal(channel, probe.Credential);
+        Assert.NotNull(probe.Complete(null, 10));
+        probe.Dispose();
+        var session = watchdog.Snapshot().SessionId;
+        Assert.NotNull(session);
+
+        // 切换 Key：丢弃会话，保活开关不变，下一轮从第 1 轮重新建立会话。
+        watchdog.ResetSession();
+        Assert.Null(watchdog.Snapshot().SessionId);
+        Assert.True(watchdog.Snapshot().Enabled);
+        watchdog.MakeDueForTest();
+        var next = watchdog.BeginDueProbe()!;
+        Assert.NotEqual(session, next.SessionId);
+        Assert.Equal(1, next.Turn);
+        // 进行中的一轮直接取消。
+        watchdog.ResetSession();
+        Assert.True(next.Cancel.IsCancellationRequested);
+        next.Dispose();
+
+        // 一键准备指定了 Key 时以那把为准；重置会话不结束准备，间隔后继续。
+        Assert.True(watchdog.RequestPreparationWith(SuppliedKey()));
+        Assert.False(watchdog.Snapshot().ThroughChannel);
+        var supplied = watchdog.BeginDueProbe()!;
+        Assert.True(supplied.UsesSuppliedKey);
+        watchdog.ResetSession();
+        supplied.Dispose();
+        Assert.True(watchdog.Snapshot().Preparing);
+    }
+
+    [Fact]
     public void SuppliedKeyPreparationRetriesWithTheSameKeyAndKeepsItWhenCancelled()
     {
         var (watchdog, service) = Running(false);

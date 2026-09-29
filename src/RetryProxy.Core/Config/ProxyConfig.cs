@@ -293,6 +293,52 @@ public sealed class ProxyConfig : IEquatable<ProxyConfig>
         return runtime;
     }
 
+    /// <summary>
+    /// 某条通道当前的快照：运行时配置（含环境变量覆盖）的地址与参数，加上当前供应商、Key 与本地口令。
+    /// <paramref name="fetchedModels"/> 是本次运行里该供应商最近一次「获取模型」的结果，并入 Codex 的已知模型。
+    /// 当前供应商不存在时抛 <see cref="ConfigException"/>（与 <see cref="RuntimeConfigFor"/> 相同）。
+    /// </summary>
+    public ChannelSnapshot SnapshotFor(string routeId, IEnumerable<string>? fetchedModels = null)
+    {
+        var runtime = RuntimeConfigFor(routeId);
+        var route = Routes.First(candidate => candidate.Id == routeId);
+        var provider = ProviderById(route.CurrentProviderId)!;
+        var key = provider.KeyById(route.CurrentKeyId);
+        var known = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var model in provider.Keys.Select(item => item.ModelOverride?.Model ?? string.Empty)
+                     .Append(provider.Models.Model)
+                     .Concat(fetchedModels ?? Enumerable.Empty<string>()))
+        {
+            if (!string.IsNullOrWhiteSpace(model))
+            {
+                known.Add(model.Trim());
+            }
+        }
+
+        return new ChannelSnapshot
+        {
+            ClientType = route.ClientType,
+            ProviderId = provider.Id,
+            ProviderName = provider.Name,
+            KeyId = key?.Id ?? string.Empty,
+            KeyName = key?.Name ?? string.Empty,
+            ApiKey = key?.ApiKey ?? string.Empty,
+            AuthMode = route.ClientType == ClientType.Claude ? provider.AuthMode : Cli.ClaudeAuthMode.Bearer,
+            UpstreamBaseUrl = runtime.UpstreamBaseUrl,
+            LocalToken = route.LocalToken,
+            Models = provider.Models.Clone(),
+            ModelOverride = key?.ModelOverride?.Clone(),
+            KnownModels = known,
+            MaxRetries = runtime.MaxRetries,
+            TimeoutSeconds = runtime.TimeoutSeconds,
+            GenerationTimeoutSeconds = runtime.GenerationTimeoutSeconds,
+            TotalTimeoutSeconds = runtime.TotalTimeoutSeconds,
+            BaseDelaySeconds = runtime.BaseDelaySeconds,
+            MaxDelaySeconds = runtime.MaxDelaySeconds,
+            PassThroughCompression = runtime.PassThroughCompression,
+        };
+    }
+
     public ProxyConfig WithSelectedRoute(string routeId)
     {
         var value = Clone();

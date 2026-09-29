@@ -20,6 +20,8 @@ public sealed class ProxyWorkspace
 {
     private readonly Action<ProxyConfig>? _save;
     private readonly HashSet<string> _reportedServiceErrors = new();
+    /// <summary>本次运行里各供应商最近一次「获取模型」的结果，并入 Codex 的已知模型（PRD-供应商管理 §6.2），不写配置。</summary>
+    private readonly Dictionary<string, IReadOnlyList<string>> _fetchedModels = new();
     private Action? _uiNotifier;
 
     public ProxyWorkspace(ProxyLogger logger, ProxyConfig config, Action<ProxyConfig>? save)
@@ -255,9 +257,11 @@ public sealed class ProxyWorkspace
         }
 
         ProxyConfig runtime;
+        ChannelSnapshot snapshot;
         try
         {
             runtime = Config.RuntimeConfigFor(routeId);
+            snapshot = SnapshotFor(routeId);
         }
         catch (ConfigException error)
         {
@@ -272,7 +276,7 @@ public sealed class ProxyWorkspace
 
         try
         {
-            if (service.RequestStart(runtime))
+            if (service.RequestStart(runtime, snapshot))
             {
                 Config = Config.WithRouteRunning(routeId, true);
                 Save();
@@ -322,6 +326,133 @@ public sealed class ProxyWorkspace
     }
 
     public int RunningCount() => Config.Routes.Count(route => RouteState(route.Id) == ServiceState.Running);
+
+    // ---------------------------------------------------------------- 切换与热更新
+
+    private ChannelSnapshot SnapshotFor(string routeId)
+    {
+        var providerId = Config.Routes.FirstOrDefault(route => route.Id == routeId)?.CurrentProviderId ?? string.Empty;
+        return Config.SnapshotFor(routeId, _fetchedModels.GetValueOrDefault(providerId));
+    }
+
+    /// <summary>
+    /// 把通道的最新快照交给正在运行的服务，之后的每次尝试立即使用（PRD-供应商管理 §5.3）。
+    /// 换了"供应商 · Key"时返回改用新 Key 重发的请求数；通道未运行、没换 Key 或配置无效时返回 null。
+    /// </summary>
+    private int? PushSnapshot(string routeId)
+    {
+        if (!Services.TryGetValue(routeId, out var service) || service.State is not (ServiceState.Starting or ServiceState.Running))
+        {
+            return null;
+        }
+
+        try
+        {
+            return service.UpdateSnapshot(SnapshotFor(routeId));
+        }
+        catch (ConfigException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>日志与提示里的"供应商 · Key"，例：<c>Any · 主号</c>；没有 Key 时只写供应商名称。</summary>
+    private string KeyLabel(string providerId, string keyId)
+    {
+        var provider = Config.ProviderById(providerId);
+        if (provider is null)
+        {
+            return "未选择供应商";
+        }
+
+        return provider.KeyById(keyId) is { } key ? $"{provider.Name} · {key.Name}" : provider.Name;
+    }
+
+    /// <summary>
+    /// 切换通道当前的"供应商 · Key"（PRD-供应商管理 §4.2）：保存配置，运行中的通道立即生效、不重启；
+    /// 还没向客户端输出的请求改用新 Key 重发，保活会话重置。<paramref name="keyId"/> 为空时用该供应商的第一个 Key。
+    /// 撤销就是再切回原来的"供应商 · Key"。返回 null 表示成功，否则为提示文案。
+    /// </summary>
+    public string? SwitchKey(string routeId, string providerId, string keyId)
+    {
+        var route = Config.Routes.FirstOrDefault(candidate => candidate.Id == routeId);
+        if (route is null)
+        {
+            return "找不到转发通道";
+        }
+
+        var provider = Config.ProviderById(providerId);
+        if (provider is null || provider.ClientType != route.ClientType)
+        {
+            return "找不到该供应商";
+        }
+
+        if (keyId.Length == 0)
+        {
+            keyId = provider.Keys.FirstOrDefault()?.Id ?? string.Empty;
+        }
+        else if (provider.KeyById(keyId) is null)
+        {
+            return "找不到该 Key";
+        }
+
+        if (route.CurrentProviderId == providerId && route.CurrentKeyId == keyId)
+        {
+            return null;
+        }
+
+        var previous = KeyLabel(route.CurrentProviderId, route.CurrentKeyId);
+        var candidate = Config.Clone();
+        var target = candidate.Routes.First(item => item.Id == routeId);
+        target.CurrentProviderId = providerId;
+        target.CurrentKeyId = keyId;
+        candidate = candidate.Normalize();
+        try
+        {
+            candidate.Validate(false);
+        }
+        catch (ConfigException error)
+        {
+            return error.Message;
+        }
+
+        Config = candidate;
+        Save();
+        ApplySwitch(routeId, route.Name, previous, KeyLabel(providerId, keyId));
+        _uiNotifier?.Invoke();
+        return null;
+    }
+
+    /// <summary>
+    /// 换了"供应商 · Key"并保存之后调用：运行中的通道立即改用新快照（服务里顺带重置保活会话）；
+    /// 未运行的通道只丢弃原来的后台会话，下次启动时用新 Key 重新建立。最后写切换日志。
+    /// </summary>
+    private void ApplySwitch(string routeId, string routeName, string previous, string next)
+    {
+        var resent = PushSnapshot(routeId);
+        if (resent is null && RouteKeepAlives.TryGetValue(routeId, out var watchdog))
+        {
+            watchdog.ResetSession();
+        }
+
+        LogSwitch(routeName, previous, next, resent);
+    }
+
+    /// <summary>例：<c>[通道代理][Claude Code] 已切换：Any · 主号 → Any · 群号，2 个未输出的请求改用新 Key 重发</c>。</summary>
+    private void LogSwitch(string routeName, string previous, string next, int? resent)
+    {
+        Logger.Route(routeName).Info($"已切换：{previous} → {next}" + (resent is > 0 ? $"，{resent} 个未输出的请求改用新 Key 重发" : string.Empty));
+    }
+
+    /// <summary>记下某供应商最近一次「获取模型」的结果（只在本次运行有效），并让使用它的运行中通道立即采用新的已知模型列表。</summary>
+    public void RememberFetchedModels(string providerId, IEnumerable<string> models)
+    {
+        _fetchedModels[providerId] = models.Where(model => !string.IsNullOrWhiteSpace(model)).Select(model => model.Trim()).ToList();
+        foreach (var route in Config.Routes.Where(route => route.CurrentProviderId == providerId))
+        {
+            PushSnapshot(route.Id);
+        }
+    }
 
     public int ProviderUsage(string providerId)
     {
@@ -383,22 +514,12 @@ public sealed class ProxyWorkspace
         return editor;
     }
 
-    /// <summary>提交服务商编辑。返回 null 表示成功，否则为留在对话框内的错误文案。</summary>
+    /// <summary>
+    /// 提交服务商编辑。返回 null 表示成功，否则为留在对话框内的错误文案。
+    /// 正在使用它的通道不用停：保存后对之后的尝试立即生效（PRD-供应商管理 §5.3）。
+    /// </summary>
     public string? CommitProvider(ProviderEditor editor)
     {
-        if (editor.Index is { } index && index < Config.Providers.Count)
-        {
-            var existing = Config.Providers[index];
-            var activeDependency = Config.Routes.Any(route =>
-                route.CurrentProviderId == existing.Id
-                && Services.TryGetValue(route.Id, out var service)
-                && service.State is not (ServiceState.Stopped or ServiceState.Error));
-            if (activeDependency)
-            {
-                return "请先停止引用该服务商的通道";
-            }
-        }
-
         // 编辑时在原服务商上改名称与地址，保留 ID、客户端与 Key；新增时按所选客户端新建。
         var provider = editor.Index is { } source && source < Config.Providers.Count
             ? Config.Providers[source].Clone()
@@ -447,22 +568,26 @@ public sealed class ProxyWorkspace
             return error.Message;
         }
 
-        if (editor.Index is { } changed)
-        {
-            var existing = Config.Providers[changed];
-            if (existing.Name != candidate.Providers[changed].Name || existing.BaseUrl != candidate.Providers[changed].BaseUrl)
-            {
-                foreach (var route in Config.Routes.Where(route => route.CurrentProviderId == existing.Id))
-                {
-                    RouteKeepAlives.Remove(route.Id);
-                }
-            }
-        }
-
+        var addressChanged = editor.Index is { } changed && Config.Providers[changed].BaseUrl != candidate.Providers[changed].BaseUrl;
         Config = candidate;
         SelectedProvider = provider.Id;
         RefreshServices();
         Save();
+        foreach (var route in Config.Routes.Where(route => route.CurrentProviderId == provider.Id))
+        {
+            if (addressChanged && RouteKeepAlives.TryGetValue(route.Id, out var watchdog))
+            {
+                // 后台会话建立在原地址上：换了地址就丢弃，下一轮在新地址上重新建立。
+                watchdog.ResetSession();
+            }
+
+            if (Services.TryGetValue(route.Id, out var service) && service.State is ServiceState.Starting or ServiceState.Running)
+            {
+                PushSnapshot(route.Id);
+                Logger.Route(route.Name).Info($"服务商“{provider.Name}”已更新，之后的尝试立即使用新设置");
+            }
+        }
+
         return null;
     }
 
@@ -629,7 +754,10 @@ public sealed class ProxyWorkspace
             : throw new WorkspaceException(message);
     }
 
-    /// <summary>提交通道编辑。返回 null 表示成功，否则为留在对话框内的错误文案。</summary>
+    /// <summary>
+    /// 提交通道编辑。返回 null 表示成功，否则为留在对话框内的错误文案。
+    /// 运行中的通道除端口外都能改，保存后对之后的尝试立即生效；换服务商按切换处理（PRD-供应商管理 §4.2、§5.3）。
+    /// </summary>
     public string? CommitRoute(RouteEditor editor)
     {
         ProxyRoute route;
@@ -647,6 +775,13 @@ public sealed class ProxyWorkspace
             return error.Message;
         }
 
+        var existing = Config.Routes[editor.Index];
+        var running = RouteState(existing.Id) is not (ServiceState.Stopped or ServiceState.Error);
+        if (running && route.ListenPort != existing.ListenPort)
+        {
+            return "通道运行中不能改端口，请先停用通道";
+        }
+
         var candidate = Config.Clone();
         candidate.Routes[editor.Index] = route.Clone();
         candidate.SelectedRouteId = route.Id;
@@ -660,17 +795,23 @@ public sealed class ProxyWorkspace
             return error.Message;
         }
 
-        if (route.CurrentProviderId != Config.Routes[editor.Index].CurrentProviderId)
-        {
-            // 换了服务商：旧会话属于原上游，保活看门狗按新服务商重建。
-            RouteKeepAlives.Remove(route.Id);
-        }
-
+        var previous = KeyLabel(existing.CurrentProviderId, existing.CurrentKeyId);
+        var switched = route.CurrentProviderId != existing.CurrentProviderId || route.CurrentKeyId != existing.CurrentKeyId;
         SelectedProvider = route.CurrentProviderId;
         SelectedRoute = route.Id;
         Config = candidate;
         RefreshServices();
         Save();
+        if (switched)
+        {
+            ApplySwitch(route.Id, route.Name, previous, KeyLabel(route.CurrentProviderId, route.CurrentKeyId));
+        }
+        else if (running)
+        {
+            PushSnapshot(route.Id);
+            Logger.Route(route.Name).Info("通道参数已更新，之后的尝试立即使用新参数");
+        }
+
         return null;
     }
 
@@ -739,7 +880,7 @@ public sealed class ProxyWorkspace
 
         var snapshot = watchdog.Snapshot();
         var model = snapshot.Model ?? "模型沿用本机配置";
-        var configuration = snapshot.WithKey ? "指定 Key 经本通道" : "本机默认配置";
+        var configuration = snapshot.WithKey ? "指定 Key 经本通道" : snapshot.ThroughChannel ? "当前 Key 经本通道" : "本机默认配置";
         string status;
         if (!running)
         {

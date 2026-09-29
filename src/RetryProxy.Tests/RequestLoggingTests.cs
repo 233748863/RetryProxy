@@ -55,7 +55,7 @@ public class RequestLoggingTests
             config,
             proxy => proxy.WithRouteLogger(proxy.Logger.Base.Preparation("准备 1 · Codex"))
                 .WithKeepAliveWatchdog(watchdog)
-                .WithUpstreamApiKey("sk-upstream", "sk-local"));
+                .AsPreparationProxy("sk-upstream", "sk-local"));
         var marker = Guid.NewGuid().ToString("N");
         using var cancellation = new CancellationTokenSource();
         InternalSessions.Register(marker, cancellation);
@@ -107,7 +107,7 @@ public class RequestLoggingTests
         }, config, proxy => proxy
             .WithRouteLogger(proxy.Logger.Base.Preparation("准备 2 · Codex"))
             .WithKeepAliveWatchdog(watchdog)
-            .WithUpstreamApiKey("sk-upstream", "sk-local"));
+            .AsPreparationProxy("sk-upstream", "sk-local"));
         var marker = Guid.NewGuid().ToString("N");
         using var cancellation = new CancellationTokenSource();
         InternalSessions.Register(marker, cancellation);

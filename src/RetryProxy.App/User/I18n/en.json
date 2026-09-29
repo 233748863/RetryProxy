@@ -167,5 +167,6 @@
   "供应商来源": "Provider source",
   "使用本机客户端当前供应商": "Use the local client's current provider",
   "手动配置供应商": "Configure a provider manually",
-  "供应商地址": "Provider URL"
+  "供应商地址": "Provider URL",
+  "通道运行中不能改端口，请先停用通道": "Stop the channel before changing its port"
 }

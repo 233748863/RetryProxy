@@ -27,16 +27,24 @@ public sealed class PromptCache
         "content-md5", "digest", "content-digest", "signature", "signature-input", "x-amz-content-sha256",
     };
 
-    private readonly byte[] _namespace;
+    private readonly string _upstream;
     private readonly object _lock = new();
     private readonly LinkedList<byte[]> _unsupported = new();
 
-    public PromptCache(string upstream)
+    /// <summary><paramref name="upstream"/> 是 <see cref="Prepare(string, string, HeaderList, ReadOnlyMemory{byte}, bool)"/> 默认使用的上游地址。</summary>
+    public PromptCache(string upstream = "")
     {
-        _namespace = SHA256.HashData(Encoding.UTF8.GetBytes(upstream));
+        _upstream = upstream;
     }
 
-    public CacheRequestBody Prepare(string method, string path, HeaderList headers, ReadOnlyMemory<byte> body, bool background)
+    public CacheRequestBody Prepare(string method, string path, HeaderList headers, ReadOnlyMemory<byte> body, bool background) =>
+        Prepare(_upstream, method, path, headers, body, background);
+
+    /// <summary>
+    /// 按本次尝试的上游地址计算命名空间（PRD-供应商管理 §9）：切换供应商后缓存标识随之改变，
+    /// 被拒绝的范围也按地址分开记录。
+    /// </summary>
+    public CacheRequestBody Prepare(string upstream, string method, string path, HeaderList headers, ReadOnlyMemory<byte> body, bool background)
     {
         var request = new CacheRequestBody(body);
         var endpoint = OpenAiEndpoint(path);
@@ -81,7 +89,7 @@ public sealed class PromptCache
         }
 
         using var scopeHash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        HashPart(scopeHash, _namespace);
+        HashPart(scopeHash, SHA256.HashData(Encoding.UTF8.GetBytes(upstream)));
         HashPart(scopeHash, Encoding.UTF8.GetBytes(endpoint));
         HashPart(scopeHash, Encoding.UTF8.GetBytes(model));
         foreach (var name in ScopeHeaders)
@@ -250,7 +258,8 @@ public sealed class PromptCache
         return false;
     }
 
-    private static bool EditableBody(HeaderList headers)
+    /// <summary>正文能否就地改写：未压缩、是 JSON（或没声明类型）、且没有完整性校验头。</summary>
+    internal static bool EditableBody(HeaderList headers)
     {
         var encoding = headers.Get("content-encoding");
         if (encoding is not null && !string.Equals(encoding, "identity", StringComparison.OrdinalIgnoreCase))

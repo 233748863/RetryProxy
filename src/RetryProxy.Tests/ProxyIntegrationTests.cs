@@ -56,7 +56,7 @@ public class ProxyIntegrationTests
         var normalPort = FreePort();
         var temporaryPort = FreePort();
         var normal = new ProxyService(logger, "normal");
-        var temporary = new ProxyService(logger, "prepare").WithUpstreamApiKey("sk-upstream", "local-key");
+        var temporary = new ProxyService(logger, "prepare").AsPreparationProxy("sk-upstream", "local-key");
         var normalConfig = ServiceConfig(upstream.BaseUrl, normalPort, 0);
         normalConfig.ClientType = ClientType.Claude;
         var temporaryConfig = ServiceConfig(upstream.BaseUrl, temporaryPort, 0);
@@ -103,7 +103,7 @@ public class ProxyIntegrationTests
         var normalPort = FreePort();
         var temporaryPort = FreePort();
         var normal = new ProxyService(logger, "normal");
-        var temporary = new ProxyService(logger, "prepare").WithUpstreamApiKey("sk-upstream", "local-key",
+        var temporary = new ProxyService(logger, "prepare").AsPreparationProxy("sk-upstream", "local-key",
             expectedHeader == "x-api-key" ? ClaudeAuthMode.ApiKey : ClaudeAuthMode.Bearer);
         var normalConfig = ServiceConfig(upstream.BaseUrl, normalPort, 0);
         normalConfig.ClientType = clientType;
@@ -285,7 +285,7 @@ public class ProxyIntegrationTests
         config.BaseDelaySeconds = 0;
         config.MaxDelaySeconds = 0;
         var watchdog = KeepAliveWatchdog.WithCliCommand(false, TimeSpan.FromMinutes(5), new CliCommand(Path.Combine(logDirectory, "missing-client.exe")));
-        var service = new ProxyService(logger, "prepare").WithKeepAliveWatchdog(watchdog).WithUpstreamApiKey("sk-upstream", "local-key");
+        var service = new ProxyService(logger, "prepare").WithKeepAliveWatchdog(watchdog).AsPreparationProxy("sk-upstream", "local-key");
         service.Start(config, TimeSpan.FromSeconds(5));
         Assert.True(service.RequestPreparation());
         try
@@ -327,7 +327,7 @@ public class ProxyIntegrationTests
         config.BaseDelaySeconds = 0.05;
         config.MaxDelaySeconds = 0.05;
         var watchdog = KeepAliveWatchdog.WithCliCommand(false, TimeSpan.FromMinutes(5), new CliCommand(Path.Combine(logDirectory, "missing-client.exe")));
-        var service = new ProxyService(logger, "prepare").WithKeepAliveWatchdog(watchdog).WithUpstreamApiKey("sk-upstream", "local-key");
+        var service = new ProxyService(logger, "prepare").WithKeepAliveWatchdog(watchdog).AsPreparationProxy("sk-upstream", "local-key");
         service.Start(config, TimeSpan.FromSeconds(5));
         Assert.True(service.RequestPreparation());
         try
@@ -365,7 +365,7 @@ public class ProxyIntegrationTests
         using var logger = ProxyLogger.Silent(TempLogDirectory());
         var proxyPort = FreePort();
         var config = PreparationWorkspace.CreateRuntimeConfig(upstream.BaseUrl, proxyPort, 5, clientType);
-        var service = new ProxyService(logger, "prepare").WithUpstreamApiKey("sk-upstream", "local-key");
+        var service = new ProxyService(logger, "prepare").AsPreparationProxy("sk-upstream", "local-key");
         service.Start(config, TimeSpan.FromSeconds(5));
         try
         {

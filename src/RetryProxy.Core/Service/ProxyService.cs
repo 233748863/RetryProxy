@@ -37,9 +37,10 @@ public sealed class ProxyService
     private TaskCompletionSource<bool>? _stopSignal;
     private Task? _task;
     private Action? _notifier;
-    private string? _upstreamApiKey;
-    private ClaudeAuthMode _upstreamAuthMode;
-    private string? _localAccessKey;
+    private (string ApiKey, string AccessKey, ClaudeAuthMode AuthMode)? _preparationProxy;
+    /// <summary>最新快照；正在启动、代理还没建好时先存着，建好后立即套用。</summary>
+    private ChannelSnapshot? _snapshot;
+    private RetryProxyPipeline? _proxy;
     private RouteLogger? _routeLogger;
 
     public ProxyService(ProxyLogger logger, string routeName)
@@ -134,11 +135,10 @@ public sealed class ProxyService
         return this;
     }
 
-    public ProxyService WithUpstreamApiKey(string apiKey, string localAccessKey, ClaudeAuthMode authMode = ClaudeAuthMode.Bearer)
+    /// <summary>作为一键准备的后台临时代理运行，见 <see cref="RetryProxyPipeline.AsPreparationProxy"/>。</summary>
+    public ProxyService AsPreparationProxy(string apiKey, string localAccessKey, ClaudeAuthMode authMode = ClaudeAuthMode.Bearer)
     {
-        _upstreamApiKey = apiKey;
-        _localAccessKey = localAccessKey;
-        _upstreamAuthMode = authMode;
+        _preparationProxy = (apiKey, localAccessKey, authMode);
         return this;
     }
 
@@ -173,8 +173,23 @@ public sealed class ProxyService
 
     public bool KeepAliveHasTemplate => KeepAlive.Template() is not null;
 
-    /// <summary>非阻塞地启动通道；实际绑定监听端口在后台完成。已在运行则返回 false。</summary>
-    public bool RequestStart(ProxyConfig config)
+    /// <summary>通道最近一次启动或热更新用的快照；从未启动过时为 null。</summary>
+    internal ChannelSnapshot? CurrentSnapshot
+    {
+        get
+        {
+            lock (_lock)
+            {
+                return _snapshot;
+            }
+        }
+    }
+
+    /// <summary>
+    /// 非阻塞地启动通道；实际绑定监听端口在后台完成。已在运行则返回 false。
+    /// <paramref name="snapshot"/> 是当前"供应商 · Key"（见 <see cref="ProxyConfig.SnapshotFor"/>）；为 null 时只按运行时配置转发，全部透传。
+    /// </summary>
+    public bool RequestStart(ProxyConfig config, ChannelSnapshot? snapshot = null)
     {
         config.Validate(true);
         lock (_lock)
@@ -186,12 +201,15 @@ public sealed class ProxyService
 
             _state = ServiceState.Starting;
             _runtimeConfig = config.Clone();
+            _snapshot = snapshot ?? ChannelSnapshot.FromRuntime(config);
+            _proxy = null;
             _startupError = null;
             KeepAlive.Configure(config.KeepaliveEnabled, TimeSpan.FromSeconds(config.KeepaliveIdleMinutes * 60.0));
             KeepAlive.SetContextLimit((ulong)Math.Max(config.KeepaliveContextLimit, 1));
             var flavor = KeepAliveFlavorExtensions.FromClientType(config.ClientType);
             KeepAlive.ConfigureFlavor(flavor);
             KeepAlive.SetReasoningEffort(config.KeepaliveReasoningEffort);
+            KeepAlive.SetChannelCredential(ChannelCredential(_snapshot, config.LocalUrl));
             var stopSignal = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
             _stopSignal = stopSignal;
             var runtime = _runtimeConfig;
@@ -201,9 +219,9 @@ public sealed class ProxyService
     }
 
     /// <summary>同步启动，主要供自动化测试使用；界面应调用 <see cref="RequestStart"/>。</summary>
-    public void Start(ProxyConfig config, TimeSpan timeout)
+    public void Start(ProxyConfig config, TimeSpan timeout, ChannelSnapshot? snapshot = null)
     {
-        if (!RequestStart(config))
+        if (!RequestStart(config, snapshot))
         {
             return;
         }
@@ -228,6 +246,47 @@ public sealed class ProxyService
             Thread.Sleep(10);
         }
     }
+
+    /// <summary>
+    /// 给正在运行或正在启动的通道换上新快照（PRD-供应商管理 §4.2、§5.3）：除端口外的参数与"供应商 · Key"对之后的每次尝试立即生效，通道不重启。
+    /// 换了 Key 时重置本通道的保活会话，返回改用新 Key 重发的未输出请求数；没换 Key 或通道未运行时返回 null。
+    /// </summary>
+    public int? UpdateSnapshot(ChannelSnapshot snapshot)
+    {
+        RetryProxyPipeline? proxy;
+        ChannelSnapshot? previous;
+        string localUrl;
+        int? resent;
+        lock (_lock)
+        {
+            if (_state is not (ServiceState.Starting or ServiceState.Running) || _runtimeConfig is null || _preparationProxy is not null)
+            {
+                return null;
+            }
+
+            previous = _snapshot;
+            _snapshot = snapshot;
+            proxy = _proxy;
+            localUrl = _runtimeConfig.LocalUrl;
+            // 代理还没建好时 resent 为 null：RunServiceAsync 建好后在同一把锁里套用最新快照，此时还没有请求。
+            resent = proxy?.UpdateSnapshot(snapshot);
+        }
+
+        KeepAlive.SetChannelCredential(ChannelCredential(snapshot, localUrl));
+        if (previous is null || previous.SameKeyAs(snapshot))
+        {
+            return null;
+        }
+
+        KeepAlive.ResetSession();
+        return resent ?? 0;
+    }
+
+    /// <summary>通道保活的凭据：当前供应商有 Key 时带本地口令经本通道；没有 Key 或是临时准备代理时沿用原来的配置。</summary>
+    private CliCredential? ChannelCredential(ChannelSnapshot snapshot, string localUrl) =>
+        _preparationProxy is null && snapshot is { HasKey: true, LocalToken.Length: > 0 }
+            ? CliCredential.ForChannel(snapshot.LocalToken, localUrl)
+            : null;
 
     /// <summary>非阻塞请求停止。取消令牌会同时打断上游请求和退避等待。</summary>
     public void RequestStop()
@@ -292,13 +351,28 @@ public sealed class ProxyService
         {
             proxy = new RetryProxyPipeline(config, _logger, Metrics, cancel.Token)
                 .WithRouteLogger(logger)
-                .WithKeepAliveWatchdog(KeepAlive)
-                .WithUpstreamApiKey(_upstreamApiKey, _localAccessKey, _upstreamAuthMode);
+                .WithKeepAliveWatchdog(KeepAlive);
+            if (_preparationProxy is { } preparation)
+            {
+                proxy.AsPreparationProxy(preparation.ApiKey, preparation.AccessKey, preparation.AuthMode);
+            }
         }
         catch (ConfigException error)
         {
             SetError(error.Message);
             return;
+        }
+
+        string label;
+        lock (_lock)
+        {
+            if (_preparationProxy is null && _snapshot is { } latest)
+            {
+                proxy.UpdateSnapshot(latest);
+            }
+
+            _proxy = proxy;
+            label = proxy.Snapshot.Label;
         }
 
         ProxyHost host;
@@ -316,7 +390,7 @@ public sealed class ProxyService
         using (KeepAlive.RegisterService(flavor))
         {
             SetState(ServiceState.Running);
-            serviceLogger.Info($"代理服务已启动：{config.LocalUrl}（上游请求跟随系统代理）");
+            serviceLogger.Info($"代理服务已启动：{config.LocalUrl}{(label.Length > 0 ? $"，当前 {label}" : string.Empty)}（上游请求跟随系统代理）");
             var keepAliveTask = KeepAlivePollLoopAsync(proxy, cancel.Token);
             var fingerprintTask = proxy.RefreshTlsFingerprintLoopAsync(cancel.Token);
             // 停用通道要立刻放弃在处理中的请求：先读「处理中」，再取消，再硬停 Kestrel。
@@ -388,6 +462,7 @@ public sealed class ProxyService
             }
 
             _cancel = null;
+            _proxy = null;
         }
 
         Notify();
@@ -400,6 +475,7 @@ public sealed class ProxyService
             _state = ServiceState.Error;
             _startupError = error;
             _cancel = null;
+            _proxy = null;
         }
 
         Notify();

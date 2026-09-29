@@ -53,6 +53,50 @@ public sealed class CliReasoningEffortTests
         }
     }
 
+    [Fact]
+    public async Task ClaudeCredentialsStayOffTheCommandLine()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var directory = Directory.CreateTempSubdirectory("retry-proxy-settings-");
+        try
+        {
+            var script = Path.Combine(directory.FullName, "capture.ps1");
+            var capturePath = Path.Combine(directory.FullName, "capture.json");
+            File.WriteAllText(script, CaptureCli, new UTF8Encoding(true));
+            var command = new CliCommand("powershell.exe");
+            command.Arguments.AddRange(new[] { "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script });
+            command.Environment.Add(new("RETRY_PROXY_TEST_EFFORT_CAPTURE", capturePath));
+            // 通道保活：本地口令经本通道，由代理注入当前 Key；同样不给工具。
+            var credential = CliCredential.ForChannel("local-token-secret", "http://127.0.0.1:18081");
+            using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+            using var session = await CliSession.StartAsync(KeepAliveFlavor.Claude, "settings-test", command, credential,
+                ReasoningEffort.Low, cancellation.Token);
+            while (!File.Exists(capturePath))
+            {
+                await Task.Delay(20, cancellation.Token);
+            }
+
+            var capture = JsonNode.Parse(await File.ReadAllTextAsync(capturePath, cancellation.Token))!;
+            var arguments = capture["arguments"]!.AsArray().Select(value => value!.GetValue<string>()).ToArray();
+            Assert.All(arguments, argument => Assert.DoesNotContain("local-token-secret", argument));
+            Assert.Contains("--tools", arguments);
+            var settingsPath = arguments[Array.IndexOf(arguments, "--settings") + 1];
+            Assert.EndsWith("settings.json", settingsPath);
+            var settings = JsonNode.Parse(await File.ReadAllTextAsync(settingsPath, cancellation.Token))!;
+            Assert.Equal("local-token-secret", settings["env"]!["ANTHROPIC_AUTH_TOKEN"]!.GetValue<string>());
+            Assert.Equal("http://127.0.0.1:18081", settings["env"]!["ANTHROPIC_BASE_URL"]!.GetValue<string>());
+            Assert.Equal("low", settings["env"]!["CLAUDE_CODE_EFFORT_LEVEL"]!.GetValue<string>());
+        }
+        finally
+        {
+            directory.Delete(recursive: true);
+        }
+    }
+
     // 捕获真正到达子进程的参数和环境；Codex 完成握手，Claude 等待输入，不调用真实供应商。
     private const string CaptureCli = """
         $utf8 = [Text.UTF8Encoding]::new($false)

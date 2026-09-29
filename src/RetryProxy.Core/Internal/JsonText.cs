@@ -150,12 +150,25 @@ internal static class JsonText
 
     public static string? AsString(this JsonElement? value)
     {
-        return value is { ValueKind: JsonValueKind.String } element ? element.GetString() : null;
+        return value is { } element ? element.AsString() : null;
     }
 
+    /// <summary>字符串值；不是字符串，或含无效 UTF-8 无法转码时返回 null（例：客户端正文里 model 的值是 0xFF 字节）。</summary>
     public static string? AsString(this JsonElement value)
     {
-        return value.ValueKind == JsonValueKind.String ? value.GetString() : null;
+        if (value.ValueKind != JsonValueKind.String)
+        {
+            return null;
+        }
+
+        try
+        {
+            return value.GetString();
+        }
+        catch (InvalidOperationException)
+        {
+            return null;
+        }
     }
 
     public static ulong? AsUInt64(this JsonElement? value)

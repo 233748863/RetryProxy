@@ -76,6 +76,9 @@ public sealed class KeepAliveSnapshot
     /// <summary>本通道当前的准备与自动保活是否使用用户输入的 Key，而不是本机 CLI 默认配置。</summary>
     public bool WithKey { get; init; }
 
+    /// <summary>保活 CLI 是否带本地口令经本通道、由代理注入当前 Key（PRD-供应商管理 §7）。</summary>
+    public bool ThroughChannel { get; init; }
+
     public ulong PreparationAttempts { get; init; }
 
     public TimeSpan? PreparationRetryAfter { get; init; }
@@ -228,8 +231,10 @@ public sealed class KeepAliveWatchdog
     private KeepAliveFlight? _flight;
     private ulong _nextFlight;
     private PreparationState? _preparation;
-    /// <summary>本通道当前使用的密钥：由最近一次“一键准备”的选择决定，null 表示沿用本机 CLI 默认配置。</summary>
+    /// <summary>本通道当前使用的密钥：由最近一次“一键准备”的选择决定，null 表示改用 <see cref="_channelCredential"/>。</summary>
     private CliCredential? _credential;
+    /// <summary>通道保活的凭据（本地口令 + 本通道地址），由通道服务按当前 Key 设置；null 表示沿用本机 CLI 默认配置。</summary>
+    private CliCredential? _channelCredential;
     private ulong _preparationAttempts;
     private long? _preparationRetryAtMs;
     private string? _preparationLastError;
@@ -425,6 +430,45 @@ public sealed class KeepAliveWatchdog
             _preparationResults.Clear();
         }
 
+        NotifyUi();
+    }
+
+    /// <summary>
+    /// 设置通道保活的凭据（见 <see cref="CliCredential.ForChannel"/>）；一键准备指定了密钥时仍以那把为准。
+    /// 凭据变了的会话在下一轮开始前丢弃。
+    /// </summary>
+    public void SetChannelCredential(CliCredential? credential)
+    {
+        lock (_lock)
+        {
+            if (Equals(_channelCredential, credential))
+            {
+                return;
+            }
+
+            _channelCredential = credential;
+        }
+
+        NotifyUi();
+    }
+
+    /// <summary>
+    /// 切换 Key 后调用（PRD-供应商管理 §4.2）：丢弃当前后台会话并取消进行中的一轮，下一轮用新 Key 重新建立会话；
+    /// 保活开关、准备状态与凭据都不变，正在准备的会在间隔后改用新 Key 继续。
+    /// </summary>
+    public void ResetSession()
+    {
+        lock (_lock)
+        {
+            if (_flight is { Result: null })
+            {
+                CancelFlightLocked();
+            }
+
+            ClearSessionLocked();
+        }
+
+        Wake();
         NotifyUi();
     }
 
@@ -777,7 +821,7 @@ public sealed class KeepAliveWatchdog
 
             var questionIndex = ((_questionPicker() % KeepAliveQuestions.Count) + KeepAliveQuestions.Count) % KeepAliveQuestions.Count;
             var question = KeepAliveQuestions.All[questionIndex];
-            var credential = _credential;
+            var credential = _credential ?? _channelCredential;
             if (_session is not null && (!Equals(_session.Credential, credential) || _session.ReasoningEffort != _reasoningEffort))
             {
                 // 会话必须和本通道当前配置一致，不同配置之间不复用。
@@ -815,7 +859,7 @@ public sealed class KeepAliveWatchdog
             {
                 Flavor = _flavor,
                 ReasoningEffort = _reasoningEffort,
-                Model = _session?.Model ?? _credential?.Model,
+                Model = _session?.Model ?? (_credential ?? _channelCredential)?.Model,
                 SessionId = _session?.Conversation.Id,
                 Turns = _session?.Turns ?? 0,
                 ContextTokens = _session?.ContextTokens,
@@ -827,7 +871,8 @@ public sealed class KeepAliveWatchdog
                 Probing = _flight is { Result: null },
                 Preparing = _preparation is not null,
                 Enabled = _enabled,
-                WithKey = _credential is { ApiKey.Length: > 0 },
+                WithKey = _credential is { ApiKey.Length: > 0, IsChannelToken: false },
+                ThroughChannel = (_credential ?? _channelCredential) is { IsChannelToken: true },
                 PreparationAttempts = _preparationAttempts,
                 PreparationRetryAfter = _preparationRetryAtMs is { } retryAt ? TimeSpan.FromMilliseconds(Math.Max(0, retryAt - NowMs)) : null,
                 PreparationLastError = _preparationLastError,
@@ -1057,7 +1102,10 @@ public sealed class KeepAliveProbe : IDisposable
     public bool IsPreparation { get; }
 
     /// <summary>本轮是否使用用户临时输入的 Key。</summary>
-    public bool UsesSuppliedKey => Credential is { ApiKey.Length: > 0 };
+    public bool UsesSuppliedKey => Credential is { ApiKey.Length: > 0, IsChannelToken: false };
+
+    /// <summary>本轮是否带本地口令经本通道，由代理注入当前 Key。</summary>
+    public bool UsesChannelToken => Credential is { IsChannelToken: true };
 
     /// <summary>拉起（或复用）CLI 会话并问一道题。失败抛 <see cref="CliException"/>；取消抛 <see cref="OperationCanceledException"/>。</summary>
     internal async Task<CliReply> ExecuteAsync(CancellationToken cancellationToken)

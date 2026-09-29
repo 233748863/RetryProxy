@@ -154,15 +154,17 @@ internal sealed class CliSession : IDisposable
         });
     }
 
-    /// <summary>Codex 通过临时 provider 的 env_key 读取密钥，密钥不出现在命令行。</summary>
+    /// <summary>
+    /// Codex 通过临时 provider 的 env_key 读取密钥，密钥不出现在命令行；地址按客户端规则补 <c>/v1</c>（见 <see cref="UrlRules.ClientBaseUrl"/>）。
+    /// </summary>
     internal static List<string> CodexCredentialOverrides(CliCredential credential)
     {
         var provider = $"model_providers.{CodexCredentialProvider}";
         var overrides = new List<string>
         {
             $"model_provider=\"{CodexCredentialProvider}\"",
-            $"{provider}.name=\"Retry Proxy 指定 Key 准备\"",
-            $"{provider}.base_url={JsonText.Serialize(JsonValue.Create($"{credential.BaseUrl}/v1"))}",
+            $"{provider}.name=\"{(credential.IsChannelToken ? "Retry Proxy 通道保活" : "Retry Proxy 指定 Key 准备")}\"",
+            $"{provider}.base_url={JsonText.Serialize(JsonValue.Create(UrlRules.ClientBaseUrl(ClientType.Codex, credential.BaseUrl)))}",
             $"{provider}.wire_api=\"responses\"",
             $"{provider}.env_key=\"{CodexCredentialEnv}\"",
         };
@@ -252,6 +254,25 @@ internal sealed class CliSession : IDisposable
                 start.ArgumentList.Add("--effort");
                 start.ArgumentList.Add(effort);
             }
+
+            // 带密钥或本地口令的设置写进会话工作目录里的文件再传路径，不放在命令行上（任务管理器、进程审计都能看到命令行）；
+            // 工作目录在会话结束时删除。例：--settings %TEMP%\retry-proxy-keepalive-…\settings.json
+            if (credential is { ApiKey.Length: > 0 })
+            {
+                var settingsPath = Path.Combine(directory, "settings.json");
+                try
+                {
+                    File.WriteAllText(settingsPath, settings);
+                }
+                catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+                {
+                    TryDeleteDirectory(directory);
+                    throw new CliException("无法写入后台会话设置");
+                }
+
+                settings = settingsPath;
+            }
+
             foreach (var argument in new[]
                      {
                          "--print", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
@@ -263,7 +284,8 @@ internal sealed class CliSession : IDisposable
                 start.ArgumentList.Add(argument);
             }
 
-            if (credential is not { ApiKey.Length: > 0 })
+            // 一键准备的临时代理会在请求里禁止调用工具，这里保留工具定义；本机默认配置与通道保活直接不给工具。
+            if (credential is not { ApiKey.Length: > 0 } || credential.IsChannelToken)
             {
                 start.ArgumentList.Add("--tools");
                 start.ArgumentList.Add(string.Empty);

@@ -635,7 +635,8 @@ public class RequestLifecycleMoreTests
         await using var fixture = await LifecycleProxy.StartAsync(async context =>
         {
             Interlocked.Increment(ref hits);
-            if (context.Request.Path == "/pending")
+            // 测试通道是 Codex：没有路径的上游地址按 {地址}/v1 拼接（PRD-供应商管理 §6.1）。
+            if (context.Request.Path == "/v1/pending")
             {
                 await Upstream.Pending(context);
                 return;
@@ -664,7 +665,7 @@ public class RequestLifecycleMoreTests
         {
             await using var fixture = await LifecycleProxy.StartAsync(async context =>
             {
-                if (context.Request.Path == "/fast")
+                if (context.Request.Path == "/v1/fast")
                 {
                     await Upstream.Text(context, 200, "ready");
                     return;

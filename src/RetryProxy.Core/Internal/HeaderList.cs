@@ -36,6 +36,39 @@ public sealed class HeaderList : IEnumerable<KeyValuePair<string, string>>
 
     public void Remove(string name) => _entries.RemoveAll(entry => Matches(entry.Key, name));
 
+    /// <summary>
+    /// 删掉 <paramref name="names"/> 中的全部头，换成一个新头，放在其中第一个出现的位置；都没有时追加到末尾。
+    /// 例：<c>Accept, Authorization, x-api-key, User-Agent</c> 换成 <c>x-api-key</c> → <c>Accept, x-api-key, User-Agent</c>。
+    /// </summary>
+    public void ReplaceAll(IReadOnlyCollection<string> names, string name, string value)
+    {
+        var index = _entries.FindIndex(entry => Contains(names, entry.Key));
+        _entries.RemoveAll(entry => Contains(names, entry.Key));
+        _entries.Insert(index < 0 ? _entries.Count : index, new KeyValuePair<string, string>(name, value));
+    }
+
+    /// <summary>按原位置改写同名头的每个值；返回 null 表示删掉这一项。</summary>
+    public void Update(string name, Func<string, string?> update)
+    {
+        for (var index = _entries.Count - 1; index >= 0; index--)
+        {
+            var entry = _entries[index];
+            if (!Matches(entry.Key, name))
+            {
+                continue;
+            }
+
+            if (update(entry.Value) is { } value)
+            {
+                _entries[index] = new KeyValuePair<string, string>(entry.Key, value);
+            }
+            else
+            {
+                _entries.RemoveAt(index);
+            }
+        }
+    }
+
     public bool Contains(string name)
     {
         foreach (var entry in _entries)
@@ -81,4 +114,17 @@ public sealed class HeaderList : IEnumerable<KeyValuePair<string, string>>
     IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
 
     private static bool Matches(string left, string right) => string.Equals(left, right, StringComparison.OrdinalIgnoreCase);
+
+    private static bool Contains(IReadOnlyCollection<string> names, string name)
+    {
+        foreach (var candidate in names)
+        {
+            if (Matches(candidate, name))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 }

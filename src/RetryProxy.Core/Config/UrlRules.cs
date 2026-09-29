@@ -11,6 +11,51 @@ internal static class UrlRules
         return value.Trim().TrimEnd('/');
     }
 
+    /// <summary>
+    /// 上游请求地址（PRD-供应商管理 §6.1）。Claude：供应商地址原样 + 入站路径 + 查询串；
+    /// Codex：供应商地址（没有路径时按 <c>{地址}/v1</c>）+ 入站路径去掉开头的 <c>/v1</c> + 查询串。
+    /// 例：Claude <c>https://anyrouter.top</c> + <c>/v1/messages</c> → <c>https://anyrouter.top/v1/messages</c>；
+    /// Codex <c>https://anyrouter.top</c> / <c>https://x666.me/v1</c> / <c>https://new.sharedchat.cc/codex</c> + <c>/v1/responses</c>
+    /// → <c>https://anyrouter.top/v1/responses</c> / <c>https://x666.me/v1/responses</c> / <c>https://new.sharedchat.cc/codex/responses</c>。
+    /// </summary>
+    public static string UpstreamTarget(ClientType clientType, string baseUrl, string path, string query)
+    {
+        var root = baseUrl.TrimEnd('/');
+        if (clientType == ClientType.Codex)
+        {
+            root = CodexApiRoot(root);
+            if (path == "/v1")
+            {
+                path = "/";
+            }
+            else if (path.StartsWith("/v1/", StringComparison.Ordinal))
+            {
+                path = path[3..];
+            }
+        }
+
+        var target = $"{root}/{path.TrimStart('/')}";
+        return query.Length > 0 ? $"{target}?{query}" : target;
+    }
+
+    /// <summary>Codex 供应商地址没有路径时补 <c>/v1</c>，例：<c>https://anyrouter.top</c> → <c>https://anyrouter.top/v1</c>；已有路径的原样返回。</summary>
+    public static string CodexApiRoot(string baseUrl)
+    {
+        var root = baseUrl.TrimEnd('/');
+        return Uri.TryCreate(root, UriKind.Absolute, out var parsed) && parsed.AbsolutePath is "/" or ""
+            ? $"{root}/v1"
+            : root;
+    }
+
+    /// <summary>
+    /// 客户端（及保活 CLI）连本机通道用的地址：Claude 为 <c>http://127.0.0.1:{端口}</c>，Codex 再加 <c>/v1</c>。
+    /// </summary>
+    public static string ClientBaseUrl(ClientType clientType, string localUrl)
+    {
+        var root = localUrl.TrimEnd('/');
+        return clientType == ClientType.Codex ? $"{root}/v1" : root;
+    }
+
     public static void ValidateBaseUrl(string value, string label)
     {
         if (!Uri.TryCreate(value, UriKind.Absolute, out var parsed)

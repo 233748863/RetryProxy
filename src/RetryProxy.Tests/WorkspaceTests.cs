@@ -1,11 +1,14 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Net;
+using System.Net.Http;
 using System.Net.Sockets;
 using System.Text;
 using System.Threading;
+using System.Threading.Tasks;
 using RetryProxy.Core.Cli;
 using RetryProxy.Core.Config;
 using RetryProxy.Core.Internal;
@@ -13,6 +16,7 @@ using RetryProxy.Core.KeepAlive;
 using RetryProxy.Core.Logging;
 using RetryProxy.Core.Service;
 using RetryProxy.Core.Workspace;
+using RetryProxy.Tests.Support;
 using Xunit;
 
 namespace RetryProxy.Tests;
@@ -541,7 +545,8 @@ public class WorkspaceTests
         Assert.Null(app.CommitRoute(editor));
         Assert.Equal("beta", app.Config.Routes[0].CurrentProviderId);
         Assert.Equal("https://beta.example", app.Config.RuntimeConfigFor("alpha-one").UpstreamBaseUrl);
-        Assert.NotSame(watchdog, app.RouteKeepAlives["alpha-one"]);
+        // 换供应商按切换处理：看门狗保留，只丢弃原上游上的后台会话（PRD-供应商管理 §4.2）。
+        Assert.Same(watchdog, app.RouteKeepAlives["alpha-one"]);
     }
 
     [Fact]
@@ -845,21 +850,144 @@ public class WorkspaceTests
     }
 
     [Fact]
-    public void EditingTheProviderOfARunningRouteIsRefused()
+    public void EditingTheProviderOfARunningRouteAppliesWithoutRestart()
     {
         using var fixture = new Fixture();
         var app = fixture.App;
         BindRouteToFreePort(app, "alpha-one");
         app.RefreshServices();
-        app.Services["alpha-one"].Start(app.Config.RuntimeConfigFor("alpha-one"), TimeSpan.FromSeconds(5));
+        var service = app.Services["alpha-one"];
+        service.Start(app.Config.RuntimeConfigFor("alpha-one"), TimeSpan.FromSeconds(5), app.Config.SnapshotFor("alpha-one"));
         Assert.Equal(1, app.RunningCount());
         var editor = app.OpenProviderEditor(0);
         editor.Name = "alpha-renamed";
-        Assert.Equal("请先停止引用该服务商的通道", app.CommitProvider(editor));
-        app.StopRoute("alpha-one");
-        Assert.False(app.Config.Routes[0].DesiredRunning);
-        app.Services["alpha-one"].Stop(TimeSpan.FromSeconds(5));
+        editor.Url = "https://alpha-next.example";
+        // 运行中的通道不用停：保存后之后的尝试立即使用新设置（PRD-供应商管理 §5.3）。
         Assert.Null(app.CommitProvider(editor));
         Assert.Equal("alpha-renamed", app.Config.Providers[0].Name);
+        Assert.Same(service, app.Services["alpha-one"]);
+        Assert.Equal(ServiceState.Running, service.State);
+        Assert.Equal(("alpha-renamed", "https://alpha-next.example"), (service.CurrentSnapshot?.ProviderName, service.CurrentSnapshot?.UpstreamBaseUrl));
+    }
+
+    // ---------------------------------------------------------------- 切换 Key 与热更新（PRD-供应商管理 §4.2、§5.3）
+
+    /// <summary>给服务商加两个 Key（k1 主号、k2 群号）并改地址。</summary>
+    private static void AddKeys(ProxyWorkspace app, string providerId, string baseUrl)
+    {
+        var provider = app.Config.ProviderById(providerId)!;
+        provider.BaseUrl = baseUrl;
+        provider.Keys.Add(new ProviderKey { Id = "k1", Name = "主号", ApiKey = "sk-one" });
+        provider.Keys.Add(new ProviderKey { Id = "k2", Name = "群号", ApiKey = "sk-two" });
+    }
+
+    [Fact]
+    public void SwitchingKeysValidatesTheTargetAndResetsTheOldSession()
+    {
+        using var fixture = new Fixture();
+        var app = fixture.App;
+        AddKeys(app, "alpha", "https://alpha.example");
+        app.Config.Routes[0].CurrentKeyId = "k1";
+        fixture.DrainLogs();
+        Assert.Equal("找不到转发通道", app.SwitchKey("missing", "alpha", "k2"));
+        Assert.Equal("找不到该供应商", app.SwitchKey("alpha-one", "alpha-claude", string.Empty));
+        Assert.Equal("找不到该 Key", app.SwitchKey("alpha-one", "alpha", "missing"));
+        Assert.Null(app.SwitchKey("alpha-one", "alpha", "k1"));
+        Assert.Empty(fixture.DrainLogs());
+
+        var watchdog = app.RouteKeepAlives["alpha-one"];
+        using (watchdog.RegisterService(KeepAliveFlavor.Codex))
+        {
+            watchdog.MakeDueForTest();
+            var probe = watchdog.BeginDueProbe()!;
+            Assert.NotNull(probe.Complete(null, 10));
+            probe.Dispose();
+            Assert.NotNull(watchdog.Snapshot().SessionId);
+            Assert.Null(app.SwitchKey("alpha-one", "alpha", "k2"));
+            // 通道没运行也丢弃原 Key 上的后台会话，看门狗本身保留。
+            Assert.Null(watchdog.Snapshot().SessionId);
+        }
+
+        Assert.Equal(("alpha", "k2"), (app.Config.Routes[0].CurrentProviderId, app.Config.Routes[0].CurrentKeyId));
+        Assert.Same(watchdog, app.RouteKeepAlives["alpha-one"]);
+        Assert.Contains(fixture.DrainLogs(), line => line.Contains("已切换：alpha · 主号 → alpha · 群号"));
+
+        // Key ID 为空表示该供应商的第一个 Key；供应商还没有 Key 时日志只写供应商名。
+        Assert.Null(app.SwitchKey("alpha-one", "beta", string.Empty));
+        Assert.Equal(("beta", string.Empty), (app.Config.Routes[0].CurrentProviderId, app.Config.Routes[0].CurrentKeyId));
+        Assert.Contains(fixture.DrainLogs(), line => line.Contains("已切换：alpha · 群号 → beta"));
+    }
+
+    [Fact]
+    public async Task SwitchingARunningRouteTakesEffectOnTheNextRequestAndCanBeUndone()
+    {
+        var seen = new ConcurrentQueue<string>();
+        await using var upstream = await FakeUpstream.StartAsync(context =>
+        {
+            seen.Enqueue(context.Request.Headers.Authorization.ToString());
+            return Upstream.Json(context, 200, "{}");
+        });
+        using var fixture = new Fixture();
+        var app = fixture.App;
+        AddKeys(app, "alpha", upstream.BaseUrl);
+        app.Config.Routes[0].CurrentKeyId = "k1";
+        BindRouteToFreePort(app, "alpha-one");
+        app.RefreshServices();
+        app.StartRoute("alpha-one");
+        var service = app.Services["alpha-one"];
+        await TestClock.WaitUntil(() => service.State == ServiceState.Running);
+        // 当前供应商有 Key：保活 CLI 带本地口令经本通道。
+        Assert.True(app.RouteKeepAlives["alpha-one"].Snapshot().ThroughChannel);
+
+        using var client = TestClient.Create();
+        var url = $"http://127.0.0.1:{app.Config.Routes[0].ListenPort}/v1/responses";
+        async Task Send()
+        {
+            using var response = await TestClient.Send(client, HttpMethod.Post, url, "{\"input\":\"hi\"}",
+                headers: new Dictionary<string, string> { ["Authorization"] = "Bearer token-alpha-one" });
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        }
+
+        await Send();
+        Assert.Null(app.SwitchKey("alpha-one", "alpha", "k2"));
+        await Send();
+        // 撤销就是切回原来的 Key，走同一套流程。
+        Assert.Null(app.SwitchKey("alpha-one", "alpha", "k1"));
+        await Send();
+        Assert.Equal(new[] { "Bearer sk-one", "Bearer sk-two", "Bearer sk-one" }, seen);
+        Assert.Same(service, app.Services["alpha-one"]);
+        var logs = fixture.DrainLogs();
+        Assert.Contains(logs, line => line.Contains("已切换：alpha · 主号 → alpha · 群号"));
+        Assert.Contains(logs, line => line.Contains("已切换：alpha · 群号 → alpha · 主号"));
+        Assert.DoesNotContain(logs, line => line.Contains("sk-one") || line.Contains("sk-two") || line.Contains("token-alpha-one"));
+
+        // 「获取模型」的结果并入已知模型，运行中的通道立即采用。
+        app.RememberFetchedModels("alpha", new[] { " o3 ", "" });
+        Assert.Contains("o3", service.CurrentSnapshot!.KnownModels);
+    }
+
+    [Fact]
+    public async Task RunningRoutesAcceptEverythingButAPortChange()
+    {
+        using var fixture = new Fixture();
+        var app = fixture.App;
+        BindRouteToFreePort(app, "alpha-one");
+        app.RefreshServices();
+        app.StartRoute("alpha-one");
+        var service = app.Services["alpha-one"];
+        await TestClock.WaitUntil(() => service.State == ServiceState.Running);
+        var editor = app.OpenRouteEditor(0)!;
+        editor.Port = FreePort().ToString();
+        Assert.Equal("通道运行中不能改端口，请先停用通道", app.CommitRoute(editor));
+
+        fixture.DrainLogs();
+        editor = app.OpenRouteEditor(0)!;
+        editor.Retries = "7";
+        editor.TotalTimeout = "321";
+        Assert.Null(app.CommitRoute(editor));
+        Assert.Same(service, app.Services["alpha-one"]);
+        Assert.Equal(ServiceState.Running, service.State);
+        Assert.Equal((7L, 321.0), (service.CurrentSnapshot!.MaxRetries, service.CurrentSnapshot.TotalTimeoutSeconds));
+        Assert.Contains(fixture.DrainLogs(), line => line.Contains("通道参数已更新，之后的尝试立即使用新参数"));
     }
 }

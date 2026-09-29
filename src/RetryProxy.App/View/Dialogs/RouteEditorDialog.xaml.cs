@@ -1,4 +1,5 @@
 using RetryProxy.Core.Config;
+using RetryProxy.Core.Service;
 using RetryProxy.Core.Workspace;
 using RetryProxy.Service.I18n;
 using RetryProxy.ViewModel;
@@ -28,6 +29,14 @@ public partial class RouteEditorDialog : ContentDialog
         NameBox.Text = editor.Name;
         ClientText.Text = editor.ClientType.Label();
         PortBox.Text = editor.Port;
+        if (editor.Index < workspace.Config.Routes.Count
+            && workspace.RouteState(workspace.Config.Routes[editor.Index].Id) is not (ServiceState.Stopped or ServiceState.Error))
+        {
+            // 运行中除端口外都能改，保存后对之后的请求立即生效（PRD-供应商管理 §5.3）。
+            PortBox.IsReadOnly = true;
+            PortBox.ToolTip = i18n.Translate("通道运行中不能改端口，请先停用通道");
+        }
+
         RetriesBox.Text = editor.Retries;
         TimeoutBox.Text = editor.Timeout;
         GenerationTimeoutBox.Text = editor.GenerationTimeout;

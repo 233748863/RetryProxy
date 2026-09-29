@@ -61,6 +61,10 @@ public partial class ChannelPageViewModel : ViewModel
     [ObservableProperty]
     private bool _canEditChannel = true;
 
+    /// <summary>端口只能在通道停止时修改；其余参数运行中也能改，保存后对之后的请求立即生效。</summary>
+    [ObservableProperty]
+    private bool _canEditPort = true;
+
     [ObservableProperty]
     private string _channelEditToolTip = string.Empty;
 
@@ -150,12 +154,12 @@ public partial class ChannelPageViewModel : ViewModel
             var state = route is null ? ServiceState.Stopped : Workspace.RouteState(route.Id);
             IsProxyRunning = state is ServiceState.Running or ServiceState.Starting;
             CanToggleChannel = route is not null && state is not ServiceState.Stopping;
-            CanEditChannel = route is not null && state is ServiceState.Stopped or ServiceState.Error;
+            CanEditChannel = route is not null && state is not ServiceState.Stopping;
+            CanEditPort = route is not null && state is ServiceState.Stopped or ServiceState.Error;
             ChannelEditToolTip = route is null
                 ? string.Empty
-                : CanEditChannel
-                    ? $"最大重试 {route.MaxRetries} 次\n单次 / 总等待 {UiText.TrimFloat(route.TimeoutSeconds)} / {UiText.TrimFloat(route.TotalTimeoutSeconds)} 秒\n退避间隔 {UiText.TrimFloat(route.BaseDelaySeconds)} – {UiText.TrimFloat(route.MaxDelaySeconds)} 秒"
-                    : "请先停用通道";
+                : $"最大重试 {route.MaxRetries} 次\n单次 / 总等待 {UiText.TrimFloat(route.TimeoutSeconds)} / {UiText.TrimFloat(route.TotalTimeoutSeconds)} 秒\n退避间隔 {UiText.TrimFloat(route.BaseDelaySeconds)} – {UiText.TrimFloat(route.MaxDelaySeconds)} 秒"
+                    + (CanEditPort ? string.Empty : "\n运行中修改：除端口外，保存后对之后的请求立即生效");
             ListenPort = route?.ListenPort.ToString() ?? string.Empty;
             KeepAliveEnabled = route?.KeepaliveEnabled ?? false;
             KeepAliveMinutes = route is null ? string.Empty : Workspace.KeepAliveMinutes;
@@ -383,12 +387,6 @@ public partial class ChannelPageViewModel : ViewModel
         var route = Workspace.SelectedRouteRef();
         if (route is null)
         {
-            return;
-        }
-
-        if (Workspace.RouteState(route.Id) is not (ServiceState.Stopped or ServiceState.Error))
-        {
-            Workspace.Notice = "请先停用通道";
             return;
         }
 

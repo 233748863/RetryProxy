@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using RetryProxy.Core.Config;
+using RetryProxy.Core.Client;
 using RetryProxy.Core.Cli;
 using RetryProxy.Core.Logging;
 using RetryProxy.Core.Workspace;
@@ -79,7 +80,14 @@ public sealed class WorkspaceService
         Workspace.SetUiNotifier(RequestRefresh);
         Preparations.SetUiNotifier(RequestRefresh);
         Workspace.RefreshServices();
+        Clients = new ClientTakeoverCoordinator(Workspace, (client, state) => new ClientConfigStore(
+            Global.Absolute("User/backup/client"),
+            client == ClientType.Claude ? new ClaudeConfigEditor() : new CodexConfigEditor(),
+            state.Enabled && state.ConfigPath.Length > 0 ? state.ConfigPath : ClientConfigPaths.Resolve(client)),
+            configService.BackupBeforeClientTakeover);
     }
+
+    public ClientTakeoverCoordinator Clients { get; }
 
     public ProxyWorkspace Workspace { get; }
 
@@ -108,11 +116,13 @@ public sealed class WorkspaceService
         _started = true;
         _ = Task.Run(ConsumeLogsAsync);
         Workspace.StartDesiredRoutes();
+        Clients.Detect();
         Flush();
     }
 
     public void Shutdown()
     {
+        Clients.Shutdown();
         Preparations.Shutdown();
         Workspace.Shutdown();
         _refreshTimer.Stop();
@@ -179,6 +189,7 @@ public sealed class WorkspaceService
         try
         {
             Workspace.PollServiceErrors();
+            Clients.Refresh();
             Preparations.Poll();
             while (Workspace.PollPreparationEvents())
             {

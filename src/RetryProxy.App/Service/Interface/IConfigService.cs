@@ -11,5 +11,7 @@ namespace RetryProxy.Service.Interface
         void SaveChecked();
 
         void BackupBeforeDeletion();
+
+        void BackupBeforeClientTakeover();
     }
 }

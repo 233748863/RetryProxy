@@ -67,6 +67,33 @@ public class LocalProviderCredentialsTests
         }
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void CodexUsesProviderTokenWithoutAuthFileAndRejectsConflictingSettings(bool conflicting)
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "retry-proxy-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            File.WriteAllText(Path.Combine(directory, "config.toml"), """
+                model_provider = "test"
+                [model_providers.test]
+                base_url = "https://test.example/v1"
+                experimental_bearer_token = "sk-test-only"
+                """ + (conflicting ? "\nrequires_openai_auth = true\n" : "\n"));
+            if (conflicting)
+            {
+                var error = Assert.Throws<WorkspaceException>(() => LocalProviderCredentials.ReadCodex(directory));
+                Assert.Contains("覆盖", error.Message);
+                Assert.DoesNotContain("sk-test-only", error.Message);
+            }
+            else Assert.Equal("sk-test-only", LocalProviderCredentials.ReadCodex(directory).ApiKey);
+            Assert.False(File.Exists(Path.Combine(directory, "auth.json")));
+        }
+        finally { Directory.Delete(directory, recursive: true); }
+    }
+
     [Fact]
     public void ClaudeReadsCurrentAddressAndToken()
     {

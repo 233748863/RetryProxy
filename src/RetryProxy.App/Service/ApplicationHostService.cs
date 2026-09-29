@@ -51,6 +51,8 @@ public class ApplicationHostService(IServiceProvider serviceProvider) : IHostedS
 
             _ = _navigationWindow.Navigate(typeof(ProviderPage));
             (serviceProvider.GetService(typeof(WorkspaceService)) as WorkspaceService)?.Start();
+            if (serviceProvider.GetService(typeof(ClientTakeoverService)) is ClientTakeoverService clients)
+                await clients.ShowSetupAsync(onlyIfNeeded: true);
         }
 
         await Task.CompletedTask;

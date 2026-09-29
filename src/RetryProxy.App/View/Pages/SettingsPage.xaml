@@ -79,6 +79,35 @@
                            Content="{i18n:T 切换外观}" Icon="{ui:SymbolIcon Blur24}" />
             </ui:CardControl>
 
+            <!-- 客户端接管：每个客户端保留独立的持久选择。 -->
+            <ui:Card Margin="0,0,0,12" Padding="16">
+                <StackPanel>
+                    <TextBlock Text="{i18n:T 客户端接管}" FontWeight="SemiBold" FontSize="16" />
+                    <ItemsControl ItemsSource="{Binding Clients}" Margin="0,8,0,0">
+                        <ItemsControl.ItemTemplate><DataTemplate>
+                            <StackPanel Margin="0,8,0,12">
+                                <WrapPanel>
+                                    <TextBlock Text="{Binding Name}" FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,0,12,0" />
+                                    <TextBlock Text="{Binding Status}" VerticalAlignment="Center" AutomationProperties.AutomationId="ClientConnectionStatus" />
+                                    <ui:Button Content="{Binding TakeoverText}" Command="{Binding TakeOverCommand}" IsEnabled="{Binding CanTakeOver}" Margin="12,0,0,0" Padding="8,4" />
+                                    <ui:Button Content="{i18n:T 取消接管}" Command="{Binding CancelCommand}" IsEnabled="{Binding CanCancel}" Margin="8,0,0,0" Padding="8,4" AutomationProperties.AutomationId="{Binding Client, StringFormat='CancelTakeover_{0}'}" />
+                                </WrapPanel>
+                                <TextBlock Text="{Binding ConfigPath}" TextWrapping="Wrap" Margin="0,6,0,0" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                                <TextBlock Text="{Binding Error}" TextWrapping="Wrap" Margin="0,4,0,0" />
+                                <WrapPanel Margin="0,4,0,0">
+                                    <ui:Button Content="{i18n:T 打开配置目录}" Command="{Binding OpenConfigCommand}" Padding="8,4" />
+                                    <ui:Button Content="{i18n:T 打开备份目录}" Command="{Binding OpenBackupCommand}" ToolTip="{Binding BackupPath}" Margin="8,0,0,0" Padding="8,4" />
+                                </WrapPanel>
+                            </StackPanel>
+                        </DataTemplate></ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                    <TextBlock Text="{i18n:T 配置和备份含明文 Key，请妥善保管。}" TextWrapping="Wrap" />
+                    <TextBlock Text="{i18n:T Claude Code 项目目录中的地址设置可能覆盖接管配置；项目级覆盖不会被自动检测。}" TextWrapping="Wrap" Margin="0,6,0,0" />
+                    <TextBlock Text="{i18n:T 软件意外退出后，重新启动本软件可恢复连接。}" TextWrapping="Wrap" Margin="0,6,0,10" />
+                    <ui:Button Content="{i18n:T 打开首次设置向导}" Command="{Binding ClientSetupCommand}" HorizontalAlignment="Left" AutomationProperties.AutomationId="ClientSetup" />
+                </StackPanel>
+            </ui:Card>
+
             <!--  日志目录  -->
             <ui:CardControl Margin="0,0,0,12" Icon="{ui:SymbolIcon DocumentText24}">
                 <ui:CardControl.Header>

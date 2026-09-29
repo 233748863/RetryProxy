@@ -17,6 +17,7 @@ using RetryProxy.ViewModel.Pages;
 using System;
 using System.Diagnostics;
 using System.Globalization;
+using System.IO;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Threading;
@@ -71,6 +72,7 @@ public partial class App : Application
             services.AddSingleton<Dialogs>();
             services.AddSingleton<DrawerService>();
             services.AddSingleton<KeySwitchService>();
+            services.AddSingleton<ClientTakeoverService>();
 
             // Main window with navigation
             services.AddView<INavigationWindow, MainWindow, MainWindowViewModel>();
@@ -121,7 +123,7 @@ public partial class App : Application
         try
         {
             // 注入配置的验收实例使用独立名称，避免唤醒或退出用户正在运行的程序。
-            RuntimeHelper.CheckSingleInstance(ProxyConfigLoader.IsTestInjectionActive()
+            RuntimeHelper.CheckSingleInstance(ProxyConfigLoader.IsTestInjectionActive() || IsIsolatedClientVerification()
                 ? $"{SingleInstanceName}_Test_{Environment.ProcessId}"
                 : SingleInstanceName);
             if (RuntimeHelper.IsDebug)
@@ -165,6 +167,31 @@ public partial class App : Application
 
             Shutdown();
         }
+    }
+
+    /// <summary>
+    /// 接管验收需要真实落盘，不能使用禁止写客户端的 JSON 注入模式。
+    /// 仅对程序和两个客户端都位于同一临时测试目录的实例使用独立互斥，其他启动流程完全相同。
+    /// </summary>
+    private static bool IsIsolatedClientVerification()
+    {
+        var value = Environment.GetEnvironmentVariable("RETRY_PROXY_UI_TEST_ROOT");
+        if (value is null) return false;
+        var root = Path.GetFullPath(value).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var directory = new DirectoryInfo(root);
+        var relative = Path.GetRelativePath(Path.GetTempPath(), root);
+        var valid = directory.Name.StartsWith("RetryProxyM4-", StringComparison.Ordinal)
+            && !Path.IsPathRooted(relative) && !relative.StartsWith("..", StringComparison.Ordinal)
+            && string.Equals(root, Path.GetFullPath(AppContext.BaseDirectory).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar), StringComparison.OrdinalIgnoreCase)
+            && (directory.Attributes & FileAttributes.ReparsePoint) == 0;
+        foreach (var (variable, name) in new[] { ("CLAUDE_CONFIG_DIR", "claude"), ("CODEX_HOME", "codex") })
+        {
+            var path = Environment.GetEnvironmentVariable(variable);
+            valid &= path is not null && string.Equals(Path.GetFullPath(path), Path.Combine(root, name), StringComparison.OrdinalIgnoreCase)
+                && (new DirectoryInfo(path).Attributes & FileAttributes.ReparsePoint) == 0;
+        }
+        if (!valid) throw new InvalidOperationException("客户端验收目录无效，已取消启动");
+        return true;
     }
 
     protected override async void OnExit(ExitEventArgs e)

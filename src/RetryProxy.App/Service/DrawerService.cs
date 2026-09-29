@@ -18,7 +18,7 @@ namespace RetryProxy.Service;
 
 /// <summary>
 /// 右侧抽屉入口。MainWindow 在内容区覆盖层放置 DrawerHost 后调用 SetHost；所有方法仅在 UI 线程调用。
-/// 此服务只维护代理配置，不读写 Claude Code / Codex 的真实客户端配置。
+/// 客户端直连恢复交给 WorkspaceService.Clients，与代理停止、改端口统一协调。
 /// </summary>
 public sealed class DrawerService
 {
@@ -169,7 +169,7 @@ public sealed class DrawerService
         var restart = portChanged && state == ServiceState.Running;
         if (portChanged)
         {
-            var body = "修改端口会先停止运行中的代理，当前连接将中断；保存后仅恢复原来运行的代理。客户端地址需要自行调整。";
+            var body = "修改端口会先将已接管的客户端恢复直连，再停止运行中的代理，当前连接将中断；保存并重新启动后自动更新客户端地址。已打开的客户端会话需要重新打开。";
             if (!await ConfirmAsync("确认修改端口", body, "确认修改")) return "端口修改已取消，设置尚未保存";
             if (drawer.Lifetime.IsCancellationRequested) return "操作已取消";
             // 确认框打开期间托盘可能改变通道状态或当前 Key，再校验一次，避免保存旧引用。
@@ -179,7 +179,7 @@ public sealed class DrawerService
             restart = state == ServiceState.Running;
             if (restart)
             {
-                Workspace.StopRoute(drawer.RouteId);
+                if (_workspaceService.Clients.StopRoute(drawer.RouteId) is { } stopError) return stopError;
                 _workspaceService.Flush();
                 if (!await WaitForStateAsync(drawer.RouteId, running: false, drawer.Lifetime))
                     return "代理未能在 15 秒内停止，设置尚未保存，请检查运行日志";
@@ -209,9 +209,9 @@ public sealed class DrawerService
         if (state is ServiceState.Starting or ServiceState.Stopping) return "代理正在启动或停止，请稍后再试";
         if (state == ServiceState.Running)
         {
-            if (!await ConfirmAsync("停止代理", "停止代理后，当前连接将中断。客户端配置不会自动改动。", "确认停止")) return null;
+            if (!await ConfirmAsync("停止代理", "停止代理后，已接管的客户端将恢复直连当前 Key，当前连接将中断。已打开的 Codex 会话需要重新打开。", "确认停止")) return null;
             drawer.Lifetime.ThrowIfCancellationRequested();
-            Workspace.StopRoute(drawer.RouteId);
+            if (_workspaceService.Clients.StopRoute(drawer.RouteId) is { } stopError) return stopError;
             _workspaceService.Flush();
             if (!await WaitForStateAsync(drawer.RouteId, running: false, drawer.Lifetime))
                 return "代理未能在 15 秒内停止，请检查运行日志";

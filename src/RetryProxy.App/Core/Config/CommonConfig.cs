@@ -54,6 +54,10 @@ public partial class CommonConfig : ObservableObject
     [ObservableProperty]
     private bool _isFirstRun = true;
 
+    /// <summary>客户端接管向导已完成或跳过；独立于旧的首次运行标记，升级用户也能进入向导。</summary>
+    [ObservableProperty]
+    private bool _clientSetupCompleted;
+
     /// <summary>
     /// 上次运行的版本号
     /// </summary>

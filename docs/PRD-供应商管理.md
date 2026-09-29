@@ -133,12 +133,12 @@
 - 配置文件位置：
   - Claude Code：`%CLAUDE_CONFIG_DIR%\settings.json`，未设置时为 `~\.claude\settings.json`。
   - Codex：`%CODEX_HOME%\config.toml`，未设置时为 `~\.codex\config.toml`。
-  - `LocalProviderCredentials` 目前不认 `CLAUDE_CONFIG_DIR`，要一并修正。
+  - `LocalProviderCredentials` 已改为复用配置编辑器，识别 `CLAUDE_CONFIG_DIR`；Codex 优先读取所选供应商段内的 token，仅缺少时读取 `auth.json`（2026-09-30）。
 - 接管前提：该客户端的当前供应商至少有 1 个 Key；否则提示先添加 Key（向导第 1 步会自动补上）。
 - 接管 Claude Code：
   - 在 `env` 里合并写入：`ANTHROPIC_BASE_URL=http://127.0.0.1:{端口}`、`ANTHROPIC_AUTH_TOKEN={本地口令}`。
   - 删除 `ANTHROPIC_API_KEY` 和 `apiKeyHelper`，原值在备份里。
-  - 模型变量：`ANTHROPIC_MODEL` 和 `ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU,FABLE}_MODEL` 写成固定的官方角色名（软件内常量表，初始值取本机现有配置里的 `claude-opus-5`、`claude-sonnet-5`、`claude-haiku-4-5`、`claude-fable-5`，随 Claude Code 版本更新）；按当前 Key 的 1M 设置决定是否加 `[1M]`；`*_MODEL_NAME` 写当前 Key 的真实模型名。`CLAUDE_CODE_SUBAGENT_MODEL` 如果存在，按角色改成对应的角色名。
+  - 模型变量：`ANTHROPIC_MODEL` 写固定主模型标记 `retry-proxy-main`，`ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU,FABLE}_MODEL` 写固定官方角色名（软件内常量表，初始值为 `claude-opus-5`、`claude-sonnet-5`、`claude-haiku-4-5`、`claude-fable-5`）；按对应模型的 1M 设置决定是否加 `[1M]`；`*_MODEL_NAME` 写当前 Key 的真实模型名。`CLAUDE_CODE_SUBAGENT_MODEL` 如果存在，已识别角色写对应角色名，其余写主模型标记。未设置有效目标模型时保留客户端真实模型；若原值是上次接管写入的标记，先从对应 `*_MODEL_NAME` 恢复真实模型并保留原 1M 设置；主模型标记没有可恢复名称时移除该项，交回客户端默认模型（2026-09-30 调整）。主模型与四角色保持独立，即使四角色全部单独设置，普通对话仍使用主模型；主模型标记不含角色关键字，代理沿用主模型回退规则改写（2026-09-29 陛下确认）。
   - 其余键保持原样。
 - 接管 Codex：
   - 沿用 config.toml 里现有的 `model_provider` 名称，因为 Codex 的历史会话按这个名称分组。
@@ -154,12 +154,12 @@
   - 首次接管前，把原文件备份到 `User\backup\client\{客户端}\{yyyyMMdd-HHmmss}\`。
   - 用临时文件加替换的方式写入，失败就回滚并提示。
   - 写入前比对上次写入时的哈希；如果文件被客户端或用户改过，就重新读取，只改本软件负责的键。
-- 检测：启动时和窗口激活时，检查客户端配置是否仍然指向本通道并带着本地口令；不是的话，状态条显示"配置被改动"并提供「重新接管」。
+- 检测：启动时和窗口激活时，检查客户端配置是否仍然指向本通道并带着本地口令；不符合时，状态条显示“配置被改动”并提供「重新接管」。自动启停、停机切 Key、异常恢复及退出只修改仍匹配本软件口令、上次写入内容或上次直连凭据的文件；外部改往其他地址或 Key 时保留用户修改，不自动接回（2026-09-30 调整）。
 - 改端口：通道停止、保存后重新启动，并更新已接管客户端的地址；已打开的客户端会话需要重开。
 
 ### 4.5 首次使用向导（U16）
 
-- 触发时机：首次运行，或从 schema 6 升级后第一次打开。
+- 触发时机：首次运行，或升级到带 M4 的版本后首次打开。用 `commonConfig.clientSetupCompleted` 独立记录完成或跳过，保证已用过 M3 的用户也能进入；托盘隐藏启动时，首次显示窗口再进入。每一步都可跳过，设置页可重新打开（2026-09-30 调整）。
 - 第 1 步，保存现有配置（P12）。读取两个客户端当前的地址、Key、模型：
   - 读取来源：Claude 取 `env.ANTHROPIC_BASE_URL`，Key 依次取 `ANTHROPIC_AUTH_TOKEN`（Bearer）、`ANTHROPIC_API_KEY`（x-api-key），模型取 `ANTHROPIC_MODEL` 与各角色变量；Codex 取当前 `model_provider` 段的 `base_url`，Key 依次取该段 `experimental_bearer_token`、`auth.json` 的 `OPENAI_API_KEY`，模型取顶层 `model`、`model_context_window`、`model_auto_compact_token_limit`。
   - 指向外部地址：预览"将存为供应商"，名称可以改，确认后新建供应商和 Key。
@@ -271,7 +271,7 @@
   - 透传压缩。
   - 本通道保活：开关、间隔、思考强度、会话上限。
   - 「启动代理」/「停止代理」：停止时说明"客户端将改回直连"。代理随软件启动自动运行，「停止代理」只对本次运行有效。
-  - 生效方式：除端口外，保存后对新的尝试立即生效，不再要求先停用通道；改端口按 §4.4 执行。M3 已实现端口确认后异步停止、一次保存参数与保活设置、恢复原运行状态；尚未接入 M4，因此停止与改端口不修改客户端配置，确认文案明确说明连接中断和地址需自行调整（2026-09-29 调整）。
+  - 生效方式：除端口外，保存后对新的尝试立即生效。M4 已接入停止前恢复直连、改端口后等待监听成功再接管；原来已停止的通道保存后仍保持停止。恢复直连失败时中止手动停止或端口修改，继续保留原代理连接（2026-09-30 调整）。
 - 准备任务抽屉：取代现在的 `PrepareOptionsDialog`，字段按 §4.7。选"从列表选择"时显示 Key 勾选表。
 
 ### 5.4 统计页（U12）
@@ -333,7 +333,7 @@
 ### 6.2 模型映射
 
 - Claude：
-  - 接管后，客户端配置里写的是固定的官方角色名（§4.4）。代理按请求模型名里的关键字 opus / sonnet / haiku / fable，映射到当前 Key 对应角色的模型；没有单独指定的角色用主模型；关键字都不匹配时，也用主模型。Key 的模型覆盖代替主模型和主模型的 1M，单独指定了模型的角色不受影响（2026-09-29 调整）。
+  - 接管后，主模型使用固定标记 `retry-proxy-main`，四角色使用固定官方角色名（§4.4）。代理按请求模型名里的关键字 opus / sonnet / haiku / fable，映射到当前 Key 对应角色的模型；没有单独指定的角色用主模型；主模型标记及其余不匹配角色的值也用主模型。Key 的模型覆盖代替主模型和主模型的 1M，单独指定了模型的角色不受影响（2026-09-30 调整）。
   - 1M 处理：Claude Code 发请求时会去掉 `[1M]` 后缀，改为带 `anthropic-beta: context-1m-*` 头。目标角色没有勾选 1M 时，删掉这个头。只删不加：头里的版本号由客户端决定，客户端没带时不补；勾了 1M 的角色由接管时写入的 `[1M]` 让 Claude Code 自己带上（2026-09-29 调整）。
   - 改写范围：所有带顶层 `model` 字段的 JSON POST，包括 `/v1/messages/count_tokens`。只改带本地口令、已注入 Key 的请求；供应商没设模型、正文压缩或带完整性校验头时不改（2026-09-29 调整）。
 - Codex：只有当请求的模型不在当前供应商的已知模型列表里时，才改写成当前 Key 的模型。已知模型列表包括供应商模型、各 Key 的覆盖模型、最近一次「获取模型」的结果。用户在 Codex 里手选的有效模型保持不变。「获取模型」的结果写入配置：每个供应商保存最近一次获取到的模型列表，重启后仍算已知模型（2026-09-29 陛下确认）；M3 已接入：获取结果先放供应商草稿，保存供应商时写入配置并热更新；取消草稿不改配置（2026-09-29 调整）。
@@ -383,7 +383,7 @@
 - schema 7 的顶层只写 `schema_version`、`selected_route_id`、`providers`、`routes`、`client_takeover`；旧版镜像选中通道的顶层字段（`upstream_base_url`、`listen_port` 等）不再写出，只在迁移时读取（2026-09-29 调整）。
 - 全新安装：只建两条通道（Codex 18080、Claude Code 18081），不再预置 anyrouter.top / sotamodel.net 两个内置服务商；供应商由向导第 1 步或手动新增。没有配置文件但注册表里有 Rust 版配置时，仍按原规则一次性导入，并走同一套迁移。
 - `ConfigService`：
-  - 改为临时文件加替换的方式写入。只在迁移、删除供应商或 Key、接管之前备份，保留最近 5 份（M3 已加入删除前备份，接管前备份随 M4 加入，2026-09-29 调整）。
+  - 改为临时文件加替换的方式写入。只在迁移、删除供应商或 Key、接管之前备份 `User\config.json`，保留最近 5 份；原始客户端文件在第一次接管前单独备份，取消后重新接管不覆盖这份原始备份（M4，2026-09-30）。
   - 代理配置读取失败时，不再换成内置默认配置后落盘（会覆盖全部 Key），改为不写盘并提示。整个文件无法解析时同样处理：先备份原文件，本次运行只在内存里用内置配置，所有修改都不保存（2026-09-29 调整）。
   - 用 `RETRY_PROXY_CONFIG_JSON` 注入测试配置时，禁止写客户端配置。
 
@@ -408,9 +408,9 @@
 - 保活：`KeepAliveWatchdog` 新增"只重置会话"的方法。现有的 `ConfigureFlavor`（L401-429）会把准备状态一起清掉，不能直接复用。（已实现 `ResetSession`）
 - 一键准备：`PreparationWorkspace` 注入"供应商 ID + Key ID → 凭据"的解析器，替换 L36。
 - 配置文件读写：
-  - Codex 用 Tomlyn（BSD-2-Clause，与 GPL-3.0 兼容，纯托管代码）的无损语法树读写 config.toml，同时替换 `LocalProviderCredentials` 的正则读取。
+  - Codex 用 Tomlyn 0.20.0（BSD-2-Clause，TOML 1.0）的无损语法树读写 config.toml，`LocalProviderCredentials` 已复用该读取器；额外校验整数词法范围，避免该版本解析超出 Int64 的值时回绕（2026-09-30）。
   - 写完后重新解析做语义比对，除目标键外必须完全一致。
-  - 目标键写在内联表或点号键里时，拒绝写入并提示。
+  - 目标键写在内联表或点号键里时，拒绝写入并提示；存在其他认证来源、认证请求头、或当前启用的配置档案覆盖目标键时，同样保留原文件并提示，避免修改非负责键。检测时将这些覆盖视为“配置被改动”，向导不把被覆盖的根配置作为有效凭据导入（2026-09-30 调整）。
   - Claude 用 `System.Text.Json` 的节点合并。
 - 抽屉控件：App 里目前没有；BetterGI 的 `View\Controls\Drawer\CustomDrawer.cs`（409 行，GPL-3.0，与本项目同许可）可移植，与现有 `ui:ContentDialog` 编辑对话框的校验逻辑（重写 `OnButtonClick`，失败不关闭）合并。
 - 页面依赖：`OverviewPageViewModel`、`CachePageViewModel`、`LogPageViewModel` 目前依赖 `route.ProviderName` 和 `ProxyWorkspace.VisibleRoutes` / `SelectRouteAcrossProviders`，要统一改为"当前客户端"。
@@ -442,8 +442,8 @@
 |---|---|---|---|---|
 | M1 | schema 7、迁移、安全落盘。行为不变：没有 Key 时透传 | `Core\Config\*`、`ProxyConfigJson`、`SavedPreparation`、`App\Service\ConfigService.cs` | `ProxyConfigTests`、`ProxyConfigLoaderTests`、`WorkspaceTests`、`PreparationWorkspaceTests`；新增：按 dist 配置结构的迁移用例、通道 ID 保留 | 已完成（2026-09-29）：新增 `ProviderKey`、`ProviderModels`（Claude 主模型 + 1M + 四角色，Codex 模型 + 上下文窗口 + 压缩阈值）、`BalanceQuery`、`ClientTakeoverState`；`ProviderEndpoint` 加 ID、客户端、认证方式（复用 `ClaudeAuthMode`）、Key 列表；通道以 `current_provider_id` / `current_key_id` / `local_token` 取代 `provider_name`；`ProxyConfig.EnsureClientRoutes` 保证每客户端一条通道与口令；`ConfigService` 单独解析 `proxy` 节点以拿到迁移记录，迁移前备份（留 5 份）、临时文件替换写入、读取失败阻止写盘；准备任务 `local` 读作 `current`，新增 `providerId` / `keyId` / `wasRunning` 字段（M5 使用）。过渡界面：通道管理页去掉新增 / 删除通道，编辑通道时若正在查看同客户端的另一个服务商则改用它，新增服务商可选客户端，某客户端的第一个服务商自动成为其通道的当前服务商；`SelectRouteAcrossProviders` 并入 `SelectRoute`。语义映射：旧"服务商名称引用"→ 服务商 ID；旧"同服务商多通道"→ 每客户端一条通道。踩坑：`OrderBy` 稳定排序使不同客户端的同序号服务商保持原相对顺序；迁移时保留通道集合须按引用比较（之后会改通道名）；本机注册表存有 Rust 旧版配置，无 config.json 时走导入而非内置配置。用例：WorkspaceTests 删去 7 条旧模型用例（新增 / 删除通道、同服务商多通道），新增 8 条（每客户端一条通道、编辑时换服务商、首个服务商自动绑定等），38 → 39；ProxyConfigTests 新增 6 条（dist 结构迁移、多通道取舍与无主服务商、schema 7 往返、排序、非法字段、每客户端一条通道校验），22 → 28；Loader、准备、推理强度、透传压缩、TLS 各有用例按新模型调整断言；总数 418 → 425 全部通过；另用临时控制台程序对 dist 配置副本离线验证 `ConfigService` 18 项（迁移备份、二次启动不改写、损坏 / 无效配置不覆盖、备份保留 5 份） |
 | M2 | 按尝试取快照：注入、本地口令、Host / Origin 校验、模型映射、地址规则、在途改投、参数热更新、保活会话重置 | `RetryProxy.cs`、`ProxyHost.cs`、`ProxyService.cs`、`PromptCache.cs`、`KeepAliveWatchdog.cs`、`CliSession.cs` | 请求生命周期、日志、集成、头序、TLS 指纹、PromptCache、保活等现有用例；新增 A / B 两个假上游的切换用例 | 已完成（2026-09-29）：新增 `ChannelSnapshot`（当前"供应商 · Key"加通道参数，由 `ProxyConfig.SnapshotFor` 生成）与 `ChannelState`（版本号、切换信号、未输出请求计数）；`RetryProxy` 每次尝试开头读快照，版本变了才重新 `BuildAttempt`（注入、模型改写、缓存标识、目标地址、认证头在头序表里原位改名）；http / https 各一个 HttpClient，连接超时在连接回调里按当前快照计时；入站头序记录器与 Claude 指纹连接器一律安装。带本地口令的请求注入当前 Key（Claude 被 401 / 403 拒绝时换另一种认证格式再试一次，不占重试次数），不带口令的原样透传，带口令但没有 Key 时本地返回 403 `no_provider_key`；`ProxyHost` 加 Host / Origin 校验（健康检查同样受限）；新增 `ModelRewriter` 按字节替换顶层 model。切换 Key 时，还没返回响应的真实请求（发送中、退避、等待生成）立即改用新 Key 重发且不计重试，已开始输出的留在原 Key；`ProxyService.UpdateSnapshot`、`ProxyWorkspace.SwitchKey` / `RememberFetchedModels` 让运行中的通道不重启就生效，编辑供应商与通道参数不再要求先停用（端口除外）。保活新增 `ResetSession`、`SetChannelCredential`，当前供应商有 Key 时保活 CLI 用 `CliCredential.ForChannel` 带本地口令经本通道；`CliSession` 与 `PreparationWorkspace` 统一 `/v1` 规则；`WithUpstreamApiKey` 改名 `AsPreparationProxy`，与普通通道的注入拆开。语义映射：旧"通道启动时固定上游、改参数要停用"→ 每次尝试读快照；旧"准备代理的访问密钥"→ 通用的本地口令注入加准备代理标志；旧"换服务商重建保活看门狗"→ 保留看门狗、只重置会话。踩坑：切换信号只接在每次尝试的令牌上，流式正文用请求自己的令牌，已输出的请求不受切换影响；切换信号在锁外触发，界面线程不会同步执行改投；Codex 按新规则会给上游路径加 `/v1`，3 条旧用例的路径断言随之调整。独立审查另发现：切换时透传请求会带着客户端密钥改投到新供应商（已改为不改投）；Claude 保活把本地口令放在命令行上（已改为设置文件）；model 里有无效 UTF-8 时请求异常退出、不释放处理中登记（既有问题，已让 `JsonText.AsString` 返回 null）；Codex https 的 TLS 握手超时归类与切换日志的重发数在极短时间窗内可能多算，保留。用例：新增 `ChannelRulesTests` 22 条（地址规则、角色映射、1M、字节替换、认证头改名、快照与切换信号、缓存命名空间、保活凭据）、`ChannelSwitchTests` 10 条（透传请求不改投、A / B 假上游在发送中 / 退避 / 等待生成三个阶段改投、流式请求留在 A、同 Key 改参数、注入与透传、Claude 认证格式与角色映射、无 Key 返回 403、Host / Origin）、`WorkspaceTests` 3 条（切换校验与撤销、运行中改参数、不许改端口）、`KeepAliveWatchdogTests` 与 `CliReasoningEffortTests` 各 1 条；改写 2 条（运行中改供应商改为立即生效、换供应商保留看门狗），路径断言调整 3 条；总数 425 → 462 全部通过 |
-| M3 | 界面：供应商页、各抽屉、统计页、一键准备页分组、导航、托盘、手动切换与撤销、`en.json` | `ProxyWorkspace`、`App\View*`、`App\ViewModel*` | `ProviderManagementTests`、`PreparationWorkspaceTests`；四份 `verify_*.ps1` | 已完成（2026-09-29）：供应商卡片与 Key 增删改、复制供应商、同客户端 / 卡内排序、搜索与当前 Key 常显；新增共享 `ClientSelector`，无供应商时也保留客户端选择；`DrawerHost` 400px / 内容区小于640px全宽、父子隔离草稿、关闭确认、焦点恢复，供应商 / Key / 代理设置均接入；Claude角色模型、1M、Codex上下文参数与获取模型结果持久化；`SaveCandidate`先校验 / 备份 / 保存再发布，代理参数与保活一次保存，失败不更新内存或运行中快照；`KeySwitchService`统一切换和5秒撤销，隐藏窗口用托盘通知，显示窗口用提示条；统计合并、准备分组与任务日志入口、运行日志按客户端筛选，新增英文文案；有供应商的代理启动时自动运行，本次停止不自动恢复。语义映射：旧服务商 / 通道下拉 → 共享客户端与供应商卡片；旧概况 / 缓存页 → 统计上下分区；旧编辑对话框 → 草稿抽屉；准备的本机来源 → 本软件当前 Key 解析器（M5仍负责列表多选、任务抽屉与恢复）。踩坑：整表清空再填入相同任务对象会令WPF自动化节点失效，已改增量插入 / 移动；任务菜单改用与鼠标 / 键盘共用的显式入口；关闭抽屉需等待200ms动画后再定位导航；私有桌面PrintWindow只返回白图，视觉验收改为独立测试窗口截图；外框720×480会被既有最小客户区恢复逻辑还原，窄窗口验收使用760×520（内容区589，抽屉占满）；已修零Key迁移供应商编辑、托盘切换后删除按钮状态、抽屉遮挡撤销。用例：新增 `ProviderManagementTests` 50条、当前凭据解析器2条，调整3处配置断言，总数462 → 514全过；解决方案构建0警告 / 0错误；`verify_providers`（含隐藏托盘切换、嵌套草稿）、`verify_exe -VerifyTray`、`verify_keepalive -NoScreenshot`、`verify_preparation`及其`-WithChannels -CompactWindow`均通过；独立临时程序对真实文件写入失败 / 回滚 / 删除备份 / 保留5份验证12项全过。未提交、未发布；dist实例未停止，真实客户端配置未改动 |
-| M4 | 客户端接管、直连恢复、检测、首次使用向导 | 新建 `Core\Client\*`；`LocalProviderCredentials`；引入 Tomlyn | 按本机配置结构准备的对照文件、语义比对、备份与回滚 | 未开始 |
+| M3 | 界面：供应商页、各抽屉、统计页、一键准备页分组、导航、托盘、手动切换与撤销、`en.json` | `ProxyWorkspace`、`App\View*`、`App\ViewModel*` | `ProviderManagementTests`、`PreparationWorkspaceTests`；四份 `verify_*.ps1` | 已完成（2026-09-29）：供应商卡片与 Key 增删改、复制供应商、同客户端 / 卡内排序、搜索与当前 Key 常显；新增共享 `ClientSelector`，无供应商时也保留客户端选择；`DrawerHost` 400px / 内容区小于640px全宽、父子隔离草稿、关闭确认、焦点恢复，供应商 / Key / 代理设置均接入；Claude角色模型、1M、Codex上下文参数与获取模型结果持久化；`SaveCandidate`先校验 / 备份 / 保存再发布，代理参数与保活一次保存，失败不更新内存或运行中快照；`KeySwitchService`统一切换和5秒撤销，隐藏窗口用托盘通知，显示窗口用提示条；统计合并、准备分组与任务日志入口、运行日志按客户端筛选，新增英文文案；有供应商的代理启动时自动运行，本次停止不自动恢复。语义映射：旧服务商 / 通道下拉 → 共享客户端与供应商卡片；旧概况 / 缓存页 → 统计上下分区；旧编辑对话框 → 草稿抽屉；准备的本机来源 → 本软件当前 Key 解析器（M5仍负责列表多选、任务抽屉与恢复）。踩坑：整表清空再填入相同任务对象会令WPF自动化节点失效，已改增量插入 / 移动；任务菜单改用与鼠标 / 键盘共用的显式入口；关闭抽屉需等待200ms动画后再定位导航；私有桌面PrintWindow只返回白图，视觉验收改为独立测试窗口截图；外框720×480会被既有最小客户区恢复逻辑还原，窄窗口验收使用760×520（内容区589，抽屉占满）；已修零Key迁移供应商编辑、托盘切换后删除按钮状态、抽屉遮挡撤销。用例：新增 `ProviderManagementTests` 50条、当前凭据解析器2条，调整3处配置断言，总数462 → 514全过；解决方案构建0警告 / 0错误；`verify_providers`（含隐藏托盘切换、嵌套草稿）、`verify_exe -VerifyTray`、`verify_keepalive -NoScreenshot`、`verify_preparation`及其`-WithChannels -CompactWindow`均通过；独立临时程序对真实文件写入失败 / 回滚 / 删除备份 / 保留5份验证12项全过。已提交 `8c0ea98`，未发布；dist实例未停止，真实客户端配置未改动 |
+| M4 | 客户端接管、直连恢复、检测、首次使用向导 | 新建 `Core\Client\*`；`LocalProviderCredentials`；引入 Tomlyn | 按本机配置结构准备的对照文件、语义比对、备份与回滚 | 已完成（2026-09-30）：新增 Claude JSON 节点合并、Codex Tomlyn 0.20.0 无损编辑及写后语义校验；`ClientConfigStore` 原字节备份、同目录原子替换、哈希检查、接管状态保存失败回滚，注入模式始终禁止客户端写入；`ClientTakeoverCoordinator` 接入监听成功后接管、手动启停、改端口、异常、退出、模型同步及外部改动保护；`LocalProviderCredentials` 共用读取器与环境目录规则；供应商状态条、设置卡片和三步可跳过向导上线，模型保持主模型与四角色独立，空模型时恢复旧真实模型而不外发内部标记。语义映射：旧“客户端自带 Key”→ 用户确认后本机口令接管，未接管仍可透传；旧“停止后客户端仍连接本机”→ 恢复直连当前 Key，持久 Enabled 仅由取消接管清除；旧首次运行标记→独立向导完成标记。踩坑：四个角色都覆盖时官方角色名无法表达独立主模型，陛下确认使用内部主模型标记；自动恢复必须先确认仍为本软件管理的地址/凭据，避免覆盖外部改动；Codex provider token 有效时不依赖 auth.json；Tomlyn 整数回绕另做词法范围复核。验收改用真实 EXE 的受限临时目录单实例名称，JSON 注入禁写保护不变；初次旧脚本误用未发布的 dist 副本和 PowerShell 5 的 UIntPtr 转换，改为显式开发 EXE / 对应 pwsh 后全部通过。用例：新增408项，总数514 → 922全部通过，构建0警告 / 0错误；`verify_clients`（向导、改名、主模型独立、切换/撤销、改端口、启停、原文件备份、退出恢复、重启接管、持久取消和外部改动保留）及其截图检查通过；`verify_providers`、`verify_exe -VerifyTray`、`verify_keepalive -Automatic -NoScreenshot`、`verify_preparation -WithChannels -CompactWindow`全部通过。README、两份PRD、英文文案已同步；M4未提交、未发布，未改真实客户端配置，未停止dist实例 |
 | M5 | 多 Key 准备、状态回显、重启恢复 | `PreparationWorkspace`、`PreparationTask`、`SavedPreparation`、准备任务抽屉 | `PreparationWorkspaceTests`、`verify_preparation.ps1`；新增：一次勾选多 Key 批量建任务、每 Key 只一项任务、重启恢复、删除 Key 联动停止 | 未开始 |
 | M6 | 余额查询 | 新建 `Core\Balance\*` | 三种接口的解析、自动识别、错误脱敏 | 未开始 |
 | M7 | 验收与发布 | `build\publish.ps1` | 全量；`dist` 实例正在使用，停止它或发布前先征得同意 | 未开始 |

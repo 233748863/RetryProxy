@@ -5,6 +5,8 @@ using RetryProxy.Core.Config;
 using RetryProxy.Helpers;
 using RetryProxy.Helpers.Ui;
 using RetryProxy.Service.Interface;
+using RetryProxy.Service;
+using System.Threading.Tasks;
 using RetryProxy.View;
 using System.ComponentModel;
 using System.Windows;
@@ -142,11 +144,16 @@ public partial class MainWindowViewModel : ObservableObject, IViewModel
     }
 
     [RelayCommand]
-    private void OnActivated()
+    private async Task OnActivated()
     {
         if (_isFirstActivation)
         {
             _isFirstActivation = false;
+            return;
         }
+        App.GetService<WorkspaceService>()?.Clients.Detect();
+        App.GetService<WorkspaceService>()?.Flush();
+        if (App.GetService<ClientTakeoverService>() is { } clients)
+            await clients.ShowSetupAsync(onlyIfNeeded: true);
     }
 }

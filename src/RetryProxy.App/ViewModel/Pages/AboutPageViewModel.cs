@@ -31,6 +31,7 @@ public partial class AboutPageViewModel : ViewModel
         new("Microsoft.Xaml.Behaviors.Wpf", "XAML 事件到命令的绑定 · MIT", "https://github.com/microsoft/XamlBehaviorsWpf"),
         new("Vanara.PInvoke", "Win32 互操作封装 · MIT", "https://github.com/dahall/Vanara"),
         new("Semver", "版本号比较 · MIT", "https://github.com/WalkerCodeRanger/semver"),
+        new("Tomlyn", RetryProxy.Service.I18n.I18nService.Instance.Translate("TOML 配置无损读写 · BSD-2-Clause"), "https://github.com/xoofx/Tomlyn"),
         new("LLM Retry Proxy（Rust 版）", "本程序的原型实现，功能与文案逐条对照移植 · GPL-3.0", RepositoryUrl),
     ];
 

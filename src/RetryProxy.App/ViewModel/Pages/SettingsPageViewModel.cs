@@ -18,6 +18,8 @@ public partial class SettingsPageViewModel : ViewModel
 {
     private readonly IConfigService _configService;
     private readonly WorkspaceService _workspaceService;
+    private readonly ClientTakeoverService _clients;
+    public IReadOnlyList<ClientConnectionRowViewModel> Clients { get; }
     private bool _syncingAutoStart;
 
     public AllConfig Config { get; }
@@ -41,10 +43,12 @@ public partial class SettingsPageViewModel : ViewModel
     [ObservableProperty]
     private string _statisticsDirectory = string.Empty;
 
-    public SettingsPageViewModel(IConfigService configService, WorkspaceService workspaceService)
+    public SettingsPageViewModel(IConfigService configService, WorkspaceService workspaceService, ClientTakeoverService clients)
     {
         _configService = configService;
         _workspaceService = workspaceService;
+        _clients = clients;
+        Clients = [new(ClientType.Claude, workspaceService, clients), new(ClientType.Codex, workspaceService, clients)];
         Config = configService.Get();
         LogDirectory = workspaceService.Workspace.Logger.DirectoryPath;
         StatisticsDirectory = Path.Combine(LogDirectory, "daily-statistics");
@@ -55,6 +59,8 @@ public partial class SettingsPageViewModel : ViewModel
 
     public override void OnNavigatedTo()
     {
+        _workspaceService.Clients.Detect();
+        _workspaceService.Flush();
         // 用户可能在外部改过 Run 项，每次进入设置页重读一次。
         _syncingAutoStart = true;
         AutoStartEnabled = AutoStart.IsEnabled();
@@ -89,6 +95,9 @@ public partial class SettingsPageViewModel : ViewModel
             _syncingAutoStart = false;
         }
     }
+
+    [RelayCommand]
+    private System.Threading.Tasks.Task ClientSetup() => _clients.ShowSetupAsync();
 
     [RelayCommand]
     private void OnOpenLogDirectory() => OpenDirectory(LogDirectory, "日志目录");

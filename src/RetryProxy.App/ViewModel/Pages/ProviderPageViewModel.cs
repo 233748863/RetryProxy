@@ -1,6 +1,7 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using RetryProxy.Core.Config;
+using RetryProxy.Core.Client;
 using RetryProxy.Core.Metrics;
 using RetryProxy.Core.Service;
 using RetryProxy.Core.Workspace;
@@ -22,6 +23,12 @@ public partial class ProviderPageViewModel : ViewModel
     private readonly DrawerService _drawers;
     private readonly Dialogs _dialogs;
     private readonly KeySwitchService _switches;
+    private readonly ClientTakeoverService _clients;
+    [ObservableProperty] private string _clientState = string.Empty;
+    [ObservableProperty] private string _clientActionText = string.Empty;
+    [ObservableProperty] private string _clientError = string.Empty;
+    [ObservableProperty] private bool _showTakeover;
+    [ObservableProperty] private bool _canTakeOver;
     private ProxyConfig? _displayedConfig;
     private ClientType? _displayedClient;
     private long _languageRevision = -1;
@@ -43,12 +50,13 @@ public partial class ProviderPageViewModel : ViewModel
     public event Action<string>? LocateRequested;
     internal static string T(string text) => I18nService.Instance.Translate(text);
 
-    public ProviderPageViewModel(WorkspaceService service, DrawerService drawers, Dialogs dialogs, KeySwitchService switches)
+    public ProviderPageViewModel(WorkspaceService service, DrawerService drawers, Dialogs dialogs, KeySwitchService switches, ClientTakeoverService clients)
     {
         _service = service;
         _drawers = drawers;
         _dialogs = dialogs;
         _switches = switches;
+        _clients = clients;
         service.Refreshed += Refresh;
         Refresh();
     }
@@ -75,6 +83,12 @@ public partial class ProviderPageViewModel : ViewModel
         var key = route is null ? null : Workspace.Config.CurrentKeyOf(route);
         CurrentKey = provider is null ? T("未选择供应商") : key is null ? $"{provider.Name} · {T("尚无 Key")}" : $"{provider.Name} · {key.Name}";
         HasCurrentProvider = provider is not null;
+        var connection = _service.Clients.Connection(Workspace.SelectedClient);
+        ClientState = T(ClientTakeoverService.StatusText(connection.Status));
+        ClientError = View.Drawers.DrawerText.Error(connection.Error);
+        ShowTakeover = connection.Status != ClientConnectionStatus.TakenOver || !Workspace.Config.ClientTakeover[Workspace.SelectedClient].Enabled;
+        CanTakeOver = !ClientConfigPaths.WritesBlocked && key is not null;
+        ClientActionText = T(connection.Status is ClientConnectionStatus.Modified or ClientConnectionStatus.Unavailable ? "重新接管" : "一键接管");
         var metrics = route is not null && Workspace.Services.TryGetValue(route.Id, out var service) ? service.Metrics.Snapshot() : new MetricsSnapshot();
         Today = string.Format(T("今日 {0} · 成功 {1} · 重试 {2} · 失败 {3}"), metrics.TotalRequests, metrics.SuccessfulRequests, metrics.RetryCount, metrics.FailedRequests);
         _syncing = true;
@@ -118,6 +132,7 @@ public partial class ProviderPageViewModel : ViewModel
         _service.Flush();
     }
 
+    [RelayCommand] private Task TakeOverClient() => _clients.TakeOverAsync(Workspace.SelectedClient);
     [RelayCommand] private Task AddProvider() => _drawers.EditProviderAsync(null, Workspace.SelectedClient);
     [RelayCommand] private Task ProxySettings() => Workspace.SelectedRouteRef() is { } route ? _drawers.EditProxyAsync(route.Id) : Task.CompletedTask;
     [RelayCommand] private void StartProxy()

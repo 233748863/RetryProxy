@@ -108,7 +108,7 @@ D:\RetryProxy\
 ### 4.3 线程模型
 - 每通道：一个 Kestrel 主机（自带线程池）、一个保活轮询 `Task`（5 秒或准备唤醒）、共享 `ProxyMetrics`/`KeepAliveWatchdog`（锁保护）。
 - UI 线程只读快照（`MetricsSnapshot`、`KeepAliveSnapshot`、`ServiceState`），由 `IUiNotifier` 触发刷新；不轮询定时器，仅保活倒计时/准备中每秒刷新一次。
-- 退出：对每个服务 `StopAsync(15 s)`，保存配置，销毁托盘。
+- 退出：已接管的客户端先恢复直连当前 Key，然后对每个服务 `StopAsync(15 s)`，保存配置，销毁托盘。恢复时保留外部改动，持久接管选择不清除（2026-09-30，见《PRD-供应商管理》§4.4）。
 
 ---
 
@@ -292,7 +292,7 @@ D:\RetryProxy\
 |---|---|
 | 性能 | 空闲主线程 CPU < 2%；日志 2000 行渲染不卡顿；流式转发零拷贝（`PipeReader`/`Stream.CopyToAsync` 分块 ≥ 16 KiB）。 |
 | 内存 | 常驻 < 150 MB（WPF 基线）；错误/前缀暂存严格 1 MiB 上限。 |
-| 安全 | API Key 只驻留内存；日志/统计/配置不含 Key、请求正文、会话编号；标识过滤规则同 Rust。**例外（2026-09-28 用户确认）**：一键准备“手动配置供应商”的 API Key 随任务明文保存在 `config.json` 的 `preparations` 节点，重启后可直接开始；日志仍不含 Key。 |
+| 安全 | **已被《PRD-供应商管理》§7、§8 取代（2026-09-30）**：供应商 Key、直连客户端配置和备份含明文 Key；接管使用本地口令，日志、统计、异常和健康检查不得包含 Key 或口令。旧规格：API Key 只驻留内存；日志/统计/配置不含 Key、请求正文、会话编号；标识过滤规则同 Rust。**例外（2026-09-28 用户确认）**：一键准备“手动配置供应商”的 API Key 随任务明文保存在 `config.json` 的 `preparations` 节点，重启后可直接开始；日志仍不含 Key。 |
 | 兼容 | jsonl v1、日志格式、`/_retry/health` 与 Rust 2.0.0 完全互换；配置 schema 6 语义一致但存储位置不同（config.json），仅支持从注册表单向导入。 |
 | 可测 | Core 不依赖 WPF；随机数、时钟、CLI 命令可注入。 |
 | 稳定 | 未处理异常走 `ExceptionReport`；通道异常不影响其他通道。 |

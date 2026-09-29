@@ -156,7 +156,11 @@ public class ConfigService : IConfigService
     }
 
     /// <summary>先落盘当前配置再备份；备份失败则中止删除，例：删除 Key 前保留原密钥。</summary>
-    public void BackupBeforeDeletion()
+    public void BackupBeforeDeletion() => BackupBeforeChange("备份失败，已取消删除");
+
+    public void BackupBeforeClientTakeover() => BackupBeforeChange("备份失败，已取消接管");
+
+    private void BackupBeforeChange(string message)
     {
         if (ProxyConfigLoader.IsTestInjectionActive()) return;
         SaveChecked();
@@ -164,7 +168,7 @@ public class ConfigService : IConfigService
         try
         {
             if (BackupConfigFile(Global.Absolute(ConfigRelativePath)) is null)
-                throw new ConfigException("备份失败，已取消删除");
+                throw new ConfigException(message);
         }
         finally { _rwLock.ExitWriteLock(); }
     }

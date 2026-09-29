@@ -51,6 +51,12 @@
                         <ui:ToggleSwitch Content="{i18n:T 保活}" IsChecked="{Binding KeepAliveEnabled, Mode=TwoWay}" AutomationProperties.AutomationId="ChannelKeepAlive" />
                         <ui:Button Content="{i18n:T 代理设置}" Command="{Binding ProxySettingsCommand}" Margin="12,0,0,0" Padding="8,4" AutomationProperties.AutomationId="ProxySettings" />
                     </WrapPanel>
+                    <WrapPanel Margin="0,8,0,0">
+                        <TextBlock Text="{i18n:T 客户端：}" VerticalAlignment="Center" />
+                        <TextBlock Text="{Binding ClientState}" VerticalAlignment="Center" ToolTip="{Binding ClientError}" AutomationProperties.AutomationId="ClientState" />
+                        <ui:Button Content="{Binding ClientActionText}" Command="{Binding TakeOverClientCommand}" Margin="8,0,0,0" Padding="8,4"
+                                   IsEnabled="{Binding CanTakeOver}" Visibility="{Binding ShowTakeover, Converter={StaticResource BooleanToVisibilityConverter}}" AutomationProperties.AutomationId="TakeOverClient" />
+                    </WrapPanel>
                 </StackPanel>
             </ui:Card>
             <Border Padding="20" Style="{StaticResource ProviderCard}" Visibility="{Binding HasProviders, Converter={StaticResource BooleanToVisibilityRevertConverter}}">

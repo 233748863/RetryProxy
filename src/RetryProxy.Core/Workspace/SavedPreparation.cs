@@ -2,14 +2,22 @@ namespace RetryProxy.Core.Workspace;
 
 /// <summary>
 /// 一项准备任务写入 User\config.json 的内容（preparations 数组的一个元素）。
-/// 只存设置，不存服务、端口与会话：重启软件后任务以“已停止”出现，由用户手动开始。
+/// 只存设置，不存服务、端口与会话。
 /// 例：{"id":"3f2a…","number":1,"clientType":"codex","providerSource":"custom","providerUrl":"https://api.example.com",
-///      "apiKey":"sk-…","model":"gpt-5","reasoningEffort":"high","idleMinutes":"5"}
+///      "apiKey":"sk-…","model":"gpt-5","reasoningEffort":"high","idleMinutes":"5","providerId":"","keyId":"","wasRunning":false}
 /// </summary>
 public sealed class SavedPreparation
 {
-    public const string LocalSource = "local";
+    /// <summary>跟随客户端的当前 Key，开始时解析。</summary>
+    public const string CurrentSource = "current";
+
+    /// <summary>从供应商列表选定的"供应商 ID + Key ID"。</summary>
+    public const string ListSource = "list";
+
     public const string CustomSource = "custom";
+
+    /// <summary>schema 6 的"本机客户端当前供应商"，读取时按 <see cref="CurrentSource"/> 处理（PRD-供应商管理 §4.7）。</summary>
+    public const string LegacyLocalSource = "local";
 
     public string Id { get; set; } = string.Empty;
 
@@ -19,15 +27,15 @@ public sealed class SavedPreparation
     /// <summary><c>codex</c> / <c>claude</c>。</summary>
     public string ClientType { get; set; } = string.Empty;
 
-    /// <summary><see cref="LocalSource"/>（本机客户端当前供应商）/ <see cref="CustomSource"/>（手动配置）。</summary>
+    /// <summary><see cref="CurrentSource"/> / <see cref="ListSource"/> / <see cref="CustomSource"/>。</summary>
     public string ProviderSource { get; set; } = string.Empty;
 
-    /// <summary>手动配置时是填写的供应商地址；本机供应商时是上次开始读到的地址，只用于显示，开始时会重新读取。</summary>
+    /// <summary>手动配置时是填写的供应商地址；其余来源是上次开始读到的地址，只用于显示，开始时会重新解析。</summary>
     public string ProviderUrl { get; set; } = string.Empty;
 
     /// <summary>
     /// 手动配置的 API Key，按用户决定（2026-09-28）明文保存，重启后可直接开始；
-    /// 本机供应商的密钥不保存，每次开始时从本机客户端配置重新读取。
+    /// 其余来源的密钥不保存，每次开始时重新解析。
     /// </summary>
     public string ApiKey { get; set; } = string.Empty;
 
@@ -38,4 +46,13 @@ public sealed class SavedPreparation
 
     /// <summary>保活间隔分钟数，保存对话框里提交成功的文本，例如 <c>7.5</c>。</summary>
     public string IdleMinutes { get; set; } = string.Empty;
+
+    /// <summary>来源为 <see cref="ListSource"/> 时的供应商 ID。</summary>
+    public string ProviderId { get; set; } = string.Empty;
+
+    /// <summary>来源为 <see cref="ListSource"/> 时的 Key ID。</summary>
+    public string KeyId { get; set; } = string.Empty;
+
+    /// <summary>上次退出时任务是否在运行；为 true 的任务启动后自动恢复（PRD-供应商管理 P10）。</summary>
+    public bool WasRunning { get; set; }
 }

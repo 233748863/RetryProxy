@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using RetryProxy.Core.Config;
 using Xunit;
 
@@ -23,7 +24,12 @@ public class ProxyConfigLoaderTests
     {
         var result = ProxyConfigLoader.Load(null, Env(), () => null);
         Assert.Equal(ProxyConfigSource.Builtin, result.Source);
-        Assert.Equal(ProxyConfig.Builtin(), result.Config);
+        // 内置配置只有两条通道、没有服务商；本地口令每次随机生成，只比较格式。
+        Assert.Equal(
+            ProxyConfig.Builtin().Routes.Select(route => (route.Id, route.Name, route.ClientType, route.ListenPort)),
+            result.Config.Routes.Select(route => (route.Id, route.Name, route.ClientType, route.ListenPort)));
+        Assert.Empty(result.Config.Providers);
+        Assert.All(result.Config.Routes, route => Assert.Matches("^[0-9a-f]{32}$", route.LocalToken));
         Assert.False(result.Migrated);
     }
 
@@ -41,10 +47,12 @@ public class ProxyConfigLoaderTests
         var result = ProxyConfigLoader.Load(null, Env(), () => legacy);
         Assert.Equal(ProxyConfigSource.Registry, result.Source);
         Assert.True(result.Migrated);
-        var route = Assert.Single(result.Config.Routes);
-        Assert.Equal("legacy-default", route.Id);
-        Assert.Equal(ClientType.Claude, route.ClientType);
-        Assert.Equal("legacy", route.ProviderName);
+        // 单通道旧版按端口 18081 认作 Claude Code；Codex 缺通道时补建一条。
+        Assert.Equal(2, result.Config.Routes.Count);
+        var route = result.Config.RouteFor(ClientType.Claude)!;
+        Assert.Equal(("legacy-default", "Claude Code"), (route.Id, route.Name));
+        Assert.Equal("legacy", result.Config.ProviderById(route.CurrentProviderId)!.Name);
+        Assert.Contains(result.Notes, note => note.StartsWith("已为 Codex 新建通道", StringComparison.Ordinal));
     }
 
     [Fact]

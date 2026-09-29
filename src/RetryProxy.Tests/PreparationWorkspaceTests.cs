@@ -171,7 +171,7 @@ public sealed class PreparationWorkspaceTests
     }
 
     [Fact]
-    public void SwitchingEditingStoppingAndDeletingChannelsLeavesPreparationRunning()
+    public void SwitchingEditingAndStoppingChannelsLeavesPreparationRunning()
     {
         using var fixture = new Fixture();
         var config = ProxyConfig.Builtin();
@@ -191,15 +191,10 @@ public sealed class PreparationWorkspaceTests
             proxy.RefreshServices();
         }
         proxy.StopAll();
-        foreach (var route in proxy.Config.Routes.ToList()) { proxy.DeleteRoute(route.Id); }
-        foreach (var provider in proxy.Config.Providers.ToList())
-        {
-            proxy.DeleteProvider(proxy.Config.Providers.FindIndex(candidate => candidate.Name == provider.Name));
-        }
         proxy.RefreshServices();
         fixture.Preparations.Poll();
 
-        Assert.Empty(proxy.Config.Routes);
+        Assert.Equal(2, proxy.Config.Routes.Count);
         Assert.Same(task, Assert.Single(fixture.Preparations.Tasks));
         Assert.Same(service, task.Service);
         Assert.Equal(ServiceState.Running, task.State);
@@ -454,7 +449,7 @@ public sealed class PreparationWorkspaceTests
         Assert.Equal(("https://custom.example/v1", "sk-custom-fixture"), (savedCustom.ProviderUrl, savedCustom.ApiKey));
         Assert.Equal(("preparation-test-model", "max", "7.5"), (savedCustom.Model, savedCustom.ReasoningEffort, savedCustom.IdleMinutes));
         var savedLocal = fixture.Saved[1];
-        Assert.Equal((local.Id, 2, "codex", SavedPreparation.LocalSource), (savedLocal.Id, savedLocal.Number, savedLocal.ClientType, savedLocal.ProviderSource));
+        Assert.Equal((local.Id, 2, "codex", SavedPreparation.CurrentSource), (savedLocal.Id, savedLocal.Number, savedLocal.ClientType, savedLocal.ProviderSource));
         Assert.Equal(("https://codex.example", string.Empty), (savedLocal.ProviderUrl, savedLocal.ApiKey));
         Assert.Equal(("preparation-test-model", "default", "5"), (savedLocal.Model, savedLocal.ReasoningEffort, savedLocal.IdleMinutes));
 
@@ -497,9 +492,10 @@ public sealed class PreparationWorkspaceTests
         using var fixture = new Fixture();
         var restarted = fixture.Open(new SavedPreparation?[]
         {
-            new() { Id = "first", Number = 2, ClientType = "codex", ProviderSource = SavedPreparation.LocalSource, Model = "m", ReasoningEffort = "ultra", IdleMinutes = "5" },
+            // 旧版的 local 按"跟随当前"恢复。
+            new() { Id = "first", Number = 2, ClientType = "codex", ProviderSource = SavedPreparation.LegacyLocalSource, Model = "m", ReasoningEffort = "ultra", IdleMinutes = "5" },
             new() { Id = "first", Number = 2, ClientType = "claude", ProviderSource = SavedPreparation.CustomSource, ProviderUrl = "https://custom.example", ApiKey = "sk-custom-fixture", Model = "m", ReasoningEffort = "ultra", IdleMinutes = "5" },
-            new() { Id = "unknown-client", Number = 1, ClientType = "gemini", ProviderSource = SavedPreparation.LocalSource },
+            new() { Id = "unknown-client", Number = 1, ClientType = "gemini", ProviderSource = SavedPreparation.CurrentSource },
             new() { Id = "unknown-source", Number = 1, ClientType = "codex", ProviderSource = "remote" },
             null,
         });

@@ -15,7 +15,11 @@
         <ui:TextBlock Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
                       Text="{i18n:T 上游基础地址只需填到域名，路径与查询串会原样转发}"
                       TextWrapping="Wrap" />
-        <ui:TextBlock Margin="0,14,0,4" Text="{i18n:T 服务商名称}" />
+        <ui:TextBlock Margin="0,14,0,4" Text="{i18n:T 客户端}" />
+        <ComboBox x:Name="ClientBox"
+                  AutomationProperties.Name="{i18n:T 客户端类型}"
+                  DisplayMemberPath="Text" />
+        <ui:TextBlock Margin="0,10,0,4" Text="{i18n:T 服务商名称}" />
         <ui:TextBox x:Name="NameBox" PlaceholderText="{i18n:T 例如 anyrouter.top}" />
         <ui:TextBlock Margin="0,10,0,4" Text="{i18n:T 上游基础地址}" />
         <ui:TextBox x:Name="UrlBox"

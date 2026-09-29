@@ -94,14 +94,9 @@
                                   ItemContainerStyle="{StaticResource PickerItemStyle}"
                                   ItemsSource="{Binding Channels}" SelectedItem="{Binding SelectedChannel, Mode=TwoWay}" />
                         <StackPanel Grid.Column="1" Margin="8,0,0,0" Orientation="Horizontal">
-                            <ui:Button Command="{Binding AddChannelCommand}" AutomationProperties.Name="{i18n:T 新增通道}"
-                                       Icon="{ui:SymbolIcon Add24}" IsEnabled="{Binding HasProvider}" ToolTip="{i18n:T 新增通道}" />
-                            <ui:Button Margin="4,0,0,0" Command="{Binding EditChannelCommand}"
+                            <ui:Button Command="{Binding EditChannelCommand}"
                                        AutomationProperties.Name="{i18n:T 编辑通道}" Icon="{ui:SymbolIcon Edit24}"
                                        IsEnabled="{Binding CanEditChannel}" ToolTip="{Binding ChannelEditToolTip}" ToolTipService.ShowOnDisabled="True" />
-                            <ui:Button Margin="4,0,0,0" Command="{Binding DeleteChannelCommand}"
-                                       AutomationProperties.Name="{i18n:T 删除通道}" Icon="{ui:SymbolIcon Delete24}"
-                                       IsEnabled="{Binding CanEditChannel}" ToolTip="{i18n:T 删除通道}" />
                         </StackPanel>
                     </Grid>
                     <TextBlock Margin="0,8,0,0" Foreground="{DynamicResource TextFillColorTertiaryBrush}"

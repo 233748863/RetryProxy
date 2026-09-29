@@ -1,5 +1,6 @@
 using System.Text.Json.Nodes;
 using RetryProxy.Core.Config;
+using RetryProxy.Tests.Support;
 using Xunit;
 
 namespace RetryProxy.Tests;
@@ -9,7 +10,7 @@ public sealed class ReasoningEffortTests
     [Fact]
     public void ChannelEffortsRoundTripAndRemainIndependentOfTheSelectedChannel()
     {
-        var config = ProxyConfig.Builtin();
+        var config = TestConfigs.BuiltinWithProviders();
         config.Routes[0].KeepaliveReasoningEffort = ReasoningEffort.Ultra;
         config.Routes[1].KeepaliveReasoningEffort = ReasoningEffort.Max;
         config.Normalize();

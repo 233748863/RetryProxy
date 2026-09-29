@@ -28,9 +28,7 @@ public sealed class ProxyWorkspace
         Config = config.Clone().Normalize();
         _save = save;
         SelectedRoute = Config.SelectedRoute?.Id ?? string.Empty;
-        SelectedProvider = (Config.SelectedRoute is { } route ? Config.ProviderByName(route.ProviderName) : null)?.Name
-            ?? Config.Providers.FirstOrDefault()?.Name
-            ?? string.Empty;
+        SelectedProvider = ProviderForRoute(Config.SelectedRoute)?.Id ?? Config.Providers.FirstOrDefault()?.Id ?? string.Empty;
     }
 
     public ProxyLogger Logger { get; }
@@ -44,6 +42,7 @@ public sealed class ProxyWorkspace
 
     public Dictionary<string, KeepAliveWatchdog> RouteKeepAlives { get; } = new();
 
+    /// <summary>界面上选中的服务商 ID。</summary>
     public string SelectedProvider { get; set; } = string.Empty;
 
     public string SelectedRoute { get; set; } = string.Empty;
@@ -119,7 +118,7 @@ public sealed class ProxyWorkspace
 
         foreach (var route in Config.Routes)
         {
-            if (Config.ProviderByName(route.ProviderName) is null)
+            if (Config.ProviderById(route.CurrentProviderId) is null)
             {
                 continue;
             }
@@ -177,18 +176,26 @@ public sealed class ProxyWorkspace
         SyncSelection();
     }
 
+    /// <summary>选中服务商所属客户端的通道（每个客户端一条）；没有选中服务商时为空。</summary>
     public IEnumerable<ProxyRoute> VisibleRoutes()
     {
-        return Config.Routes.Where(route => string.Equals(route.ProviderName, SelectedProvider, StringComparison.OrdinalIgnoreCase));
+        return Config.ProviderById(SelectedProvider) is { } provider
+            ? Config.Routes.Where(route => route.ClientType == provider.ClientType)
+            : Enumerable.Empty<ProxyRoute>();
+    }
+
+    /// <summary>通道的当前服务商；还没选时取同客户端的第一个服务商。</summary>
+    private ProviderEndpoint? ProviderForRoute(ProxyRoute? route)
+    {
+        return route is null ? null : Config.ProviderById(route.CurrentProviderId) ?? Config.ProvidersFor(route.ClientType).FirstOrDefault();
     }
 
     public ProxyRoute? SelectedRouteRef() => VisibleRoutes().FirstOrDefault(route => route.Id == SelectedRoute);
 
     public void SyncSelection()
     {
-        SelectedProvider = (Config.ProviderByName(SelectedProvider)
-                ?? (Config.SelectedRoute is { } selected ? Config.ProviderByName(selected.ProviderName) : null)
-                ?? Config.Providers.FirstOrDefault())?.Name
+        var route = Config.Routes.FirstOrDefault(candidate => candidate.Id == SelectedRoute) ?? Config.SelectedRoute;
+        SelectedProvider = (Config.ProviderById(SelectedProvider) ?? ProviderForRoute(route) ?? Config.Providers.FirstOrDefault())?.Id
             ?? string.Empty;
         SelectedRoute = (SelectedRouteRef() ?? VisibleRoutes().FirstOrDefault())?.Id ?? string.Empty;
         if (SelectedRoute.Length > 0)
@@ -204,9 +211,9 @@ public sealed class ProxyWorkspace
         SyncKeepAliveBuffer();
     }
 
-    public void SelectProvider(string providerName)
+    public void SelectProvider(string providerId)
     {
-        SelectedProvider = providerName;
+        SelectedProvider = providerId;
         SyncSelection();
         Save();
     }
@@ -216,24 +223,21 @@ public sealed class ProxyWorkspace
         return Services.TryGetValue(routeId, out var service) ? service.State : ServiceState.Stopped;
     }
 
+    /// <summary>
+    /// 按通道 ID 选中。界面上选中的服务商属于别的客户端时，一并切到该通道的服务商，
+    /// 例：正在看 Codex 的服务商时从运行概况选 Claude Code 通道 → 服务商视图切到 Claude Code 的当前服务商。
+    /// </summary>
     public void SelectRoute(string routeId)
     {
         SelectedRoute = routeId;
-        SyncSelection();
-        Save();
-    }
-
-    /// <summary>按通道 ID 选中，同时切换到所属服务商，供运行概况和缓存页跨服务商查看。</summary>
-    public void SelectRouteAcrossProviders(string routeId)
-    {
         var route = Config.Routes.FirstOrDefault(candidate => candidate.Id == routeId);
-        if (route is null)
+        if (route is not null && Config.ProviderById(SelectedProvider)?.ClientType != route.ClientType)
         {
-            return;
+            SelectedProvider = ProviderForRoute(route)?.Id ?? string.Empty;
         }
 
-        SelectedProvider = route.ProviderName;
-        SelectRoute(routeId);
+        SyncSelection();
+        Save();
     }
 
     private void SyncKeepAliveBuffer()
@@ -307,10 +311,11 @@ public sealed class ProxyWorkspace
         }
     }
 
-    /// <summary>启动时自动拉起上次标记为运行的通道。</summary>
+    /// <summary>启动时自动拉起上次标记为运行的通道；还没有服务商的通道静默跳过，等用户新增服务商。</summary>
     public void StartDesiredRoutes()
     {
-        foreach (var id in Config.Routes.Where(route => route.DesiredRunning).Select(route => route.Id).ToList())
+        foreach (var id in Config.Routes.Where(route => route.DesiredRunning && Config.ProviderById(route.CurrentProviderId) is not null)
+                     .Select(route => route.Id).ToList())
         {
             StartRoute(id);
         }
@@ -318,9 +323,9 @@ public sealed class ProxyWorkspace
 
     public int RunningCount() => Config.Routes.Count(route => RouteState(route.Id) == ServiceState.Running);
 
-    public int ProviderUsage(string providerName)
+    public int ProviderUsage(string providerId)
     {
-        return Config.Routes.Count(route => string.Equals(route.ProviderName, providerName, StringComparison.OrdinalIgnoreCase));
+        return Config.Routes.Count(route => route.CurrentProviderId == providerId);
     }
 
     /// <summary>通道 Error 状态首次出现时提示；启动失败不改 desired_running。</summary>
@@ -368,6 +373,11 @@ public sealed class ProxyWorkspace
         {
             editor.Name = Config.Providers[current].Name;
             editor.Url = Config.Providers[current].BaseUrl;
+            editor.ClientType = Config.Providers[current].ClientType;
+        }
+        else
+        {
+            editor.ClientType = Config.ProviderById(SelectedProvider)?.ClientType ?? Config.SelectedRoute?.ClientType ?? ClientType.Codex;
         }
 
         return editor;
@@ -380,7 +390,7 @@ public sealed class ProxyWorkspace
         {
             var existing = Config.Providers[index];
             var activeDependency = Config.Routes.Any(route =>
-                string.Equals(route.ProviderName, existing.Name, StringComparison.OrdinalIgnoreCase)
+                route.CurrentProviderId == existing.Id
                 && Services.TryGetValue(route.Id, out var service)
                 && service.State is not (ServiceState.Stopped or ServiceState.Error));
             if (activeDependency)
@@ -389,8 +399,13 @@ public sealed class ProxyWorkspace
             }
         }
 
-        var provider = new ProviderEndpoint(editor.Name, editor.Url);
-        var providerName = provider.Name;
+        // 编辑时在原服务商上改名称与地址，保留 ID、客户端与 Key；新增时按所选客户端新建。
+        var provider = editor.Index is { } source && source < Config.Providers.Count
+            ? Config.Providers[source].Clone()
+            : new ProviderEndpoint { Id = ProxyConfig.NewId(), ClientType = editor.ClientType };
+        provider.Name = editor.Name;
+        provider.BaseUrl = editor.Url;
+        provider.NormalizeInPlace();
         try
         {
             provider.Validate();
@@ -401,7 +416,7 @@ public sealed class ProxyWorkspace
         }
 
         var duplicate = Config.Providers.Where((value, position) => position != editor.Index).Any(value =>
-            string.Equals(value.Name, provider.Name, StringComparison.OrdinalIgnoreCase));
+            value.ClientType == provider.ClientType && string.Equals(value.Name, provider.Name, StringComparison.OrdinalIgnoreCase));
         if (duplicate)
         {
             return "服务商名称重复";
@@ -410,19 +425,16 @@ public sealed class ProxyWorkspace
         var candidate = Config.Clone();
         if (editor.Index is { } editing)
         {
-            var old = Config.Providers[editing].Name;
             candidate.Providers[editing] = provider.Clone();
-            foreach (var route in candidate.Routes)
-            {
-                if (string.Equals(route.ProviderName, old, StringComparison.OrdinalIgnoreCase))
-                {
-                    route.ProviderName = provider.Name;
-                }
-            }
         }
         else
         {
             candidate.Providers.Add(provider);
+            // 该客户端的通道还没有服务商时，新增的第一个服务商直接成为它的当前服务商。
+            if (candidate.RouteFor(provider.ClientType) is { CurrentProviderId.Length: 0 } route)
+            {
+                route.CurrentProviderId = provider.Id;
+            }
         }
 
         candidate = candidate.Normalize();
@@ -440,18 +452,15 @@ public sealed class ProxyWorkspace
             var existing = Config.Providers[changed];
             if (existing.Name != candidate.Providers[changed].Name || existing.BaseUrl != candidate.Providers[changed].BaseUrl)
             {
-                foreach (var route in Config.Routes)
+                foreach (var route in Config.Routes.Where(route => route.CurrentProviderId == existing.Id))
                 {
-                    if (string.Equals(route.ProviderName, existing.Name, StringComparison.OrdinalIgnoreCase))
-                    {
-                        RouteKeepAlives.Remove(route.Id);
-                    }
+                    RouteKeepAlives.Remove(route.Id);
                 }
             }
         }
 
         Config = candidate;
-        SelectedProvider = providerName;
+        SelectedProvider = provider.Id;
         RefreshServices();
         Save();
         return null;
@@ -465,7 +474,7 @@ public sealed class ProxyWorkspace
         }
 
         var provider = Config.Providers[index];
-        if (Config.Routes.Any(route => string.Equals(route.ProviderName, provider.Name, StringComparison.OrdinalIgnoreCase)))
+        if (Config.Routes.Any(route => route.CurrentProviderId == provider.Id))
         {
             Notice = "该服务商仍被通道使用";
             return;
@@ -473,59 +482,51 @@ public sealed class ProxyWorkspace
 
         Config.Providers.RemoveAt(index);
         var fallback = Math.Min(index, Math.Max(Config.Providers.Count - 1, 0));
-        SelectedProvider = fallback < Config.Providers.Count ? Config.Providers[fallback].Name : string.Empty;
+        SelectedProvider = fallback < Config.Providers.Count ? Config.Providers[fallback].Id : string.Empty;
         SyncSelection();
         Save();
     }
 
     public int? SelectedProviderIndex()
     {
-        var index = Config.Providers.FindIndex(provider => provider.Name == SelectedProvider);
+        var index = Config.Providers.FindIndex(provider => provider.Id == SelectedProvider);
         return index < 0 ? null : index;
     }
 
-    // ---------------------------------------------------------------- 通道增删改
+    // ---------------------------------------------------------------- 通道编辑
 
-    /// <summary>打开通道编辑器。新增时没有服务商则提示并返回 null。</summary>
-    public RouteEditor? OpenRouteEditor(int? index)
+    /// <summary>
+    /// 打开通道编辑器。每个客户端固定一条通道，只能编辑。界面上选中的服务商属于同一客户端时，
+    /// 保存后通道改用它；否则沿用通道当前的服务商。下标无效或该客户端还没有服务商时提示并返回 null。
+    /// </summary>
+    public RouteEditor? OpenRouteEditor(int index)
     {
-        if (index is null && Config.ProviderByName(SelectedProvider) is null)
+        var route = index >= 0 && index < Config.Routes.Count ? Config.Routes[index] : null;
+        var selected = Config.ProviderById(SelectedProvider);
+        var provider = selected is not null && selected.ClientType == route?.ClientType ? selected : ProviderForRoute(route);
+        if (route is null || provider is null)
         {
-            Notice = "请先新增服务商，再创建通道";
+            Notice = "请先新增服务商";
             return null;
         }
 
-        var editor = new RouteEditor { Index = index };
-        if (index is { } current && current < Config.Routes.Count)
+        return new RouteEditor
         {
-            var route = Config.Routes[current];
-            editor.Name = route.Name;
-            editor.Provider = route.ProviderName;
-            editor.ClientType = route.ClientType;
-            editor.Port = route.ListenPort.ToString();
-            editor.Retries = route.MaxRetries.ToString();
-            editor.Timeout = FormatNumber(route.TimeoutSeconds);
-            editor.GenerationTimeout = FormatNumber(route.GenerationTimeoutSeconds);
-            editor.TotalTimeout = FormatNumber(route.TotalTimeoutSeconds);
-            editor.BaseDelay = FormatNumber(route.BaseDelaySeconds);
-            editor.MaxDelay = FormatNumber(route.MaxDelaySeconds);
-            editor.PassThroughCompression = route.PassThroughCompression;
-        }
-        else
-        {
-            var defaults = SelectedRouteRef() ?? new ProxyRoute();
-            editor.Provider = SelectedProvider;
-            editor.ClientType = null;
-            editor.Port = FirstFreePort().ToString();
-            editor.Retries = defaults.MaxRetries.ToString();
-            editor.Timeout = FormatNumber(defaults.TimeoutSeconds);
-            editor.GenerationTimeout = FormatNumber(defaults.GenerationTimeoutSeconds);
-            editor.TotalTimeout = FormatNumber(defaults.TotalTimeoutSeconds);
-            editor.BaseDelay = FormatNumber(defaults.BaseDelaySeconds);
-            editor.MaxDelay = FormatNumber(defaults.MaxDelaySeconds);
-        }
-
-        return editor;
+            Index = index,
+            Name = route.Name,
+            Provider = provider.Id,
+            ProviderName = provider.Name,
+            ProviderChanged = provider.Id != route.CurrentProviderId,
+            ClientType = route.ClientType,
+            Port = route.ListenPort.ToString(),
+            Retries = route.MaxRetries.ToString(),
+            Timeout = FormatNumber(route.TimeoutSeconds),
+            GenerationTimeout = FormatNumber(route.GenerationTimeoutSeconds),
+            TotalTimeout = FormatNumber(route.TotalTimeoutSeconds),
+            BaseDelay = FormatNumber(route.BaseDelaySeconds),
+            MaxDelay = FormatNumber(route.MaxDelaySeconds),
+            PassThroughCompression = route.PassThroughCompression,
+        };
     }
 
     /// <summary>Rust 的 f64 Display：整数不带小数点，其余按最短表示。</summary>
@@ -577,14 +578,18 @@ public sealed class ProxyWorkspace
     /// <summary>把编辑器文本解析成通道；解析失败抛 <see cref="WorkspaceException"/>，消息即界面文案。</summary>
     public ProxyRoute RouteFromEditor(RouteEditor editor)
     {
-        // 启停和保活开关位于通道管理页面，编辑弹窗改名或改端口时要原样保留。
-        var existing = editor.Index is { } index && index < Config.Routes.Count ? Config.Routes[index] : new ProxyRoute();
+        // 启停、保活开关与本地口令属于通道本身，改端口或换服务商时原样保留；名称与客户端固定。
+        var existing = editor.Index < Config.Routes.Count ? Config.Routes[editor.Index] : throw new WorkspaceException("找不到转发通道");
+        var providerChanged = editor.Provider != existing.CurrentProviderId;
         var route = new ProxyRoute
         {
-            Id = editor.Index is { } editing && editing < Config.Routes.Count ? Config.Routes[editing].Id : Guid.NewGuid().ToString("N"),
-            Name = editor.Name,
-            ProviderName = editor.IsEditing ? existing.ProviderName : editor.Provider,
-            ClientType = editor.ClientType ?? throw new WorkspaceException("请选择客户端：Codex 或 Claude Code"),
+            Id = existing.Id,
+            Name = existing.Name,
+            ClientType = existing.ClientType,
+            CurrentProviderId = editor.Provider,
+            // Key 属于服务商：换服务商时改用新服务商的第一个 Key，没有 Key 时透传客户端凭据。
+            CurrentKeyId = providerChanged ? Config.ProviderById(editor.Provider)?.Keys.FirstOrDefault()?.Id ?? string.Empty : existing.CurrentKeyId,
+            LocalToken = existing.LocalToken,
             ListenPort = ParseInt(editor.Port, "端口必须是整数"),
             MaxRetries = ParseLong(editor.Retries, "重试次数必须是整数"),
             TimeoutSeconds = ParseDouble(editor.Timeout, "超时必须是数字"),
@@ -596,8 +601,7 @@ public sealed class ProxyWorkspace
             KeepaliveEnabled = existing.KeepaliveEnabled,
             KeepaliveIdleMinutes = existing.KeepaliveIdleMinutes,
             KeepaliveContextLimit = existing.KeepaliveContextLimit,
-            KeepaliveReasoningEffort = existing.KeepaliveReasoningEffort.IsSupportedBy(editor.ClientType!.Value)
-                ? existing.KeepaliveReasoningEffort : ReasoningEffort.Default,
+            KeepaliveReasoningEffort = existing.KeepaliveReasoningEffort,
             PassThroughCompression = editor.PassThroughCompression,
         };
         route.NormalizeInPlace();
@@ -644,15 +648,7 @@ public sealed class ProxyWorkspace
         }
 
         var candidate = Config.Clone();
-        if (editor.Index is { } index && index < candidate.Routes.Count)
-        {
-            candidate.Routes[index] = route.Clone();
-        }
-        else
-        {
-            candidate.Routes.Add(route.Clone());
-        }
-
+        candidate.Routes[editor.Index] = route.Clone();
         candidate.SelectedRouteId = route.Id;
         candidate = candidate.Normalize();
         try
@@ -664,32 +660,18 @@ public sealed class ProxyWorkspace
             return error.Message;
         }
 
-        SelectedProvider = route.ProviderName;
+        if (route.CurrentProviderId != Config.Routes[editor.Index].CurrentProviderId)
+        {
+            // 换了服务商：旧会话属于原上游，保活看门狗按新服务商重建。
+            RouteKeepAlives.Remove(route.Id);
+        }
+
+        SelectedProvider = route.CurrentProviderId;
         SelectedRoute = route.Id;
         Config = candidate;
         RefreshServices();
         Save();
         return null;
-    }
-
-    public void DeleteRoute(string routeId)
-    {
-        var index = Config.Routes.FindIndex(route => route.Id == routeId);
-        if (index < 0)
-        {
-            return;
-        }
-
-        if (Services.TryGetValue(routeId, out var service) && service.State is not (ServiceState.Stopped or ServiceState.Error))
-        {
-            Notice = "请先停用通道";
-            return;
-        }
-
-        Config.Routes.RemoveAt(index);
-        Services.Remove(routeId);
-        SyncSelection();
-        Save();
     }
 
     // ---------------------------------------------------------------- 保活

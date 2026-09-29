@@ -290,7 +290,7 @@ public partial class CachePageViewModel : ViewModel
             return;
         }
 
-        Workspace.SelectRouteAcrossProviders(value.Key);
+        Workspace.SelectRoute(value.Key);
         _workspaceService.Flush();
     }
 

@@ -12,7 +12,7 @@ public static class ConfigDefaults
     public const double TotalTimeoutSeconds = 600.0;
     public const double BaseDelaySeconds = 0.5;
     public const double MaxDelaySeconds = 4.0;
-    public const int CurrentSchemaVersion = 6;
+    public const int CurrentSchemaVersion = 7;
 
     /// <summary>
     /// 空闲多久算需要保活。代理只要还在正常回 200 就什么都不做，超过这个时长

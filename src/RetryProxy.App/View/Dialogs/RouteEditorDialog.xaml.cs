@@ -9,15 +9,9 @@ using Wpf.Ui.Controls;
 
 namespace RetryProxy.View.Dialogs;
 
-/// <summary>新增/编辑通道。字段与校验文案沿用 Rust 版；失败时错误留在窗内。</summary>
+/// <summary>编辑通道。名称与客户端固定只读；服务商取页面上选中的那个，保存后通道改用它。失败时错误留在窗内。</summary>
 public partial class RouteEditorDialog : ContentDialog
 {
-    private static readonly PickerItem[] ClientItems =
-    {
-        new(ClientType.Codex.AsStr(), ClientType.Codex.Label()),
-        new(ClientType.Claude.AsStr(), ClientType.Claude.Label()),
-    };
-
     private readonly RouteEditor _editor;
     private readonly ProxyWorkspace _workspace;
 
@@ -27,15 +21,12 @@ public partial class RouteEditorDialog : ContentDialog
         _workspace = workspace;
         _editor = editor;
         InitializeComponent();
-        if (editor.IsEditing)
-        {
-            Title = I18nService.Instance.Translate("编辑通道");
-        }
-
-        ProviderText.Text = $"{I18nService.Instance.Translate("所属服务商：")}{editor.Provider}";
+        var i18n = I18nService.Instance;
+        ProviderText.Text = editor.ProviderChanged
+            ? $"{i18n.Translate("保存后本通道改用服务商：")}{editor.ProviderName}"
+            : $"{i18n.Translate("所属服务商：")}{editor.ProviderName}";
         NameBox.Text = editor.Name;
-        ClientBox.ItemsSource = ClientItems;
-        ClientBox.SelectedItem = editor.ClientType is { } client ? ClientItems.First(item => item.Key == client.AsStr()) : null;
+        ClientText.Text = editor.ClientType.Label();
         PortBox.Text = editor.Port;
         RetriesBox.Text = editor.Retries;
         TimeoutBox.Text = editor.Timeout;
@@ -50,10 +41,6 @@ public partial class RouteEditorDialog : ContentDialog
     {
         if (button == ContentDialogButton.Primary)
         {
-            _editor.Name = NameBox.Text;
-            _editor.ClientType = ClientBox.SelectedItem is PickerItem item
-                ? (item.Key == ClientType.Claude.AsStr() ? ClientType.Claude : ClientType.Codex)
-                : null;
             _editor.Port = PortBox.Text;
             _editor.Retries = RetriesBox.Text;
             _editor.Timeout = TimeoutBox.Text;

@@ -1,9 +1,10 @@
 using System;
+using System.Security.Cryptography;
 
 namespace RetryProxy.Core.Config;
 
 /// <summary>
-/// 转发通道：一个本地端口对应一个服务商与一套重试/保活参数。
+/// 转发通道：每个客户端一条（PRD-供应商管理 P3），一个本地端口对应当前"供应商 · Key"与一套重试/保活参数。
 /// </summary>
 public sealed class ProxyRoute : IEquatable<ProxyRoute>
 {
@@ -11,7 +12,16 @@ public sealed class ProxyRoute : IEquatable<ProxyRoute>
 
     public string Name { get; set; } = string.Empty;
 
-    public string ProviderName { get; set; } = string.Empty;
+    /// <summary>当前供应商的 ID；为空表示还没有选供应商。</summary>
+    public string CurrentProviderId { get; set; } = string.Empty;
+
+    /// <summary>当前 Key 的 ID；为空表示当前供应商还没有 Key，此时请求原样透传客户端自带的凭据。</summary>
+    public string CurrentKeyId { get; set; } = string.Empty;
+
+    /// <summary>
+    /// 本地口令：32 位十六进制随机串，接管时写进客户端配置代替真实 Key（PRD-供应商管理 §7）。
+    /// </summary>
+    public string LocalToken { get; set; } = string.Empty;
 
     public ClientType ClientType { get; set; } = ClientType.Codex;
 
@@ -48,8 +58,13 @@ public sealed class ProxyRoute : IEquatable<ProxyRoute>
     {
         Id = Id.Trim();
         Name = Name.Trim();
-        ProviderName = ProviderName.Trim();
+        CurrentProviderId = CurrentProviderId.Trim();
+        CurrentKeyId = CurrentKeyId.Trim();
+        LocalToken = LocalToken.Trim();
     }
+
+    /// <summary>生成新的本地口令，例：<c>9f86d081884c7d659a2feaa0c55ad015</c>。</summary>
+    public static string NewLocalToken() => Convert.ToHexString(RandomNumberGenerator.GetBytes(16)).ToLowerInvariant();
 
     public void Validate()
     {
@@ -66,11 +81,6 @@ public sealed class ProxyRoute : IEquatable<ProxyRoute>
         if (Name.Length == 0)
         {
             throw new ConfigException("转发通道名称不能为空");
-        }
-
-        if (ProviderName.Length == 0)
-        {
-            throw new ConfigException($"转发通道“{Name}”必须选择服务商");
         }
 
         if (KeepaliveContextLimit == 0)
@@ -103,7 +113,9 @@ public sealed class ProxyRoute : IEquatable<ProxyRoute>
         return other is not null
             && Id == other.Id
             && Name == other.Name
-            && ProviderName == other.ProviderName
+            && CurrentProviderId == other.CurrentProviderId
+            && CurrentKeyId == other.CurrentKeyId
+            && LocalToken == other.LocalToken
             && ClientType == other.ClientType
             && ListenPort == other.ListenPort
             && MaxRetries == other.MaxRetries
@@ -122,5 +134,5 @@ public sealed class ProxyRoute : IEquatable<ProxyRoute>
 
     public override bool Equals(object? obj) => Equals(obj as ProxyRoute);
 
-    public override int GetHashCode() => HashCode.Combine(Id, Name, ProviderName, ListenPort);
+    public override int GetHashCode() => HashCode.Combine(Id, Name, CurrentProviderId, ListenPort);
 }

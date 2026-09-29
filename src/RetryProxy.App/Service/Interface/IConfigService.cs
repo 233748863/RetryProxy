@@ -7,9 +7,5 @@ namespace RetryProxy.Service.Interface
         AllConfig Get();
 
         void Save();
-
-        AllConfig Read();
-
-        void Write(AllConfig config);
     }
 }

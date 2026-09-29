@@ -337,7 +337,7 @@ public class CompressionPassThroughTests
     [Fact]
     public void PassThroughCompressionIsPerRouteAndRoundTrips()
     {
-        var config = ProxyConfig.Builtin();
+        var config = TestConfigs.BuiltinWithProviders();
         config.Routes[1].PassThroughCompression = true;
         var json = ProxyConfigJson.ToCanonicalJson(config);
         var (loaded, _) = ProxyConfigJson.Parse(json);

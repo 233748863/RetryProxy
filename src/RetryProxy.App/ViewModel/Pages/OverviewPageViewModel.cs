@@ -231,7 +231,7 @@ public partial class OverviewPageViewModel : ViewModel
         try
         {
             var channels = Workspace.Config.Routes.Select(route => new PickerItem(
-                route.Id, $"{route.Name} · {route.ListenPort} · {route.ProviderName}")).ToList();
+                route.Id, $"{route.Name} · {route.ListenPort} · {Workspace.Config.ProviderById(route.CurrentProviderId)?.Name ?? "未选服务商"}")).ToList();
             if (Channels.Count != channels.Count || !Channels.SequenceEqual(channels))
             {
                 Channels.Clear();
@@ -257,7 +257,7 @@ public partial class OverviewPageViewModel : ViewModel
             return;
         }
 
-        Workspace.SelectRouteAcrossProviders(value.Key);
+        Workspace.SelectRoute(value.Key);
         _workspaceService.Flush();
     }
 

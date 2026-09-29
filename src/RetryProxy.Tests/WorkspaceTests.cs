@@ -192,20 +192,29 @@ public class WorkspaceTests
             Directory = Path.Combine(Path.GetTempPath(), "retry-proxy-tests", Guid.NewGuid().ToString("N"));
             System.IO.Directory.CreateDirectory(Directory);
             Logger = ProxyLogger.Create(Directory);
+            // 服务商 ID 与名称：Codex 有 alpha、beta；Claude Code 有 alpha（ID alpha-claude）、empty。
+            // 通道 alpha-one（Codex）用 alpha，alpha-two（Claude Code）用 alpha-claude。
             var config = new ProxyConfig
             {
-                Providers = new[] { "alpha", "beta", "empty" }.Select(name => new ProviderEndpoint(name, $"https://{name}.example")).ToList(),
-                Routes = new[] { ("alpha-one", "alpha", 18080), ("alpha-two", "alpha", 18081), ("beta-one", "beta", 18082) }
+                Providers = new[]
+                    {
+                        ("alpha", "alpha", ClientType.Codex), ("beta", "beta", ClientType.Codex),
+                        ("alpha-claude", "alpha", ClientType.Claude), ("empty", "empty", ClientType.Claude),
+                    }
+                    .Select(item => new ProviderEndpoint(item.Item2, $"https://{item.Item1}.example") { Id = item.Item1, ClientType = item.Item3 })
+                    .ToList(),
+                Routes = new[] { ("alpha-one", "alpha", ClientType.Codex, 18080), ("alpha-two", "alpha-claude", ClientType.Claude, 18081) }
                     .Select(item => new ProxyRoute
                     {
                         Id = item.Item1,
                         Name = item.Item1,
-                        ProviderName = item.Item2,
-                        ListenPort = item.Item3,
+                        CurrentProviderId = item.Item2,
+                        ClientType = item.Item3,
+                        ListenPort = item.Item4,
+                        LocalToken = $"token-{item.Item1}",
                         DesiredRunning = item.Item1 == "alpha-one",
-                        ClientType = item.Item1 == "alpha-two" ? ClientType.Claude : ClientType.Codex,
-                        KeepaliveEnabled = item.Item2 == "alpha",
-                        KeepaliveIdleMinutes = item.Item2 == "alpha" ? 7.0 : 11.0,
+                        KeepaliveEnabled = true,
+                        KeepaliveIdleMinutes = 7.0,
                     })
                     .ToList(),
                 SelectedRouteId = "alpha-two",
@@ -213,7 +222,7 @@ public class WorkspaceTests
             App = new ProxyWorkspace(Logger, config, null)
             {
                 SelectedRoute = "alpha-two",
-                SelectedProvider = "alpha",
+                SelectedProvider = "alpha-claude",
             };
             App.RefreshServices();
         }
@@ -286,7 +295,6 @@ public class WorkspaceTests
         var watchdog = app.Services["alpha-one"].KeepAlive;
         var metrics = app.Services["alpha-one"].Metrics;
         Assert.NotSame(watchdog, app.Services["alpha-two"].KeepAlive);
-        Assert.NotSame(watchdog, app.Services["beta-one"].KeepAlive);
         app.Config.Routes[1].KeepaliveEnabled = false;
         app.Config.Routes[1].KeepaliveIdleMinutes = 9.0;
         app.Config.Routes[1].KeepaliveContextLimit = 72000;
@@ -299,10 +307,8 @@ public class WorkspaceTests
         Assert.Equal(50000UL, watchdog.Snapshot().ContextLimit);
         Assert.Equal(72000UL, app.Services["alpha-two"].KeepAlive.Snapshot().ContextLimit);
         Assert.Equal(TimeSpan.FromSeconds(540), app.Services["alpha-two"].KeepAlive.Idle);
-        Assert.Equal(TimeSpan.FromSeconds(660), app.Services["beta-one"].KeepAlive.Idle);
         Assert.Equal("9", app.KeepAliveMinutes);
-        app.SelectedRoute = "alpha-one";
-        app.SyncSelection();
+        app.SelectRoute("alpha-one");
         Assert.Equal("7", app.KeepAliveMinutes);
     }
 
@@ -411,9 +417,9 @@ public class WorkspaceTests
         var sessionId = probe.SessionId;
         Assert.NotNull(probe.Complete("Java answer", 120));
         probe.Dispose();
-        foreach (var name in new[] { "beta", "empty", "alpha" })
+        foreach (var id in new[] { "beta", "empty", "alpha" })
         {
-            app.SelectedProvider = name;
+            app.SelectedProvider = id;
             app.RefreshServices();
         }
 
@@ -431,141 +437,158 @@ public class WorkspaceTests
         var routesBefore = app.Config.Routes.Select(route => route.Clone()).ToList();
         var metricsBefore = app.Services["alpha-one"].Metrics;
         metricsBefore.RequestStarted("provider-test", "POST", "/v1/responses");
+        // 查看 Codex 的另一个服务商 beta：只切到 Codex 的通道，通道仍用原来的 alpha。
         app.SelectedProvider = "beta";
         app.SyncSelection();
-        Assert.Equal("beta-one", app.SelectedRoute);
-        Assert.Equal("beta-one", app.Config.SelectedRouteId);
-        Assert.Equal("11", app.KeepAliveMinutes);
-        Assert.Equal(new[] { "beta-one" }, app.VisibleRoutes().Select(route => route.Id));
+        Assert.Equal("alpha-one", app.SelectedRoute);
+        Assert.Equal("alpha-one", app.Config.SelectedRouteId);
+        Assert.Equal("7", app.KeepAliveMinutes);
+        Assert.Equal(new[] { "alpha-one" }, app.VisibleRoutes().Select(route => route.Id));
         Assert.Equal(routesBefore, app.Config.Routes);
+        Assert.Equal("alpha", app.Config.Routes[0].CurrentProviderId);
         Assert.Same(metricsBefore, app.Services["alpha-one"].Metrics);
         Assert.Equal(1UL, metricsBefore.Snapshot().ActiveRequests);
         metricsBefore.RequestFinished("provider-test");
     }
 
     [Fact]
-    public void EmptyProviderKeepsTheViewEmptyAfterRefresh()
+    public void ProviderWithoutAChannelShowsItsClientsChannelWithoutRebinding()
     {
         using var fixture = new Fixture();
         var app = fixture.App;
         app.SelectedProvider = "empty";
         app.RefreshServices();
         Assert.Equal("empty", app.SelectedProvider);
-        Assert.Empty(app.SelectedRoute);
-        Assert.Null(app.SelectedRouteRef());
-        Assert.Empty(app.VisibleRoutes());
-        Assert.Equal("alpha-two", app.Config.SelectedRouteId);
-        Assert.Equal(3, app.Config.Routes.Count);
+        Assert.Equal("alpha-two", app.SelectedRoute);
+        Assert.Equal("alpha-claude", app.SelectedRouteRef()!.CurrentProviderId);
+        Assert.Equal(0, app.ProviderUsage("empty"));
+        Assert.Equal(1, app.ProviderUsage("alpha-claude"));
+        Assert.Equal(2, app.Config.Routes.Count);
         app.Config.Validate(false);
     }
 
     [Fact]
-    public void DeletingTheLastOwnedRouteKeepsItsProviderSelected()
+    public void SelectingARouteOfAnotherClientFollowsItsProvider()
     {
         using var fixture = new Fixture();
         var app = fixture.App;
-        app.SelectedProvider = "beta";
-        app.SyncSelection();
-        app.Config.Routes.RemoveAll(route => route.Id == "beta-one");
-        app.RefreshServices();
-        Assert.Equal("beta", app.SelectedProvider);
-        Assert.Empty(app.SelectedRoute);
-        Assert.Null(app.SelectedRouteRef());
-        Assert.Equal("alpha-one", app.Config.SelectedRouteId);
-        app.Config.Validate(false);
-    }
-
-    [Fact]
-    public void SelectionPreservesOwnedRoutesAndFollowsProviderRenames()
-    {
-        using var fixture = new Fixture();
-        var app = fixture.App;
-        app.SelectedProvider = "ALPHA";
-        app.SyncSelection();
+        app.SelectRoute("alpha-one");
         Assert.Equal("alpha", app.SelectedProvider);
-        Assert.Equal("alpha-two", app.SelectedRoute);
-        app.Config.Providers[0].Name = "renamed";
-        foreach (var route in app.Config.Routes.Where(route => route.ProviderName == "alpha"))
-        {
-            route.ProviderName = "renamed";
-        }
+        Assert.Equal("alpha-one", app.SelectedRoute);
+        app.SelectedProvider = "beta";
+        app.SelectRoute("alpha-one");
+        Assert.Equal("beta", app.SelectedProvider);
+        app.SelectRoute("alpha-two");
+        Assert.Equal("alpha-claude", app.SelectedProvider);
+    }
 
-        app.SelectedProvider = "renamed";
+    [Fact]
+    public void SelectionUsesProviderIdsAndFallsBackToTheSelectedRoute()
+    {
+        using var fixture = new Fixture();
+        var app = fixture.App;
+        app.SelectedProvider = "ALPHA-CLAUDE";
         app.SyncSelection();
+        Assert.Equal("alpha-claude", app.SelectedProvider);
         Assert.Equal("alpha-two", app.SelectedRoute);
-        Assert.Equal(2, app.VisibleRoutes().Count());
+        app.Config.Providers[2].Name = "renamed";
+        app.SyncSelection();
+        Assert.Equal("alpha-claude", app.SelectedProvider);
+        Assert.Equal("alpha-two", app.SelectedRoute);
+        Assert.Single(app.VisibleRoutes());
     }
 
     // ---------------------------------------------------------------- 通道编辑器
-
-    [Fact]
-    public void NewRouteInheritsTheSelectedProvider()
-    {
-        using var fixture = new Fixture();
-        var app = fixture.App;
-        app.SelectedProvider = "empty";
-        app.SyncSelection();
-        var editor = app.OpenRouteEditor(null)!;
-        editor.Name = "new-channel";
-        var error = Assert.Throws<WorkspaceException>(() => app.RouteFromEditor(editor));
-        Assert.Contains("请选择客户端", error.Message);
-        editor.ClientType = ClientType.Claude;
-        Assert.Equal("empty", editor.Provider);
-        var route = app.RouteFromEditor(editor);
-        Assert.Equal("empty", route.ProviderName);
-        Assert.Equal(18083, route.ListenPort);
-        Assert.Equal(ClientType.Claude, route.ClientType);
-        route.Validate();
-        Assert.Equal(3, app.Config.Routes.Count);
-    }
 
     [Fact]
     public void EditingARoutePreservesItsProviderAndLiveSettings()
     {
         using var fixture = new Fixture();
         var app = fixture.App;
+        app.SelectRoute("alpha-one");
         app.Config.Routes[0].KeepaliveContextLimit = 12345;
         var original = app.Config.Routes[0].Clone();
         var editor = app.OpenRouteEditor(0)!;
-        editor.Provider = "beta";
-        editor.Name = "updated-channel";
+        Assert.Equal("alpha", editor.Provider);
+        Assert.False(editor.ProviderChanged);
+        editor.Port = "18090";
         var route = app.RouteFromEditor(editor);
-        Assert.Equal(original.Id, route.Id);
-        Assert.Equal("updated-channel", route.Name);
-        Assert.Equal(original.ProviderName, route.ProviderName);
-        Assert.Equal(original.ClientType, route.ClientType);
-        Assert.Equal(original.DesiredRunning, route.DesiredRunning);
-        Assert.Equal(original.KeepaliveEnabled, route.KeepaliveEnabled);
-        Assert.Equal(original.KeepaliveIdleMinutes, route.KeepaliveIdleMinutes);
-        Assert.Equal(original.KeepaliveContextLimit, route.KeepaliveContextLimit);
+        Assert.Equal(18090, route.ListenPort);
+        route.ListenPort = original.ListenPort;
+        Assert.Equal(original, route);
         Assert.Equal(original, app.Config.Routes[0]);
     }
 
     [Fact]
-    public void NewRouteStartsWithAutomaticKeepaliveOff()
+    public void EditingARouteWhileViewingAnotherProviderOfTheSameClientSwitchesIt()
     {
         using var fixture = new Fixture();
         var app = fixture.App;
-        Assert.True(app.SelectedRouteRef()!.KeepaliveEnabled);
-        var editor = app.OpenRouteEditor(null)!;
-        editor.Name = "new-channel";
-        editor.ClientType = ClientType.Codex;
+        app.Config.Providers[1].Keys.Add(new ProviderKey { Id = "beta-key", Name = "默认", ApiKey = "sk-beta-fixture" });
+        var watchdog = app.RouteKeepAlives["alpha-one"];
+        var original = app.Config.Routes[0].Clone();
+        app.SelectedProvider = "beta";
+        app.SyncSelection();
+        var editor = app.OpenRouteEditor(0)!;
+        Assert.Equal(("beta", "beta", true), (editor.Provider, editor.ProviderName, editor.ProviderChanged));
         var route = app.RouteFromEditor(editor);
-        Assert.Equal("alpha", route.ProviderName);
-        Assert.False(route.KeepaliveEnabled);
-        Assert.Equal(ConfigDefaults.KeepaliveIdleMinutes, route.KeepaliveIdleMinutes);
-        Assert.Equal(50000, route.KeepaliveContextLimit);
+        Assert.Equal(("beta", "beta-key"), (route.CurrentProviderId, route.CurrentKeyId));
+        Assert.Equal((original.Id, original.Name, original.ClientType, original.LocalToken), (route.Id, route.Name, route.ClientType, route.LocalToken));
+        Assert.Equal((original.DesiredRunning, original.KeepaliveEnabled, original.KeepaliveIdleMinutes),
+            (route.DesiredRunning, route.KeepaliveEnabled, route.KeepaliveIdleMinutes));
+        Assert.Equal(original, app.Config.Routes[0]);
+
+        Assert.Null(app.CommitRoute(editor));
+        Assert.Equal("beta", app.Config.Routes[0].CurrentProviderId);
+        Assert.Equal("https://beta.example", app.Config.RuntimeConfigFor("alpha-one").UpstreamBaseUrl);
+        Assert.NotSame(watchdog, app.RouteKeepAlives["alpha-one"]);
     }
 
     [Fact]
-    public void RouteCreationRequiresAProvider()
+    public void RouteEditorIgnoresASelectedProviderOfAnotherClient()
+    {
+        using var fixture = new Fixture();
+        var app = fixture.App;
+        Assert.Equal("alpha-claude", app.SelectedProvider);
+        var editor = app.OpenRouteEditor(0)!;
+        Assert.Equal(("alpha", false, ClientType.Codex), (editor.Provider, editor.ProviderChanged, editor.ClientType));
+    }
+
+    [Fact]
+    public void RouteEditingRequiresAProvider()
     {
         var directory = Path.Combine(Path.GetTempPath(), "retry-proxy-tests", Guid.NewGuid().ToString("N"));
         using var logger = ProxyLogger.Silent(directory);
-        var app = new ProxyWorkspace(logger, new ProxyConfig(), null);
+        var app = new ProxyWorkspace(logger, ProxyConfig.Builtin(), null);
         app.RefreshServices();
-        Assert.Null(app.OpenRouteEditor(null));
-        Assert.Equal("请先新增服务商，再创建通道", app.Notice);
+        Assert.Empty(app.Services);
+        Assert.Null(app.OpenRouteEditor(0));
+        Assert.Equal("请先新增服务商", app.Notice);
+        Directory.Delete(directory, recursive: true);
+    }
+
+    [Fact]
+    public void FirstProviderOfAClientBecomesItsChannelsProvider()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "retry-proxy-tests", Guid.NewGuid().ToString("N"));
+        using var logger = ProxyLogger.Silent(directory);
+        var app = new ProxyWorkspace(logger, ProxyConfig.Builtin(), null);
+        app.RefreshServices();
+        // 内置配置的 Codex 通道标记为运行但还没有服务商：启动时静默跳过，不弹提示。
+        app.StartDesiredRoutes();
+        Assert.Null(app.Notice);
+
+        var editor = app.OpenProviderEditor(null);
+        editor.ClientType = ClientType.Claude;
+        editor.Name = "Any";
+        editor.Url = "https://anyrouter.top";
+        Assert.Null(app.CommitProvider(editor));
+        var provider = Assert.Single(app.Config.Providers);
+        Assert.Equal((ClientType.Claude, provider.Id), (provider.ClientType, app.SelectedProvider));
+        Assert.Equal(provider.Id, app.Config.RouteFor(ClientType.Claude)!.CurrentProviderId);
+        Assert.Empty(app.Config.RouteFor(ClientType.Codex)!.CurrentProviderId);
+        Assert.Equal(app.Config.RouteFor(ClientType.Claude)!.Id, app.SelectedRoute);
+        Assert.True(app.Services.ContainsKey(app.SelectedRoute));
         Directory.Delete(directory, recursive: true);
     }
 
@@ -609,8 +632,7 @@ public class WorkspaceTests
         Assert.Equal(KeepAliveFlavor.Claude, app.RouteKeepAlives["alpha-two"].Snapshot().Flavor);
         var editor = app.OpenRouteEditor(0)!;
         Assert.Equal(ClientType.Codex, editor.ClientType);
-        editor.ClientType = ClientType.Claude;
-        Assert.Equal(ClientType.Claude, app.RouteFromEditor(editor).ClientType);
+        Assert.Equal(ClientType.Codex, app.RouteFromEditor(editor).ClientType);
     }
 
     [Fact]
@@ -618,39 +640,45 @@ public class WorkspaceTests
     {
         using var fixture = new Fixture();
         var app = fixture.App;
-        var editor = app.OpenRouteEditor(null)!;
-        editor.Name = "alpha-one";
-        editor.ClientType = ClientType.Codex;
-        Assert.Equal("转发通道名称重复：alpha-one", app.CommitRoute(editor));
-        editor.Name = "gamma";
+        var editor = app.OpenRouteEditor(0)!;
+        editor.Port = "18081";
+        Assert.Equal("本地端口重复：18081", app.CommitRoute(editor));
+        editor.Port = "18090";
         Assert.Null(app.CommitRoute(editor));
-        Assert.Equal(4, app.Config.Routes.Count);
+        Assert.Equal(2, app.Config.Routes.Count);
         Assert.Equal("alpha", app.SelectedProvider);
-        Assert.Equal(app.Config.Routes[3].Id, app.SelectedRoute);
-        Assert.Equal(18083, app.Config.Routes[3].ListenPort);
+        Assert.Equal("alpha-one", app.SelectedRoute);
+        Assert.Equal(18090, app.Config.Routes[0].ListenPort);
         Assert.True(app.Services.ContainsKey(app.SelectedRoute));
 
+        // 名称只在同一客户端内唯一：Codex 已有 alpha，Claude Code 也有 alpha。
         var provider = app.OpenProviderEditor(null);
+        Assert.Equal(ClientType.Codex, provider.ClientType);
         provider.Name = "ALPHA";
         provider.Url = "https://other.example";
         Assert.Equal("服务商名称重复", app.CommitProvider(provider));
         provider.Name = "delta";
         Assert.Null(app.CommitProvider(provider));
-        Assert.Equal("delta", app.SelectedProvider);
-        Assert.Empty(app.SelectedRoute);
+        var delta = app.Config.Providers[4];
+        Assert.Equal(("delta", ClientType.Codex, delta.Id), (delta.Name, delta.ClientType, app.SelectedProvider));
+        Assert.Equal("alpha", app.Config.Routes[0].CurrentProviderId);
+        Assert.Equal("alpha-one", app.SelectedRoute);
 
+        app.Config.Providers[0].Keys.Add(new ProviderKey { Id = "alpha-key", Name = "主号", ApiKey = "sk-alpha-fixture" });
         var rename = app.OpenProviderEditor(0);
-        Assert.Equal("alpha", rename.Name);
+        Assert.Equal(("alpha", ClientType.Codex), (rename.Name, rename.ClientType));
         rename.Name = "alpha-renamed";
         Assert.Null(app.CommitProvider(rename));
-        Assert.All(app.Config.Routes.Take(2), route => Assert.Equal("alpha-renamed", route.ProviderName));
-        Assert.Equal("alpha-renamed", app.SelectedProvider);
+        Assert.Equal(("alpha", "alpha-renamed"), (app.Config.Providers[0].Id, app.Config.Providers[0].Name));
+        Assert.Equal("alpha-key", Assert.Single(app.Config.Providers[0].Keys).Id);
+        Assert.Equal("alpha", app.Config.Routes[0].CurrentProviderId);
+        Assert.Equal("alpha", app.SelectedProvider);
 
         app.DeleteProvider(0);
         Assert.Equal("该服务商仍被通道使用", app.Notice);
         app.Notice = null;
-        app.DeleteProvider(3);
-        Assert.Equal(3, app.Config.Providers.Count);
+        app.DeleteProvider(4);
+        Assert.Equal(4, app.Config.Providers.Count);
         Assert.Equal("empty", app.SelectedProvider);
     }
 
@@ -738,8 +766,10 @@ public class WorkspaceTests
     {
         using var fixture = new Fixture();
         var app = fixture.App;
+        // alpha-two 关闭自动保活：准备完成后也不能把它打开。
+        app.SetKeepAlive("alpha-two", false, 7.0, 50000);
         var registrations = new List<IDisposable>();
-        foreach (var routeId in new[] { "alpha-one", "beta-one" })
+        foreach (var routeId in new[] { "alpha-one", "alpha-two" })
         {
             var watchdog = app.RouteKeepAlives[routeId];
             var clientType = app.Config.Routes.Single(route => route.Id == routeId).ClientType;
@@ -755,7 +785,7 @@ public class WorkspaceTests
         app.Notice = "existing notice";
         Assert.False(app.PollPreparationEvents());
         Assert.Equal("existing notice", app.Notice);
-        foreach (var routeName in new[] { "alpha-one", "beta-one" })
+        foreach (var routeName in new[] { "alpha-one", "alpha-two" })
         {
             app.Notice = null;
             Assert.True(app.PollPreparationEvents());
@@ -766,7 +796,7 @@ public class WorkspaceTests
 
         app.Notice = null;
         Assert.False(app.PollPreparationEvents());
-        Assert.False(app.RouteKeepAlives["beta-one"].Enabled);
+        Assert.False(app.RouteKeepAlives["alpha-two"].Enabled);
         registrations.ForEach(registration => registration.Dispose());
     }
 
@@ -815,7 +845,7 @@ public class WorkspaceTests
     }
 
     [Fact]
-    public void DeletingARunningRouteIsRefused()
+    public void EditingTheProviderOfARunningRouteIsRefused()
     {
         using var fixture = new Fixture();
         var app = fixture.App;
@@ -823,20 +853,13 @@ public class WorkspaceTests
         app.RefreshServices();
         app.Services["alpha-one"].Start(app.Config.RuntimeConfigFor("alpha-one"), TimeSpan.FromSeconds(5));
         Assert.Equal(1, app.RunningCount());
-        app.DeleteRoute("alpha-one");
-        Assert.Equal("请先停用通道", app.Notice);
-        Assert.Equal(3, app.Config.Routes.Count);
         var editor = app.OpenProviderEditor(0);
         editor.Name = "alpha-renamed";
         Assert.Equal("请先停止引用该服务商的通道", app.CommitProvider(editor));
         app.StopRoute("alpha-one");
         Assert.False(app.Config.Routes[0].DesiredRunning);
         app.Services["alpha-one"].Stop(TimeSpan.FromSeconds(5));
-        app.Notice = null;
-        app.DeleteRoute("alpha-one");
-        Assert.Null(app.Notice);
-        Assert.Equal(2, app.Config.Routes.Count);
-        Assert.False(app.Services.ContainsKey("alpha-one"));
-        Assert.Equal("alpha-two", app.SelectedRoute);
+        Assert.Null(app.CommitProvider(editor));
+        Assert.Equal("alpha-renamed", app.Config.Providers[0].Name);
     }
 }

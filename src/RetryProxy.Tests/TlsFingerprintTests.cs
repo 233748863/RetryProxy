@@ -453,14 +453,15 @@ public class TlsFingerprintTests
     public void LegacyFingerprintSwitchInConfigIsIgnoredAndDropped()
     {
         // 早先版本在通道上保存过 claude_tls_fingerprint 开关；现在读取时忽略，保存时不再写出。
-        var json = System.Text.Json.Nodes.JsonNode.Parse(ProxyConfigJson.ToCanonicalJson(ProxyConfig.Builtin()))!;
+        var builtin = ProxyConfig.Builtin();
+        var json = System.Text.Json.Nodes.JsonNode.Parse(ProxyConfigJson.ToCanonicalJson(builtin))!;
         foreach (var route in json["routes"]!.AsArray())
         {
             route!["claude_tls_fingerprint"] = false;
         }
 
         var (loaded, _) = ProxyConfigJson.Parse(json.ToJsonString());
-        Assert.Equal(ProxyConfig.Builtin().Routes, loaded.Routes);
+        Assert.Equal(builtin.Routes, loaded.Routes);
         Assert.DoesNotContain("claude_tls_fingerprint", ProxyConfigJson.ToCanonicalJson(loaded), StringComparison.Ordinal);
     }
 

@@ -6,7 +6,8 @@ using System.Text.Json.Serialization;
 namespace RetryProxy.Core.Config;
 
 /// <summary>
-/// 代理配置（schema 6）。顶层字段镜像当前选中通道，providers/routes 为完整列表。
+/// 代理配置（schema 7）。顶层字段镜像当前选中通道，providers/routes 为完整列表：
+/// 供应商按客户端分开并带 Key，每个客户端一条通道（PRD-供应商管理 §8）。
 /// 通过 <see cref="ProxyConfigJsonConverter"/> 以固定键序的 snake_case JSON 存取，
 /// 读取时自动执行旧版本迁移。
 /// </summary>
@@ -49,6 +50,9 @@ public sealed class ProxyConfig : IEquatable<ProxyConfig>
     public List<ProxyRoute> Routes { get; set; } = new();
 
     public string SelectedRouteId { get; set; } = string.Empty;
+
+    /// <summary>每个客户端的接管状态；<see cref="EnsureClientRoutes"/> 保证两个客户端都有一项。</summary>
+    public Dictionary<ClientType, ClientTakeoverState> ClientTakeover { get; set; } = new();
 
     public int SchemaVersion { get; set; } = ConfigDefaults.CurrentSchemaVersion;
 
@@ -97,7 +101,7 @@ public sealed class ProxyConfig : IEquatable<ProxyConfig>
         if (UpstreamBaseUrl.Length > 0 && !Providers.Any(provider => provider.BaseUrl == UpstreamBaseUrl))
         {
             var name = UrlRules.GeneratedProviderName(UpstreamBaseUrl, Providers);
-            Providers.Add(new ProviderEndpoint(name, UpstreamBaseUrl));
+            Providers.Add(new ProviderEndpoint(name, UpstreamBaseUrl) { Id = NewId(), ClientType = ClientType });
         }
 
         ApplyRuntimeOverrides(string.Empty);
@@ -126,12 +130,7 @@ public sealed class ProxyConfig : IEquatable<ProxyConfig>
         KeepaliveContextLimit = route.KeepaliveContextLimit;
         KeepaliveReasoningEffort = route.KeepaliveReasoningEffort;
         PassThroughCompression = route.PassThroughCompression;
-        var provider = ProviderByName(route.ProviderName);
-        if (provider is not null)
-        {
-            UpstreamBaseUrl = provider.BaseUrl;
-        }
-
+        UpstreamBaseUrl = ProviderById(route.CurrentProviderId)?.BaseUrl ?? string.Empty;
         ApplyRuntimeOverrides(route.Id);
     }
 
@@ -186,10 +185,68 @@ public sealed class ProxyConfig : IEquatable<ProxyConfig>
 
     public ProxyRoute? SelectedRoute => Routes.FirstOrDefault(route => route.Id == SelectedRouteId);
 
-    public ProviderEndpoint? ProviderByName(string name)
+    public ProviderEndpoint? ProviderById(string id)
     {
-        return Providers.FirstOrDefault(provider =>
-            string.Equals(provider.Name, name, StringComparison.OrdinalIgnoreCase));
+        return id.Length == 0 ? null : Providers.FirstOrDefault(provider => provider.Id == id);
+    }
+
+    /// <summary>某客户端的通道；每个客户端最多一条。</summary>
+    public ProxyRoute? RouteFor(ClientType clientType) => Routes.FirstOrDefault(route => route.ClientType == clientType);
+
+    public IEnumerable<ProviderEndpoint> ProvidersFor(ClientType clientType) =>
+        Providers.Where(provider => provider.ClientType == clientType);
+
+    /// <summary>通道的当前 Key；当前供应商没有 Key 时为 null。</summary>
+    public ProviderKey? CurrentKeyOf(ProxyRoute route) => ProviderById(route.CurrentProviderId)?.KeyById(route.CurrentKeyId);
+
+    public static string NewId() => Guid.NewGuid().ToString("N");
+
+    /// <summary>
+    /// 保证两个客户端各有一条通道、每条通道有本地口令、每个客户端有接管状态。
+    /// 缺通道时按客户端补建：Codex 优先 18080、Claude Code 优先 18081，端口被占用时顺延。
+    /// 返回是否有需要写回的改动（补建通道、生成口令、修正选中通道）。
+    /// </summary>
+    public bool EnsureClientRoutes()
+    {
+        var changed = false;
+        foreach (var client in new[] { ClientType.Codex, ClientType.Claude })
+        {
+            if (RouteFor(client) is null)
+            {
+                var port = client == ClientType.Claude ? 18081 : 18080;
+                while (Routes.Any(route => route.ListenPort == port))
+                {
+                    port++;
+                }
+
+                Routes.Add(new ProxyRoute
+                {
+                    Id = NewId(),
+                    Name = client.Label(),
+                    ClientType = client,
+                    ListenPort = port,
+                });
+                changed = true;
+            }
+
+            // 缺省的接管状态与"未接管"等价，补上不算改动。
+            ClientTakeover.TryAdd(client, new ClientTakeoverState());
+        }
+
+        foreach (var route in Routes.Where(route => route.LocalToken.Length == 0))
+        {
+            route.LocalToken = ProxyRoute.NewLocalToken();
+            changed = true;
+        }
+
+        if (SelectedRoute is null)
+        {
+            SelectedRouteId = Routes[0].Id;
+            changed = true;
+        }
+
+        Normalize();
+        return changed;
     }
 
     /// <summary>
@@ -199,8 +256,8 @@ public sealed class ProxyConfig : IEquatable<ProxyConfig>
     {
         var route = Routes.FirstOrDefault(candidate => candidate.Id == routeId)
             ?? throw new ConfigException("找不到转发通道");
-        var provider = ProviderByName(route.ProviderName)
-            ?? throw new ConfigException($"转发通道“{route.Name}”引用的服务商不存在");
+        var provider = ProviderById(route.CurrentProviderId)
+            ?? throw new ConfigException($"请先为 {route.ClientType.Label()} 新增并选择服务商");
 
         var runtime = new ProxyConfig
         {
@@ -294,20 +351,33 @@ public sealed class ProxyConfig : IEquatable<ProxyConfig>
             MaxDelaySeconds,
             string.Empty);
 
-        var providerNames = new HashSet<string>();
+        var providerIds = new HashSet<string>();
+        var providerNames = new HashSet<(ClientType, string)>();
         foreach (var provider in Providers)
         {
             provider.Validate();
-            if (!providerNames.Add(provider.Name.ToLowerInvariant()))
+            // 例外：运行时配置（routes 为空）里由上游地址生成或复制来的服务商可以没有 ID。
+            if (provider.Id.Length == 0 && Routes.Count > 0)
+            {
+                throw new ConfigException($"服务商“{provider.Name}”缺少 ID");
+            }
+
+            if (provider.Id.Length > 0 && !providerIds.Add(provider.Id))
+            {
+                throw new ConfigException($"服务商 ID 重复：{provider.Id}");
+            }
+
+            // 名称只要求在同一客户端内唯一，例：Codex 与 Claude Code 可以各有一个 "Any"。
+            if (!providerNames.Add((provider.ClientType, provider.Name.ToLowerInvariant())))
             {
                 throw new ConfigException($"服务商名称重复：{provider.Name}");
             }
-
         }
 
         var routeIds = new HashSet<string>();
         var routeNames = new HashSet<string>();
         var routePorts = new HashSet<int>();
+        var routeClients = new HashSet<ClientType>();
         foreach (var route in Routes)
         {
             route.Validate();
@@ -326,9 +396,31 @@ public sealed class ProxyConfig : IEquatable<ProxyConfig>
                 throw new ConfigException($"本地端口重复：{route.ListenPort}");
             }
 
-            if (!providerNames.Contains(route.ProviderName.ToLowerInvariant()))
+            if (!routeClients.Add(route.ClientType))
             {
-                throw new ConfigException($"转发通道“{route.Name}”引用的服务商不存在：{route.ProviderName}");
+                throw new ConfigException($"{route.ClientType.Label()} 只能有一条通道");
+            }
+
+            if (route.CurrentProviderId.Length == 0)
+            {
+                if (route.CurrentKeyId.Length > 0)
+                {
+                    throw new ConfigException($"通道“{route.Name}”选了 Key 却没有选服务商");
+                }
+
+                continue;
+            }
+
+            var provider = ProviderById(route.CurrentProviderId)
+                ?? throw new ConfigException($"通道“{route.Name}”的当前服务商不存在");
+            if (provider.ClientType != route.ClientType)
+            {
+                throw new ConfigException($"服务商“{provider.Name}”属于 {provider.ClientType.Label()}，不能用于 {route.ClientType.Label()}");
+            }
+
+            if (route.CurrentKeyId.Length > 0 && provider.KeyById(route.CurrentKeyId) is null)
+            {
+                throw new ConfigException($"通道“{route.Name}”的当前 Key 不存在");
             }
         }
 
@@ -358,14 +450,13 @@ public sealed class ProxyConfig : IEquatable<ProxyConfig>
     }
 
     /// <summary>
-    /// Rust 版首次运行时使用的内置配置：两个服务商、两个通道，以及原有的
-    /// 18080/18081 端口和重试参数。
+    /// 首次运行时使用的内置配置：只有 Codex（18080）与 Claude Code（18081）两条通道，沿用 Rust 版的
+    /// 重试参数；不再预置服务商（PRD-供应商管理 §8），由首次使用向导或手动新增。
     /// </summary>
     public static ProxyConfig Builtin()
     {
-        return new ProxyConfig
+        var config = new ProxyConfig
         {
-            UpstreamBaseUrl = "https://anyrouter.top",
             ClientType = ClientType.Codex,
             ListenPort = 18080,
             MaxRetries = 100,
@@ -378,18 +469,12 @@ public sealed class ProxyConfig : IEquatable<ProxyConfig>
             KeepaliveEnabled = false,
             KeepaliveIdleMinutes = ConfigDefaults.KeepaliveIdleMinutes,
             KeepaliveContextLimit = ConfigDefaults.KeepaliveContextLimit,
-            Providers =
-            {
-                new ProviderEndpoint("anyrouter.top", "https://anyrouter.top"),
-                new ProviderEndpoint("sotamodel.net", "https://sotamodel.net"),
-            },
             Routes =
             {
                 new ProxyRoute
                 {
                     Id = "legacy-default",
-                    Name = "默认通道",
-                    ProviderName = "anyrouter.top",
+                    Name = ClientType.Codex.Label(),
                     ListenPort = 18080,
                     MaxRetries = 100,
                     TimeoutSeconds = 600.0,
@@ -402,8 +487,7 @@ public sealed class ProxyConfig : IEquatable<ProxyConfig>
                 new ProxyRoute
                 {
                     Id = "2da608c46f0842039fdf8ad07e46cf20",
-                    Name = "Claude Code",
-                    ProviderName = "anyrouter.top",
+                    Name = ClientType.Claude.Label(),
                     ClientType = ClientType.Claude,
                     ListenPort = 18081,
                     MaxRetries = 200,
@@ -418,7 +502,9 @@ public sealed class ProxyConfig : IEquatable<ProxyConfig>
             SelectedRouteId = "legacy-default",
             SchemaVersion = ConfigDefaults.CurrentSchemaVersion,
             RuntimeOverrides = null,
-        }.Normalize();
+        };
+        config.EnsureClientRoutes();
+        return config;
     }
 
     public ProxyConfig Clone()
@@ -426,6 +512,7 @@ public sealed class ProxyConfig : IEquatable<ProxyConfig>
         var copy = (ProxyConfig)MemberwiseClone();
         copy.Providers = Providers.Select(provider => provider.Clone()).ToList();
         copy.Routes = Routes.Select(route => route.Clone()).ToList();
+        copy.ClientTakeover = ClientTakeover.ToDictionary(pair => pair.Key, pair => pair.Value.Clone());
         copy.RuntimeOverrides = RuntimeOverrides?.Clone();
         return copy;
     }
@@ -451,6 +538,8 @@ public sealed class ProxyConfig : IEquatable<ProxyConfig>
             && Providers.SequenceEqual(other.Providers)
             && Routes.SequenceEqual(other.Routes)
             && SelectedRouteId == other.SelectedRouteId
+            && ClientTakeover.Count == other.ClientTakeover.Count
+            && ClientTakeover.All(pair => other.ClientTakeover.TryGetValue(pair.Key, out var state) && pair.Value.Equals(state))
             && SchemaVersion == other.SchemaVersion
             && Equals(RuntimeOverrides, other.RuntimeOverrides);
     }

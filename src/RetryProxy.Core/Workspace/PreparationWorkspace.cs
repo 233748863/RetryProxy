@@ -325,7 +325,8 @@ public sealed class PreparationWorkspace
             };
             PrepareMode? mode = entry?.ProviderSource switch
             {
-                SavedPreparation.LocalSource => PrepareMode.LocalProvider,
+                // 旧版的 local 与 current 同义：都在开始时取客户端当前使用的供应商。
+                SavedPreparation.CurrentSource or SavedPreparation.LegacyLocalSource => PrepareMode.LocalProvider,
                 SavedPreparation.CustomSource => PrepareMode.CustomProvider,
                 _ => null,
             };
@@ -384,7 +385,7 @@ public sealed class PreparationWorkspace
             Id = task.Id,
             Number = task.Number,
             ClientType = task.ClientType.AsStr(),
-            ProviderSource = custom ? SavedPreparation.CustomSource : SavedPreparation.LocalSource,
+            ProviderSource = custom ? SavedPreparation.CustomSource : SavedPreparation.CurrentSource,
             ProviderUrl = task.ProviderUrl,
             ApiKey = custom ? task.Options.ApiKey : string.Empty,
             Model = task.Model,

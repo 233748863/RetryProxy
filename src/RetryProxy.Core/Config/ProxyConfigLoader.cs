@@ -18,7 +18,11 @@ public enum ProxyConfigSource
     Builtin,
 }
 
-public sealed record ProxyConfigLoadResult(ProxyConfig Config, ProxyConfigSource Source, bool Migrated);
+/// <summary>加载结果；<see cref="Notes"/> 是注入或注册表配置迁移时值得写日志的事项。</summary>
+public sealed record ProxyConfigLoadResult(ProxyConfig Config, ProxyConfigSource Source, bool Migrated)
+{
+    public IReadOnlyList<string> Notes { get; init; } = Array.Empty<string>();
+}
 
 /// <summary>
 /// 决定启动时采用哪份代理配置，并套用环境变量覆盖（对应 Rust load_persistent_config）。
@@ -54,9 +58,11 @@ public static class ProxyConfigLoader
         ProxyConfig config;
         ProxyConfigSource source;
         var migrated = false;
+        IReadOnlyList<string> notes = Array.Empty<string>();
         if (environ.TryGetValue(TestConfigEnv, out var injected))
         {
-            (config, migrated) = ProxyConfigJson.Parse(injected);
+            var parsed = ProxyConfigJson.Parse(injected);
+            (config, migrated, notes) = (parsed.Config, parsed.Migrated, parsed.Notes);
             source = ProxyConfigSource.EnvironmentInjection;
         }
         else if (persisted is not null)
@@ -66,7 +72,8 @@ public static class ProxyConfigLoader
         }
         else if (registryReader() is { } legacyJson)
         {
-            (config, migrated) = ProxyConfigJson.Parse(legacyJson);
+            var parsed = ProxyConfigJson.Parse(legacyJson);
+            (config, migrated, notes) = (parsed.Config, parsed.Migrated, parsed.Notes);
             source = ProxyConfigSource.Registry;
         }
         else
@@ -84,6 +91,6 @@ public static class ProxyConfigLoader
         }
 
         config.Validate(false);
-        return new ProxyConfigLoadResult(config, source, migrated);
+        return new ProxyConfigLoadResult(config, source, migrated) { Notes = notes };
     }
 }

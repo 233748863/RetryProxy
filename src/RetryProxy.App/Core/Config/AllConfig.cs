@@ -29,15 +29,15 @@ public partial class AllConfig : ObservableObject
     public OtherConfig OtherConfig { get; set; } = new();
 
     /// <summary>
-    /// 代理配置（schema 6，snake_case 固定键序）。文件里没有该节点时为 null，
-    /// 由 ConfigService 按"注入 → 文件 → 注册表 → 内置"顺序补齐。
+    /// 代理配置（schema 7，snake_case 固定键序）。读取时由 ConfigService 单独解析与迁移，
+    /// 并按"注入 → 文件 → 注册表 → 内置"顺序补齐。
     /// 它不是 ObservableObject；改动后需显式调用 IConfigService.Save()。
     /// </summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public ProxyConfig? Proxy { get; set; }
 
     /// <summary>
-    /// 一键准备任务的设置（不含服务与会话，重启后以“已停止”恢复）。
+    /// 一键准备任务的设置（不含服务与会话）。
     /// 列表本身不触发自动保存；PreparationWorkspace 的保存回调整体替换它后显式调用 IConfigService.Save()。
     /// </summary>
     public List<SavedPreparation>? Preparations { get; set; } = new();

@@ -129,8 +129,10 @@ public partial class ChannelPageViewModel : ViewModel
             RunningBrush = Application.Current?.TryFindResource(running > 0
                 ? "SystemFillColorSuccessBrush" : "TextFillColorSecondaryBrush") as Brush ?? Brushes.Gray;
 
+            // 服务商按客户端区分：Codex 与 Claude Code 可以各有一个同名服务商。
             var providers = Workspace.Config.Providers
-                .Select(provider => new PickerItem(provider.Name, $"{provider.Name} · {provider.BaseUrl} · {Workspace.ProviderUsage(provider.Name)} 通道"))
+                .Select(provider => new PickerItem(provider.Id,
+                    $"{provider.Name} · {provider.ClientType.Label()} · {provider.BaseUrl}{(Workspace.ProviderUsage(provider.Id) > 0 ? " · 使用中" : string.Empty)}"))
                 .ToList();
             ReplaceIfChanged(Providers, providers);
             SelectedProvider = Providers.FirstOrDefault(item => item.Key == Workspace.SelectedProvider);
@@ -144,7 +146,7 @@ public partial class ChannelPageViewModel : ViewModel
             HasProvider = Workspace.SelectedProvider.Length > 0;
             var route = Workspace.SelectedRouteRef();
             HasChannel = route is not null;
-            EmptyHint = HasProvider ? "该服务商暂无通道，点击「＋ 新增通道」创建" : "请先新增服务商，再为它创建通道";
+            EmptyHint = "请先新增服务商";
             var state = route is null ? ServiceState.Stopped : Workspace.RouteState(route.Id);
             IsProxyRunning = state is ServiceState.Running or ServiceState.Starting;
             CanToggleChannel = route is not null && state is not ServiceState.Stopping;
@@ -376,18 +378,6 @@ public partial class ChannelPageViewModel : ViewModel
     }
 
     [RelayCommand]
-    private async Task OnAddChannel()
-    {
-        var editor = Workspace.OpenRouteEditor(null);
-        if (editor is null)
-        {
-            return;
-        }
-
-        await _dialogs.ShowRouteEditorAsync(editor);
-    }
-
-    [RelayCommand]
     private async Task OnEditChannel()
     {
         var route = Workspace.SelectedRouteRef();
@@ -410,21 +400,5 @@ public partial class ChannelPageViewModel : ViewModel
         }
 
         await _dialogs.ShowRouteEditorAsync(editor);
-    }
-
-    [RelayCommand]
-    private async Task OnDeleteChannel()
-    {
-        var route = Workspace.SelectedRouteRef();
-        if (route is null)
-        {
-            return;
-        }
-
-        if (await _dialogs.ConfirmDeleteAsync("删除通道", $"确认删除通道“{route.Name}”？该通道的监听端口与重试设置会一并移除。"))
-        {
-            Workspace.DeleteRoute(route.Id);
-            _workspaceService.Flush();
-        }
     }
 }

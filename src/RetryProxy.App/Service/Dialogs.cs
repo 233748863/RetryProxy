@@ -1,6 +1,4 @@
-using RetryProxy.Core.Workspace;
 using RetryProxy.Service.I18n;
-using RetryProxy.View.Dialogs;
 using System.Threading.Tasks;
 using System.Windows;
 using Wpf.Ui;
@@ -8,19 +6,12 @@ using Wpf.Ui.Controls;
 
 namespace RetryProxy.Service;
 
-/// <summary>删除确认与独立准备对话框入口（准备任务抽屉随 M5 接入）。</summary>
+/// <summary>删除确认入口；编辑表单统一使用右侧抽屉。</summary>
 public sealed class Dialogs
 {
     private readonly IContentDialogService _dialogs;
-    private readonly WorkspaceService _workspaceService;
 
-    public Dialogs(IContentDialogService dialogs, WorkspaceService workspaceService)
-    {
-        _dialogs = dialogs;
-        _workspaceService = workspaceService;
-    }
-
-    private ProxyWorkspace Workspace => _workspaceService.Workspace;
+    public Dialogs(IContentDialogService dialogs) => _dialogs = dialogs;
 
     /// <summary>删除确认：`确认删除`（红）/ `取消`。</summary>
     public async Task<bool> ConfirmDeleteAsync(string title, string body)
@@ -37,12 +28,5 @@ public sealed class Dialogs
         };
         var result = await dialog.ShowAsync();
         return result == ContentDialogResult.Primary;
-    }
-
-    public async Task ShowPrepareOptionsAsync(PreparationDialogState state)
-    {
-        var dialog = new PrepareOptionsDialog(_dialogs.GetDialogHostEx(), _workspaceService.Preparations, state);
-        await dialog.ShowAsync();
-        _workspaceService.Flush();
     }
 }

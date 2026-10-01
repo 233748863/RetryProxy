@@ -300,7 +300,8 @@ public partial class MainWindow : FluentWindow, INavigationWindow
 
     private void PopulateTray(System.Windows.Controls.MenuItem menu, ClientType client)
     {
-        var workspace = App.GetService<WorkspaceService>()!.Workspace;
+        var service = App.GetService<WorkspaceService>()!;
+        var workspace = service.Workspace;
         var route = workspace.Config.RouteFor(client);
         var selected = route is null ? null : workspace.Config.ProviderById(route.CurrentProviderId);
         var selectedKey = route is null ? null : workspace.Config.CurrentKeyOf(route);
@@ -313,12 +314,17 @@ public partial class MainWindow : FluentWindow, INavigationWindow
         {
             var providerId = provider.Id;
             var keyId = key.Id;
+            var balance = service.Balances.Get(providerId, keyId);
+            var balanceText = RetryProxy.Core.Balance.BalanceText.Display(balance, I18nService.Instance.Translate);
             var item = new System.Windows.Controls.MenuItem
             {
-                Header = $"{provider.Name} · {key.Name}",
+                Header = $"{provider.Name} · {key.Name}" + (balanceText.Length == 0 ? string.Empty : $"    {balanceText}"),
+                ToolTip = RetryProxy.Core.Balance.BalanceText.Hint(balance, I18nService.Instance.Translate),
                 IsCheckable = true,
                 IsChecked = route.CurrentProviderId == providerId && route.CurrentKeyId == keyId,
             };
+            if (RetryProxy.Core.Balance.BalanceText.IsCritical(balance))
+                item.SetResourceReference(System.Windows.Controls.Control.ForegroundProperty, "SystemFillColorCriticalBrush");
             item.Click += (_, _) => App.GetService<KeySwitchService>()!.Switch(route.Id, providerId, keyId);
             menu.Items.Add(item);
         }

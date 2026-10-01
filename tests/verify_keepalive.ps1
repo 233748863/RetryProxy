@@ -99,10 +99,14 @@ function Open-ProxySettings {
 function Invoke-NavigationItem([string]$Name) {
     # WPF-UI 的导航项在 UIA 树里只暴露为无模式的 DataItem：先让它获得焦点，再向主窗口投递回车。
     $deadline = [DateTime]::UtcNow.AddSeconds(10)
+    $null = [KeepaliveNative]::ShowWindow($app.MainWindowHandle, 9)
+    $null = [KeepaliveNative]::SetForegroundWindow($app.MainWindowHandle)
     do {
         foreach ($element in (Find-ByName $Name)) {
-            if ($element.Current.ControlType -ne [Windows.Automation.ControlType]::DataItem) { continue }
-            $element.SetFocus()
+            if ($element.Current.ControlType -ne [Windows.Automation.ControlType]::DataItem -or
+                -not $element.Current.IsEnabled -or $element.Current.IsOffscreen -or -not $element.Current.IsKeyboardFocusable) { continue }
+            try { $element.SetFocus() }
+            catch [System.Management.Automation.MethodInvocationException] { continue }
             Start-Sleep -Milliseconds 300
             $enter = [UIntPtr]::new([uint64]13)
             [KeepaliveNative]::PostMessage($app.MainWindowHandle, 0x0100, $enter, [IntPtr]::new([int64]0x001C0001)) | Out-Null
@@ -178,6 +182,8 @@ using System;
 using System.Runtime.InteropServices;
 public static class KeepaliveNative {
     [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr handle, uint message, UIntPtr value, IntPtr detail);
+    [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr handle, int command);
+    [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr handle);
 }
 '@
     Get-ChildItem -LiteralPath $distDir -File | Where-Object { $_.Name -match '\.(exe|dll)$|\.(deps|runtimeconfig)\.json$' } | Copy-Item -Destination $runtime
@@ -336,8 +342,8 @@ while ($null -ne $line) {
     $config = @{
         schema_version = 7; selected_route_id = 'client-test'
         providers = @(
-            @{ id = 'codex-provider'; client_type = 'codex'; name = '客户端格式验证'; base_url = "http://127.0.0.1:$upstreamPort"; keys = @(@{ id = 'codex-key'; name = '测试'; api_key = 'local-validation-token' }) },
-            @{ id = 'claude-provider'; client_type = 'claude'; name = 'Claude 设置验证'; base_url = "http://127.0.0.1:$upstreamPort"; keys = @(@{ id = 'claude-key'; name = '测试'; api_key = 'fixture-claude-key' }) }
+            @{ id = 'codex-provider'; client_type = 'codex'; name = '客户端格式验证'; base_url = "http://127.0.0.1:$upstreamPort"; balance_query = @{ mode = 'none' }; keys = @(@{ id = 'codex-key'; name = '测试'; api_key = 'local-validation-token' }) },
+            @{ id = 'claude-provider'; client_type = 'claude'; name = 'Claude 设置验证'; base_url = "http://127.0.0.1:$upstreamPort"; balance_query = @{ mode = 'none' }; keys = @(@{ id = 'claude-key'; name = '测试'; api_key = 'fixture-claude-key' }) }
         )
         routes = @(
             @{ id = 'client-test'; name = 'Codex'; current_provider_id = 'codex-provider'; current_key_id = 'codex-key'; local_token = '00112233445566778899aabbccddeeff'; client_type = 'codex'; listen_port = $proxyPort; max_retries = 0; timeout_seconds = 10.0; base_delay_seconds = 0.0; max_delay_seconds = 0.0; desired_running = $true; keepalive_enabled = $false; keepalive_idle_minutes = 0.5 },

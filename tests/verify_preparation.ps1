@@ -1,5 +1,5 @@
 ﻿param(
-    [string]$ExePath = (Join-Path $PSScriptRoot '..\dist\RetryProxy.exe'),
+    [string]$ExePath = (Join-Path $PSScriptRoot '..\src\RetryProxy.App\bin\x64\Debug\net9.0-windows10.0.22621.0\RetryProxy.exe'),
     [switch]$WithChannels,
     [switch]$CompactWindow
 )
@@ -7,9 +7,9 @@
 $ErrorActionPreference = 'Stop'
 $ExePath = (Resolve-Path -LiteralPath $ExePath).ProviderPath
 $tempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\')
-$runtime = Join-Path $tempRoot ('RetryProxyPreparation-' + [Guid]::NewGuid().ToString('N'))
+$runtime = Join-Path $tempRoot ('RetryProxyM4-' + [Guid]::NewGuid().ToString('N'))
 $savedEnvironment = @{}
-foreach ($name in @('RETRY_PROXY_CONFIG_JSON', 'RETRY_PROXY_CODEX_CLI', 'RETRY_PROXY_TEST_PREPARATION_GATE', 'CLAUDE_CONFIG_DIR', 'CODEX_HOME')) {
+foreach ($name in @('RETRY_PROXY_CONFIG_JSON', 'RETRY_PROXY_UI_TEST_ROOT', 'RETRY_PROXY_CLAUDE_CLI', 'RETRY_PROXY_CODEX_CLI', 'RETRY_PROXY_TEST_PREPARATION_GATE', 'CLAUDE_CONFIG_DIR', 'CODEX_HOME', 'UPSTREAM_BASE_URL', 'RETRY_PROXY_PORT', 'RETRY_MAX_RETRIES', 'RETRY_TIMEOUT_SECONDS', 'RETRY_GENERATION_TIMEOUT_SECONDS', 'RETRY_TOTAL_TIMEOUT_SECONDS', 'RETRY_BASE_DELAY_SECONDS', 'RETRY_MAX_DELAY_SECONDS')) {
     $savedEnvironment[$name] = [Environment]::GetEnvironmentVariable($name)
 }
 $process = $null
@@ -44,11 +44,12 @@ function Find-Elements([string]$Value, [switch]$ById) {
 }
 
 function Invoke-Control([string]$Value, [switch]$ById) {
-    Wait-For { @(Find-Elements $Value -ById:$ById).Count -gt 0 } "Missing control: $Value"
-    foreach ($element in (Find-Elements $Value -ById:$ById)) {
+    Wait-For { @(Find-Elements $Value -ById:$ById | Where-Object { $_.Current.IsEnabled }).Count -gt 0 } "Missing enabled control: $Value"
+    foreach ($element in (Find-Elements $Value -ById:$ById | Where-Object { $_.Current.IsEnabled })) {
         $pattern = $null
         if ($element.TryGetCurrentPattern([Windows.Automation.InvokePattern]::Pattern, [ref]$pattern)) { $pattern.Invoke(); return }
         if ($element.TryGetCurrentPattern([Windows.Automation.SelectionItemPattern]::Pattern, [ref]$pattern)) { $pattern.Select(); return }
+        if ($element.TryGetCurrentPattern([Windows.Automation.TogglePattern]::Pattern, [ref]$pattern)) { $pattern.Toggle(); return }
         if ($element.Current.ControlType -eq [Windows.Automation.ControlType]::DataItem) {
             $element.SetFocus()
             Start-Sleep -Milliseconds 200
@@ -61,6 +62,7 @@ function Invoke-Control([string]$Value, [switch]$ById) {
 }
 
 function Set-Field([string]$Id, [string]$Value) {
+    Wait-For { @(Find-Elements $Id -ById | Where-Object { $_.Current.IsEnabled }).Count -gt 0 } "Missing enabled field: $Id"
     $element = @(Find-Elements $Id -ById)[0]
     $pattern = $null
     if ($element.TryGetCurrentPattern([Windows.Automation.ValuePattern]::Pattern, [ref]$pattern)) { $pattern.SetValue($Value); return }
@@ -126,50 +128,68 @@ function Assert-LogControlsVisible {
     }
 }
 
-function Assert-DialogActionsVisible {
-    $startButton = @(Find-Elements '开始后台准备' | Where-Object { $_.Current.ControlType -eq [Windows.Automation.ControlType]::Button })[0]
-    if ($null -eq $startButton) { throw 'Preparation dialog action is missing' }
-    $buttonBounds = $startButton.Current.BoundingRectangle
-    $bounds = [RetryProxyTrayVerification]::Bounds($window)
-    if ($buttonBounds.IsEmpty -or $buttonBounds.Width -le 0 -or $buttonBounds.Height -le 0 -or
-        $buttonBounds.Left -lt $bounds.Left -or $buttonBounds.Top -lt $bounds.Top -or
-        $buttonBounds.Right -gt $bounds.Right -or $buttonBounds.Bottom -gt $bounds.Bottom) {
-        throw 'Preparation dialog action is clipped'
-    }
-}
-
-function Get-PreparationDialogLayout {
-    $layout = @{}
-    foreach ($id in @('PreparationDialog', 'PreparationCodex', 'PreparationClaude', 'PreparationLocalProvider', 'PreparationCustomProvider',
-        'PreparationProviderUrl', 'PreparationApiKey', 'PreparationModel', 'PreparationReasoningEffort', 'PreparationIdleMinutes')) {
-        $element = @(Find-Elements $id -ById | Where-Object { -not $_.Current.IsOffscreen })[0]
-        if ($null -ne $element) { $layout[$id] = $element.Current.BoundingRectangle }
-    }
-    $primaryButton = @(Find-Elements '开始后台准备' | Where-Object { $_.Current.ControlType -eq [Windows.Automation.ControlType]::Button })[0]
-    if ($null -eq $primaryButton) { throw 'Preparation dialog action is missing' }
-    $layout['PrimaryButton'] = $primaryButton.Current.BoundingRectangle
-    return $layout
-}
-
-function Assert-ClientSwitchKeepsDialogLayout([string]$Mode) {
-    Start-Sleep -Milliseconds 300
-    $expected = Get-PreparationDialogLayout
-    foreach ($client in @('PreparationClaude', 'PreparationCodex', 'PreparationClaude', 'PreparationCodex')) {
-        Invoke-Control $client -ById
-        foreach ($sample in 1..3) {
-            Start-Sleep -Milliseconds 150
-            $actual = Get-PreparationDialogLayout
-            foreach ($control in $expected.Keys) {
-                if (-not $actual.ContainsKey($control)) { throw "$Mode client switch hid $control" }
-                foreach ($dimension in @('X', 'Y', 'Width', 'Height')) {
-                    if ([Math]::Abs($actual[$control].$dimension - $expected[$control].$dimension) -gt 0.5) {
-                        throw "$Mode client switch changed $control $dimension from $($expected[$control].$dimension) to $($actual[$control].$dimension)"
-                    }
-                }
-            }
+function Assert-DrawerActionsVisible {
+    foreach ($id in @('DrawerSave', 'DrawerCancel')) {
+        $button = @(Find-Elements $id -ById)[0]
+        if ($null -eq $button) { throw "准备抽屉缺少操作按钮：$id" }
+        $rect = $button.Current.BoundingRectangle
+        $bounds = [RetryProxyTrayVerification]::Bounds($window)
+        if ($button.Current.IsOffscreen -or $rect.IsEmpty -or $rect.Width -le 0 -or $rect.Height -le 0 -or
+            $rect.Left -lt $bounds.Left -or $rect.Top -lt $bounds.Top -or
+            $rect.Right -gt $bounds.Right -or $rect.Bottom -gt $bounds.Bottom) {
+            throw "准备抽屉操作按钮被裁切：$id"
         }
     }
-    Assert-DialogActionsVisible
+}
+
+function Assert-DrawerClient([string]$Client) {
+    Wait-For { @(Find-Elements 'PreparationClient' -ById | Where-Object { $_.Current.Name -eq $Client }).Count -eq 1 } "准备抽屉未固定显示当前客户端：$Client"
+    foreach ($id in @('PreparationCodex', 'PreparationClaude')) {
+        if (@(Find-Elements $id -ById).Count -gt 0) { throw "准备抽屉仍包含独立客户端切换：$id" }
+    }
+    Assert-DrawerActionsVisible
+}
+
+function Get-Field([string]$Id) {
+    $element = @(Find-Elements $Id -ById)[0]
+    $pattern = $null
+    if ($element.TryGetCurrentPattern([Windows.Automation.ValuePattern]::Pattern, [ref]$pattern)) { return $pattern.Current.Value }
+    $condition = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ControlTypeProperty, [Windows.Automation.ControlType]::Edit)
+    foreach ($edit in $element.FindAll([Windows.Automation.TreeScope]::Descendants, $condition)) {
+        if ($edit.TryGetCurrentPattern([Windows.Automation.ValuePattern]::Pattern, [ref]$pattern)) { return $pattern.Current.Value }
+    }
+    throw "无法读取字段：$Id"
+}
+
+function Get-TaskIds {
+    $root = [Windows.Automation.AutomationElement]::FromHandle($window)
+    foreach ($element in $root.FindAll([Windows.Automation.TreeScope]::Descendants, [Windows.Automation.Condition]::TrueCondition)) {
+        if ($element.Current.AutomationId -match '^PreparationTaskStatus_(.+)$') { $Matches[1] }
+    }
+}
+
+function Test-TaskStatus([string]$Id, [string]$Status) {
+    return @(Find-Elements "PreparationTaskStatus_$Id" -ById | Where-Object { $_.Current.Name -like $Status }).Count -eq 1
+}
+
+function Close-PreparationDrawer {
+    Invoke-Control 'DrawerCancel' -ById
+    # 修改过的草稿由抽屉统一确认丢弃；从未修改则直接关闭。
+    Wait-For { @(Find-Elements 'PreparationDrawer' -ById).Count -eq 0 -or @(Find-Elements '放弃修改').Count -gt 0 } '准备抽屉未关闭或未询问是否放弃修改'
+    if (@(Find-Elements 'PreparationDrawer' -ById).Count -gt 0) { Invoke-Control '放弃修改' }
+    Wait-For { @(Find-Elements 'PreparationDrawer' -ById).Count -eq 0 } '准备抽屉未关闭'
+}
+
+function Fetch-PreparationModels {
+    $before = @(Get-Content -LiteralPath $eventPath -ErrorAction SilentlyContinue | Where-Object { $_ -match '/v1/models' }).Count
+    Invoke-Control 'PreparationFetchModels' -ById
+    Wait-For {
+        $count = @(Get-Content -LiteralPath $eventPath -ErrorAction SilentlyContinue | Where-Object { $_ -match '/v1/models' }).Count
+        return $count -gt $before -and @(Find-Elements 'PreparationFetchModels' -ById | Where-Object { $_.Current.IsEnabled }).Count -eq 1
+    } '获取模型未完成'
+    if ((Get-Field 'PreparationModel') -ne '') { throw '获取模型后自动填入了首个模型，应由用户主动选择' }
+    Select-ComboItem 'PreparationModel' 'preparation-test-model'
+    Wait-For { (Get-Field 'PreparationModel') -eq 'preparation-test-model' } '手动选择的模型未写入表单'
 }
 
 function Get-FreePort {
@@ -180,34 +200,29 @@ function Get-FreePort {
 }
 
 function Add-Preparation([string]$Minutes, [string]$Effort) {
+    $before = @(Get-TaskIds)
     Invoke-Control 'AddPreparation' -ById
-    Wait-For { @(Find-Elements 'PreparationCodex' -ById).Count -gt 0 } 'Preparation dialog did not open'
-    Assert-WindowStable 'opening the preparation dialog'
-    if (@(Find-Elements 'PreparationClaude' -ById).Count -eq 0) { throw 'Independent client selector is missing' }
-    Assert-ClientSwitchKeepsDialogLayout 'Local provider'
+    Wait-For { @(Find-Elements 'PreparationDrawer' -ById).Count -eq 1 } '准备抽屉未打开'
+    Assert-WindowStable '打开准备抽屉'
+    Assert-DrawerClient 'Codex'
+    Invoke-Control 'PreparationLocalProvider' -ById
+    Assert-DrawerActionsVisible
     Invoke-Control 'PreparationCustomProvider' -ById
-    Assert-ClientSwitchKeepsDialogLayout 'Custom provider'
-    Assert-WindowStable 'switching the preparation client and provider source'
     Set-Field 'PreparationProviderUrl' "http://127.0.0.1:$upstreamPort"
-    Set-Field 'PreparationApiKey' 'sk-prepare-fixture'
-    Invoke-Control '获取模型'
-    Wait-For { @(Find-Elements '获取模型' | Where-Object { $_.Current.IsEnabled }).Count -gt 0 } 'Model lookup did not finish'
-    Select-ComboItem 'PreparationModel' 'preparation-test-model'
+    # 密码控件不允许 UIA 写值，先显示密钥，再操作对应明文输入框。
+    Invoke-Control '显示密钥'
+    Set-Field 'PreparationVisibleApiKey' 'sk-prepare-fixture'
+    Set-Field 'PreparationModel' ''
+    Fetch-PreparationModels
     Select-ComboItem 'PreparationReasoningEffort' '极限 · ultra'
-    Invoke-Control 'PreparationClaude' -ById
-    Wait-For { (Get-ComboSelection 'PreparationReasoningEffort') -eq '默认（沿用客户端）' } 'Unsupported Claude effort was retained'
-    Select-ComboItem 'PreparationReasoningEffort' '最高 · max'
-    Invoke-Control '获取模型'
-    Wait-For { @(Find-Elements '获取模型' | Where-Object { $_.Current.IsEnabled }).Count -gt 0 } 'Claude model lookup did not finish'
-    Select-ComboItem 'PreparationModel' 'preparation-test-model'
-    Invoke-Control 'PreparationCodex' -ById
     Select-ComboItem 'PreparationReasoningEffort' $Effort
-    Set-Field 'PreparationModel' 'preparation-test-model'
     Set-Field 'PreparationIdleMinutes' $Minutes
-    Assert-DialogActionsVisible
-    Invoke-Control '开始后台准备'
-    Wait-For { @(Find-Elements 'PreparationModel' -ById).Count -eq 0 } 'Preparation dialog did not close'
-    Assert-WindowStable 'starting preparation and closing the dialog'
+    Assert-DrawerActionsVisible
+    Invoke-Control 'DrawerSave' -ById
+    Wait-For { @(Find-Elements 'PreparationDrawer' -ById).Count -eq 0 } '提交后准备抽屉未关闭'
+    Wait-For { @(Get-TaskIds | Where-Object { $_ -notin $before }).Count -eq 1 } '未新增唯一准备任务'
+    Assert-WindowStable '提交准备并关闭抽屉'
+    return @(Get-TaskIds | Where-Object { $_ -notin $before })[0]
 }
 
 try {
@@ -218,8 +233,12 @@ try {
         New-Item -ItemType Directory -Path (Join-Path $runtime 'User') | Out-Null
         Copy-Item -LiteralPath $translations -Destination (Join-Path $runtime 'User\I18n') -Recurse
     }
-    $env:CLAUDE_CONFIG_DIR = Join-Path $runtime 'clients\claude'
-    $env:CODEX_HOME = Join-Path $runtime 'clients\codex'
+    # 清除当前终端的临时覆盖，确保地址和端口只来自下方本机测试配置。
+    foreach ($name in $savedEnvironment.Keys) { Remove-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue }
+    $env:RETRY_PROXY_UI_TEST_ROOT = $runtime
+    $env:CLAUDE_CONFIG_DIR = Join-Path $runtime 'claude'
+    $env:CODEX_HOME = Join-Path $runtime 'codex'
+    $env:RETRY_PROXY_CLAUDE_CLI = Join-Path $runtime 'missing-claude.exe'
     New-Item -ItemType Directory -Path $env:CLAUDE_CONFIG_DIR, $env:CODEX_HOME -Force | Out-Null
     [IO.File]::WriteAllText((Join-Path $env:CLAUDE_CONFIG_DIR 'settings.json'), '{}', [Text.UTF8Encoding]::new($false))
     [IO.File]::WriteAllText((Join-Path $env:CODEX_HOME 'config.toml'), '', [Text.UTF8Encoding]::new($false))
@@ -270,15 +289,15 @@ try {
     $config = @{
         schema_version = 7; providers = @(); selected_route_id = 'fixture-codex'
         routes = @(
-            @{ id = 'fixture-codex'; name = 'Codex'; client_type = 'codex'; listen_port = $codexPort; current_provider_id = ''; current_key_id = ''; local_token = '00112233445566778899aabbccddeeff'; desired_running = $false },
-            @{ id = 'fixture-claude'; name = 'Claude Code'; client_type = 'claude'; listen_port = $claudePort; current_provider_id = ''; current_key_id = ''; local_token = 'ffeeddccbbaa99887766554433221100'; desired_running = $false }
+            @{ id = 'fixture-codex'; name = 'Codex'; client_type = 'codex'; listen_port = $codexPort; current_provider_id = ''; current_key_id = ''; local_token = '00112233445566778899aabbccddeeff'; desired_running = $false; keepalive_enabled = $false },
+            @{ id = 'fixture-claude'; name = 'Claude Code'; client_type = 'claude'; listen_port = $claudePort; current_provider_id = ''; current_key_id = ''; local_token = 'ffeeddccbbaa99887766554433221100'; desired_running = $false; keepalive_enabled = $false }
         )
     }
     if ($WithChannels) {
         $longProvider = 'fixture-' + ('供应商长名称校验' * 8)
         $config.providers = @(
-            @{ id = 'provider-codex'; client_type = 'codex'; name = 'fixture'; base_url = "http://127.0.0.1:$upstreamPort"; keys = @(@{ id = 'key-codex'; name = '主号'; api_key = 'sk-prepare-fixture' }) },
-            @{ id = 'provider-claude'; client_type = 'claude'; name = $longProvider; base_url = "http://127.0.0.1:$upstreamPort"; keys = @(@{ id = 'key-claude'; name = '主号'; api_key = 'sk-prepare-fixture' }) }
+            @{ id = 'provider-codex'; client_type = 'codex'; name = 'fixture'; base_url = "http://127.0.0.1:$upstreamPort"; balance_query = @{ mode = 'none' }; keys = @(@{ id = 'key-codex'; name = '主号'; api_key = 'sk-prepare-fixture' }) },
+            @{ id = 'provider-claude'; client_type = 'claude'; name = $longProvider; base_url = "http://127.0.0.1:$upstreamPort"; balance_query = @{ mode = 'none' }; keys = @(@{ id = 'key-claude'; name = '主号'; api_key = 'sk-prepare-fixture' }) }
         )
         $config.routes[0].current_provider_id = 'provider-codex'
         $config.routes[0].current_key_id = 'key-codex'
@@ -286,7 +305,8 @@ try {
         $config.routes[1].current_key_id = 'key-claude'
     }
     $env:RETRY_PROXY_CONFIG_JSON = $config | ConvertTo-Json -Depth 8 -Compress
-    $env:RETRY_PROXY_CODEX_CLI = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot 'fixtures\preparation-codex.ps1')).ProviderPath
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'fixtures\preparation-codex.ps1') -Destination (Join-Path $runtime 'preparation-codex.ps1')
+    $env:RETRY_PROXY_CODEX_CLI = Join-Path $runtime 'preparation-codex.ps1'
     $env:RETRY_PROXY_TEST_PREPARATION_GATE = $gate
     $process = [RetryProxyTrayVerification]::StartPrivateProcess((Join-Path $runtime 'RetryProxy.exe'), $runtime)
     Wait-For {
@@ -343,37 +363,47 @@ try {
     Invoke-Control 'PreparationNavigation' -ById
     Wait-For { @(Find-Elements '当前客户端尚未添加准备任务').Count -gt 0 } 'Empty preparation page was not shown'
     Assert-WindowStable 'opening the preparation page'
-    Add-Preparation '5' '低 · low'
-    Wait-For { @(Find-Elements '已准备').Count -gt 0 } 'First preparation did not complete'
-    Assert-WindowStable 'completing preparation'
-    Write-Host 'Independent preparation and model lookup passed.'
+    $firstTaskId = Add-Preparation '0.5' '低 · low'
+    Wait-For { Test-TaskStatus $firstTaskId '已准备*' } '第一项准备未完成'
+    Assert-WindowStable '完成独立准备'
+    # 以真实后续请求证明成功后仍在保活，最小合法间隔为 0.5 分钟。
+    $readyRequests = @(Get-Content -LiteralPath $eventPath | ForEach-Object { $_ | ConvertFrom-Json } | Where-Object { $_.path -ne '/v1/models' -and $_.effort -eq 'low' }).Count
+    Wait-For {
+        $requests = @(Get-Content -LiteralPath $eventPath | ForEach-Object { $_ | ConvertFrom-Json } | Where-Object { $_.path -ne '/v1/models' -and $_.effort -eq 'low' })
+        return $requests.Count -gt $readyRequests
+    } '准备成功后未继续独立保活' 55
+    Write-Host '独立准备、获取模型及后续保活通过。'
 
     Remove-Item -LiteralPath $gate
-    Add-Preparation '7.5' '高 · high'
-    Wait-For { @(Find-Elements 'PreparationStatus' -ById | Where-Object { $_.Current.Name -like '准备中*' }).Count -gt 0 } 'Second preparation was not pending'
-    $secondStop = @(Find-Elements '停止' | Where-Object { $_.Current.ControlType -eq [Windows.Automation.ControlType]::Button -and $_.Current.IsEnabled })[1]
-    if ($null -eq $secondStop) {
-        [Windows.Automation.AutomationElement]::FromHandle($window).FindAll([Windows.Automation.TreeScope]::Descendants, [Windows.Automation.Condition]::TrueCondition) |
-            ForEach-Object { "$($_.Current.ControlType.ProgrammaticName) | $($_.Current.AutomationId) | $($_.Current.Name) | enabled=$($_.Current.IsEnabled)" } |
-            Set-Content -LiteralPath (Join-Path $PSScriptRoot '..\.tmp\m3-preparation-ui.txt') -Encoding utf8
-        throw 'Second stop button not found; saved the UI tree'
-    }
-    $secondStop.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern).Invoke()
-    Wait-For { @(Find-Elements '已停止').Count -gt 0 } 'Second task did not stop'
-    if (@(Find-Elements '已准备').Count -eq 0) { throw 'Stopping the second task interrupted the first task' }
+    $secondTaskId = Add-Preparation '7.5' '高 · high'
+    Wait-For { Test-TaskStatus $secondTaskId '准备中*' } '第二项准备未进入等待'
+    Invoke-Control "StopPreparation_$secondTaskId" -ById
+    Wait-For { Test-TaskStatus $secondTaskId '已停止' } '第二项准备未停止'
+    if (-not (Test-TaskStatus $firstTaskId '已准备*')) { throw '停止第二项打断了第一项准备' }
     New-Item -ItemType File -Path $gate | Out-Null
-    Invoke-Control '开始'
-    Wait-For { @(Find-Elements '已准备').Count -ge 2 } 'Second task did not restart independently'
-    Assert-WindowStable 'adding and restarting a second preparation task'
+    Invoke-Control "StartPreparation_$secondTaskId" -ById
+    Wait-For { (Test-TaskStatus $firstTaskId '已准备*') -and (Test-TaskStatus $secondTaskId '已准备*') } '第二项准备未独立重启'
+    Assert-WindowStable '新增并重启第二项准备'
 
     # 切到 Claude 后 Codex 任务应隐藏但继续运行，新增任务默认沿用所选客户端。
     Invoke-Control 'SelectClaude' -ById
     Wait-For { @(Find-Elements '当前客户端尚未添加准备任务').Count -gt 0 } 'Preparation tasks were not filtered by client'
     Invoke-Control 'AddPreparation' -ById
-    Wait-For { @(Find-Elements 'PreparationClaude' -ById).Count -gt 0 } 'Preparation dialog did not open'
-    $selectedClaude = @(Find-Elements 'PreparationClaude' -ById)[0].GetCurrentPattern([Windows.Automation.SelectionItemPattern]::Pattern)
-    if (-not $selectedClaude.Current.IsSelected) { throw 'New preparation did not default to the selected client' }
-    Invoke-Control '取消'
+    Wait-For { @(Find-Elements 'PreparationDrawer' -ById).Count -eq 1 } 'Claude 准备抽屉未打开'
+    Assert-DrawerClient 'Claude Code'
+    if ((Get-ComboSelection 'PreparationReasoningEffort') -ne '默认（沿用客户端）') { throw '新建 Claude 准备沿用了另一客户端的强度' }
+    Select-ComboItem 'PreparationReasoningEffort' '最高 · max'
+    Invoke-Control 'PreparationCustomProvider' -ById
+    Set-Field 'PreparationProviderUrl' "http://127.0.0.1:$upstreamPort"
+    Invoke-Control '显示密钥'
+    Set-Field 'PreparationVisibleApiKey' 'sk-prepare-fixture'
+    # 仅获取模型，不启动真实 Claude CLI；两次查询都不得自动选中首项。
+    foreach ($fetch in 1..2) {
+        Set-Field 'PreparationModel' ''
+        Fetch-PreparationModels
+    }
+    Assert-DrawerActionsVisible
+    Close-PreparationDrawer
     Invoke-Control 'ProviderNavigation' -ById
     Wait-For { @(Find-Elements 'ProxySettings' -ById).Count -gt 0 } 'Providers did not load'
     Invoke-Control 'ProxySettings' -ById
@@ -398,31 +428,32 @@ try {
     Invoke-Control 'DrawerCancel' -ById
     Wait-For { @(Find-Elements 'ChannelReasoningEffort' -ById).Count -eq 0 } 'Proxy settings drawer did not close'
     Invoke-Control 'PreparationNavigation' -ById
-    Wait-For { @(Find-Elements '已准备').Count -ge 2 } 'Client selection changed the running preparation tasks'
+    Wait-For { (Test-TaskStatus $firstTaskId '已准备*') -and (Test-TaskStatus $secondTaskId '已准备*') } '切换客户端改变了后台准备状态'
     Wait-For { @(Find-Elements '手动填写').Count -gt 0 } 'Manual preparation group is missing'
     Assert-WindowStable 'returning to client-filtered preparation tasks'
-    Invoke-Control '停止'
-    Wait-For { @(Find-Elements '已停止').Count -gt 0 } 'First task did not stop'
-    Invoke-Control '停止'
-    Wait-For { @(Find-Elements '已停止').Count -ge 2 } 'Second task did not stop'
-    Invoke-Control '任务操作'
+    Invoke-Control "StopPreparation_$firstTaskId" -ById
+    Wait-For { Test-TaskStatus $firstTaskId '已停止' } '第一项准备未停止'
+    if (-not (Test-TaskStatus $secondTaskId '已准备*')) { throw '停止第一项打断了第二项准备' }
+    Invoke-Control "StopPreparation_$secondTaskId" -ById
+    Wait-For { Test-TaskStatus $secondTaskId '已停止' } '第二项准备未停止'
+    Invoke-Control "PreparationTaskMenu_$firstTaskId" -ById
     Invoke-Control '查看日志'
     Wait-For { @(Find-Elements 'LogSearch' -ById).Count -gt 0 } 'Task log action did not open Logs'
     $taskQuery = @(Find-Elements 'LogSearch' -ById)[0].GetCurrentPattern([Windows.Automation.ValuePattern]::Pattern).Current.Value
     if ($taskQuery -ne '[准备 1 · ') { throw 'Task log action did not select the first preparation' }
     Invoke-Control 'PreparationNavigation' -ById
-    foreach ($unused in 1..2) {
-        Invoke-Control '任务操作'
+    foreach ($taskId in @($firstTaskId, $secondTaskId)) {
+        Invoke-Control "PreparationTaskMenu_$taskId" -ById
         Invoke-Control '删除'
+        Wait-For { @(Find-Elements "PreparationTaskStatus_$taskId" -ById).Count -eq 0 } '已停止的准备任务未删除'
     }
     Wait-For { @(Find-Elements '当前客户端尚未添加准备任务').Count -gt 0 } 'Stopped tasks could not be removed'
     Assert-WindowStable 'stopping and removing preparation tasks'
     Invoke-Control 'AddPreparation' -ById
-    Wait-For { @(Find-Elements 'PreparationCodex' -ById).Count -gt 0 } 'Preparation dialog did not reopen'
-    Assert-DialogActionsVisible
-    Invoke-Control '取消'
-    Wait-For { @(Find-Elements 'PreparationCodex' -ById).Count -eq 0 } 'Preparation dialog was not cancelled'
-    Assert-WindowStable 'cancelling the preparation dialog'
+    Wait-For { @(Find-Elements 'PreparationDrawer' -ById).Count -eq 1 } '准备抽屉未重新打开'
+    Assert-DrawerClient 'Codex'
+    Close-PreparationDrawer
+    Assert-WindowStable '取消准备抽屉'
     Invoke-Control '运行日志'
     Wait-For { @(Find-Elements 'LogSourcePreparation' -ById).Count -gt 0 } 'Log source filters did not load'
     Assert-LogControlsVisible
@@ -463,14 +494,16 @@ try {
     $modelEvents = @($events | Where-Object path -eq '/v1/models')
     $preparationEvents = @($events | Where-Object path -ne '/v1/models')
     if (@($preparationEvents | Where-Object { -not $_.authOk }).Count -gt 0) { throw 'Preparation forwarded an incorrect credential' }
-    # 手动准备默认 Bearer；测试上游首请求接受该认证，每项任务获取 Codex/Claude 模型各一次。
+    # 手动准备默认 Bearer；Codex 两项各查一次，Claude 抽屉独立查询两次。
     if ($modelEvents.Count -ne 4 -or @($modelEvents | Where-Object { -not $_.authOk -or $_.apiKeyOk }).Count -ne 0) { throw 'Model lookup did not use the default Bearer authentication exactly once per fetch' }
     if (@($modelEvents | Where-Object authOk).Count -ne 4) { throw 'Model lookup did not use the selected provider' }
     if (@($preparationEvents | Where-Object effort -eq 'low').Count -eq 0 -or @($preparationEvents | Where-Object effort -eq 'high').Count -eq 0) { throw 'Selected reasoning efforts did not reach the preparation clients' }
     $log = Get-Content -LiteralPath (Join-Path $runtime 'logs\retry-proxy.log') -Raw
     if ($log.Contains('sk-prepare-fixture')) { throw 'Preparation logged its API key' }
     if (Test-Path -LiteralPath (Join-Path $runtime 'User\config.json')) { throw 'Preparation persisted temporary settings' }
-    Write-Host "Preparation UI verification passed; window and dialog bounds stayed unchanged. WithChannels=$($WithChannels.IsPresent), CompactWindow=$($CompactWindow.IsPresent)"
+    if ([IO.File]::ReadAllText((Join-Path $env:CLAUDE_CONFIG_DIR 'settings.json')) -cne '{}' -or
+        [IO.File]::ReadAllText((Join-Path $env:CODEX_HOME 'config.toml')) -cne '') { throw '独立准备改动了隔离客户端配置' }
+    Write-Host "准备抽屉验收通过：窗口稳定、双任务独立启停、完成后保活及日志筛选。WithChannels=$($WithChannels.IsPresent), CompactWindow=$($CompactWindow.IsPresent)"
 }
 catch {
     $logPath = Join-Path $runtime 'logs\retry-proxy.log'

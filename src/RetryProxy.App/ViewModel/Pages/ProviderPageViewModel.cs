@@ -1,5 +1,6 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using RetryProxy.Core.Balance;
 using RetryProxy.Core.Config;
 using RetryProxy.Core.Client;
 using RetryProxy.Core.Metrics;
@@ -33,7 +34,10 @@ public partial class ProviderPageViewModel : ViewModel
     private ClientType? _displayedClient;
     private long _languageRevision = -1;
     private bool _syncing;
+    private bool _isActive;
     internal ProxyWorkspace Workspace => _service.Workspace;
+    internal BalanceWorkspace Balances => _service.Balances;
+    internal PreparationWorkspace Preparations => _service.Preparations;
     public ObservableCollection<ProviderCardViewModel> Providers { get; } = [];
     [ObservableProperty] private string _query = string.Empty;
     [ObservableProperty] private bool _showSearch;
@@ -58,10 +62,28 @@ public partial class ProviderPageViewModel : ViewModel
         _switches = switches;
         _clients = clients;
         service.Refreshed += Refresh;
+        service.Tick += RefreshPreparationStates;
         Refresh();
     }
 
-    public override void OnNavigatedTo() => Refresh();
+    public override void OnNavigatedTo()
+    {
+        _isActive = true;
+        _service.SetHintTimerWanted(this, true);
+        _service.RefreshClientBalances(Workspace.SelectedClient);
+        Refresh();
+    }
+
+    public override void OnNavigatedFrom()
+    {
+        _isActive = false;
+        _service.SetHintTimerWanted(this, false);
+    }
+
+    private void RefreshPreparationStates()
+    {
+        foreach (var provider in Providers) provider.RefreshPreparations();
+    }
 
     private void Refresh()
     {
@@ -85,7 +107,8 @@ public partial class ProviderPageViewModel : ViewModel
         HasCurrentProvider = provider is not null;
         var connection = _service.Clients.Connection(Workspace.SelectedClient);
         ClientState = T(ClientTakeoverService.StatusText(connection.Status));
-        ClientError = View.Drawers.DrawerText.Error(connection.Error);
+        ClientError = connection.Error.Length > 0 ? View.Drawers.DrawerText.Error(connection.Error)
+            : T("环境变量、项目配置或其他客户端目录可能覆盖本机地址；已接管仅确认当前配置文件，不代表所有窗口已连接代理。");
         ShowTakeover = connection.Status != ClientConnectionStatus.TakenOver || !Workspace.Config.ClientTakeover[Workspace.SelectedClient].Enabled;
         CanTakeOver = !ClientConfigPaths.WritesBlocked && key is not null;
         ClientActionText = T(connection.Status is ClientConnectionStatus.Modified or ClientConnectionStatus.Unavailable ? "重新接管" : "一键接管");
@@ -100,8 +123,11 @@ public partial class ProviderPageViewModel : ViewModel
             _displayedConfig = Workspace.Config;
             _displayedClient = Workspace.SelectedClient;
             _languageRevision = I18nService.Instance.Revision;
+            if (_isActive) _service.RefreshClientBalances(Workspace.SelectedClient);
             RefreshCards();
         }
+        RefreshPreparationStates();
+        foreach (var card in Providers) card.RefreshBalances();
     }
 
     private void RefreshCards()
@@ -159,8 +185,11 @@ public partial class ProviderPageViewModel : ViewModel
         var provider = Workspace.Config.ProviderById(id);
         if (provider is null) return;
         if (Workspace.Config.Routes.Any(route => route.CurrentProviderId == id)) { Apply(T("请先切换到其他供应商的 Key")); return; }
-        if (await _dialogs.ConfirmDeleteAsync("删除供应商", string.Format(T("确认删除供应商“{0}”及其全部 Key？"), provider.Name)))
-            Apply(Workspace.RemoveProvider(id));
+        if (await _dialogs.ConfirmDeleteAsync("删除供应商", string.Format(T("确认删除供应商“{0}”及其全部 Key？关联准备任务将停止并删除。"), provider.Name)))
+        {
+            var keys = Workspace.Config.ProviderById(id)?.Keys.Select(key => new PreparationKeyRef(id, key.Id)).ToList() ?? [];
+            Apply(await _service.PreparationManagement.ChangeAsync(keys, () => Workspace.RemoveProvider(id)));
+        }
     }
     internal async Task DeleteKey(string providerId, string keyId)
     {
@@ -169,9 +198,35 @@ public partial class ProviderPageViewModel : ViewModel
         if (key is null) return;
         if (Workspace.Config.Routes.Any(route => route.CurrentProviderId == providerId && route.CurrentKeyId == keyId)) { Apply(T("请先切换到其他 Key")); return; }
         if (provider!.Keys.Count == 1) { Apply(T("每个供应商至少保留一个 Key，请改为删除供应商")); return; }
-        if (await _dialogs.ConfirmDeleteAsync("删除 Key", string.Format(T("确认删除 Key“{0}”？"), key.Name)))
-            Apply(Workspace.DeleteKey(providerId, keyId));
+        if (await _dialogs.ConfirmDeleteAsync("删除 Key", string.Format(T("确认删除 Key“{0}”？关联准备任务将停止并删除。"), key.Name)))
+            Apply(await _service.PreparationManagement.ChangeAsync([new PreparationKeyRef(providerId, keyId)],
+                () => Workspace.DeleteKey(providerId, keyId)));
     }
+
+    internal void RefreshBalance(string providerId)
+    {
+        _service.RefreshProviderBalance(providerId);
+        _service.Flush();
+    }
+
+    internal void PrepareAll(string providerId)
+    {
+        if (Workspace.Config.ProviderById(providerId) is not { } provider) return;
+        _service.PrepareKeys(provider.ClientType, provider.Keys.Select(key => new PreparationKeyRef(providerId, key.Id)));
+    }
+
+    internal void TogglePreparation(string providerId, string keyId)
+    {
+        if (Workspace.Config.ProviderById(providerId) is not { } provider) return;
+        var key = new PreparationKeyRef(providerId, keyId);
+        if (Preparations.FindForKey(key) is { CanStop: true } task)
+        {
+            Preparations.Stop(task.Id);
+            _service.Flush();
+        }
+        else _service.PrepareKeys(provider.ClientType, [key]);
+    }
+
     internal void CopyKey(string providerId, string keyId) => Copy(Workspace.Config.ProviderById(providerId)?.KeyById(keyId)?.ApiKey ?? string.Empty);
     private void Copy(string text)
     {
@@ -209,6 +264,11 @@ public partial class ProviderCardViewModel : ObservableObject
     [ObservableProperty] private bool _expanded;
     [ObservableProperty] private bool _canFold;
     [ObservableProperty] private string _foldText = string.Empty;
+    [ObservableProperty, NotifyCanExecuteChangedFor(nameof(RefreshBalanceCommand))] private bool _balanceEnabled;
+    [ObservableProperty, NotifyCanExecuteChangedFor(nameof(RefreshBalanceCommand))] private bool _isRefreshingBalance;
+    public string RefreshBalanceId => "RefreshBalance_" + Id;
+    public string MenuId => "ProviderMenu_" + Id;
+    public bool CanRefreshBalance => BalanceEnabled && !IsRefreshingBalance;
     public ObservableCollection<ProviderKeyRowViewModel> Keys { get; } = [];
     public ProviderCardViewModel(ProviderPageViewModel owner, string id) { _owner = owner; Id = id; }
     public void Refresh(ProviderEndpoint provider)
@@ -220,7 +280,9 @@ public partial class ProviderCardViewModel : ObservableObject
         Model = provider.Models.Model;
         HasWebsite = Uri.TryCreate(provider.WebsiteUrl, UriKind.Absolute, out var site) && site.Scheme is "https" or "http";
         IsCurrent = _owner.Workspace.SelectedRouteRef()?.CurrentProviderId == Id;
+        BalanceEnabled = provider.BalanceQuery.Mode != BalanceQueryMode.None;
         RefreshKeys();
+        RefreshBalances();
     }
     partial void OnExpandedChanged(bool value) => RefreshKeys();
     private void RefreshKeys()
@@ -233,9 +295,27 @@ public partial class ProviderCardViewModel : ObservableObject
         FoldText = Expanded ? ProviderPageViewModel.T("收起") : string.Format(ProviderPageViewModel.T("还有 {0} 个 Key"), _provider.Keys.Count - visible.Count);
         // 当前 Key 排在第 4 位时不显示“还有 0 个”。
         CanFold = Expanded ? _provider.Keys.Count > 3 : _provider.Keys.Count > visible.Count;
-        Keys.Clear();
-        foreach (var key in visible) Keys.Add(new ProviderKeyRowViewModel(_owner, Id, key, key.Id == selectedKey));
+        var existing = Keys.ToDictionary(row => row.Id);
+        var rows = visible.Select(key =>
+        {
+            var row = existing.GetValueOrDefault(key.Id) ?? new ProviderKeyRowViewModel(_owner, Id, key, key.Id == selectedKey);
+            row.Refresh(key, key.Id == selectedKey);
+            return row;
+        }).ToList();
+        CollectionSync.Update(Keys, rows);
     }
+    public void RefreshPreparations()
+    {
+        foreach (var key in Keys) key.RefreshPreparation();
+    }
+    public void RefreshBalances()
+    {
+        IsRefreshingBalance = _owner.Balances.IsRefreshing(Id);
+        foreach (var key in Keys) key.RefreshBalance();
+    }
+    [RelayCommand(CanExecute = nameof(CanRefreshBalance))] private void RefreshBalance() => _owner.RefreshBalance(Id);
+    public string PrepareAllId => "PrepareAll_" + Id;
+    [RelayCommand] private void PrepareAll() => _owner.PrepareAll(Id);
     [RelayCommand] private void Fold() => Expanded = !Expanded;
     [RelayCommand] private Task Edit() => _owner.EditProvider(Id);
     [RelayCommand] private Task AddKey() => _owner.EditKey(Id, null);
@@ -244,25 +324,77 @@ public partial class ProviderCardViewModel : ObservableObject
     [RelayCommand] private void Website() => _owner.OpenWebsite(Id);
 }
 
-public sealed class ProviderKeyRowViewModel
+public partial class ProviderKeyRowViewModel : ObservableObject
 {
+    private readonly ProviderPageViewModel _owner;
     public string ProviderId { get; }
     public string Id { get; }
-    public string Name { get; }
-    public string MaskedKey { get; }
-    public bool IsCurrent { get; }
+    [ObservableProperty] private string _name = string.Empty;
+    [ObservableProperty] private string _maskedKey = string.Empty;
+    [ObservableProperty] private bool _isCurrent;
+    [ObservableProperty] private string _preparationState = string.Empty;
+    [ObservableProperty] private string _preparationHint = string.Empty;
+    [ObservableProperty] private string _preparationAction = string.Empty;
+    [ObservableProperty] private bool _preparationFailed;
+    [ObservableProperty] private string _balance = string.Empty;
+    [ObservableProperty] private string _balanceHint = string.Empty;
+    [ObservableProperty] private bool _balanceCritical;
+    [ObservableProperty] private bool _balanceEnabled;
+    public string BalanceStatusId => "BalanceStatus_" + Id;
+    private bool _canPrepare = true;
     public string Marker => IsCurrent ? "●" : "○";
     public string SwitchText => ProviderPageViewModel.T(IsCurrent ? "使用中" : "切换");
+    public string PrepareId => "PrepareKey_" + Id;
+    public string PreparationStatusId => "PreparationStatus_" + Id;
     public IRelayCommand SwitchCommand { get; }
+    public IRelayCommand PrepareCommand { get; }
     public IAsyncRelayCommand EditCommand { get; }
     public IRelayCommand CopyCommand { get; }
     public IAsyncRelayCommand DeleteCommand { get; }
     public ProviderKeyRowViewModel(ProviderPageViewModel owner, string providerId, ProviderKey key, bool current)
     {
-        ProviderId = providerId; Id = key.Id; Name = key.Name; MaskedKey = key.MaskedKey; IsCurrent = current;
+        _owner = owner;
+        ProviderId = providerId;
+        Id = key.Id;
         SwitchCommand = new RelayCommand(() => owner.Switch(providerId, Id), () => !IsCurrent);
+        PrepareCommand = new RelayCommand(() => owner.TogglePreparation(providerId, Id), () => _canPrepare);
         EditCommand = new AsyncRelayCommand(() => owner.EditKey(providerId, Id));
         CopyCommand = new RelayCommand(() => owner.CopyKey(providerId, Id));
         DeleteCommand = new AsyncRelayCommand(() => owner.DeleteKey(providerId, Id));
+        Refresh(key, current);
+    }
+
+    public void Refresh(ProviderKey key, bool current)
+    {
+        Name = key.Name;
+        MaskedKey = key.MaskedKey;
+        IsCurrent = current;
+        OnPropertyChanged(nameof(Marker));
+        OnPropertyChanged(nameof(SwitchText));
+        SwitchCommand.NotifyCanExecuteChanged();
+        RefreshPreparation();
+        RefreshBalance();
+    }
+
+    public void RefreshBalance()
+    {
+        var snapshot = _owner.Balances.Get(ProviderId, Id);
+        BalanceEnabled = snapshot.IsEnabled;
+        Balance = BalanceText.Display(snapshot, ProviderPageViewModel.T);
+        BalanceHint = BalanceText.Hint(snapshot, ProviderPageViewModel.T);
+        BalanceCritical = BalanceText.IsCritical(snapshot);
+    }
+
+    public void RefreshPreparation()
+    {
+        var task = _owner.Preparations.FindForKey(new PreparationKeyRef(ProviderId, Id));
+        PreparationState = PreparationStatusText.Status(task, forKey: true);
+        PreparationHint = task is null ? string.Empty : task.LastError ?? PreparationStatusText.Statistics(task);
+        PreparationFailed = task is { CanStart: true, LastError: not null };
+        PreparationAction = ProviderPageViewModel.T(task?.CanStop == true ? "停止" : "准备");
+        var canPrepare = task is null || task.CanStart || task.CanStop;
+        if (_canPrepare == canPrepare) return;
+        _canPrepare = canPrepare;
+        PrepareCommand.NotifyCanExecuteChanged();
     }
 }

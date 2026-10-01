@@ -33,9 +33,15 @@ function Find-Control([string]$Value,[switch]$Name) {
  $property=if($Name){[Windows.Automation.AutomationElement]::NameProperty}else{[Windows.Automation.AutomationElement]::AutomationIdProperty}
  return $uia.FindFirst([Windows.Automation.TreeScope]::Descendants,[Windows.Automation.PropertyCondition]::new($property,$Value))
 }
+function Focus-App {
+ $null=[M4Capture]::SetForegroundWindow($window)
+ Wait-For { [M4Capture]::GetForegroundWindow() -eq $window } 'Test window did not receive foreground focus'
+}
 function Invoke-Control([string]$Value,[switch]$Name) {
- Wait-For { $null -ne (Find-Control $Value -Name:$Name) } "Missing $Value"
- $element=Find-Control $Value -Name:$Name; $pattern=$null
+ Focus-App
+ $ready=@{Element=$null}
+ Wait-For { $ready.Element=Find-Control $Value -Name:$Name; $null -ne $ready.Element -and $ready.Element.Current.IsEnabled -and !$ready.Element.Current.IsOffscreen } "Missing or unavailable $Value"
+ $element=$ready.Element; $pattern=$null
  if($element.TryGetCurrentPattern([Windows.Automation.InvokePattern]::Pattern,[ref]$pattern)){$pattern.Invoke()}
  else {
   $element.SetFocus()
@@ -45,8 +51,9 @@ function Invoke-Control([string]$Value,[switch]$Name) {
  Start-Sleep -Milliseconds 400
 }
 function Capture([string]$Name) {
+ # 不截图也保留焦点与动画等待，避免 -NoScreenshot 改变向导及撤销的操作条件。
+ Focus-App;Start-Sleep -Milliseconds 500
  if($NoScreenshot){return}
- $null=[M4Capture]::SetForegroundWindow($window);Start-Sleep -Milliseconds 500
  if([M4Capture]::GetForegroundWindow() -ne $window){throw 'Screenshot foreground verification failed'}
  $bounds=[RetryProxyTrayVerification]::Bounds($window)
  $bmp=[Drawing.Bitmap]::new($bounds.Right-$bounds.Left,$bounds.Bottom-$bounds.Top)
@@ -66,8 +73,27 @@ function Stop-App {
  if($app.ExitCode -ne 0){throw "App exit code $($app.ExitCode)"}
  $script:app=$null
 }
-function Claude-Config { Get-Content -Raw -LiteralPath (Join-Path $env:CLAUDE_CONFIG_DIR 'settings.json')|ConvertFrom-Json }
-function Codex-Text { Get-Content -Raw -LiteralPath (Join-Path $env:CODEX_HOME 'config.toml') }
+function Read-ClientText([string]$Path) {
+ # 读取不阻止程序原子替换；只等待短暂共享/锁冲突，权限和格式错误照常使验收失败。
+ $clock=[Diagnostics.Stopwatch]::StartNew()
+ while($true) {
+  $stream=$null;$reader=$null
+  try {
+   $stream=[IO.FileStream]::new($Path,[IO.FileMode]::Open,[IO.FileAccess]::Read,([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
+   $reader=[IO.StreamReader]::new($stream,[Text.UTF8Encoding]::new($false,$true),$true)
+   return $reader.ReadToEnd()
+  } catch {
+   $cause=$_.Exception
+   while($cause.InnerException){$cause=$cause.InnerException}
+   if($cause -isnot [IO.IOException] -or ($cause.HResult -band 0xffff) -notin @(32,33) -or $clock.ElapsedMilliseconds -ge 500){throw}
+  } finally {
+   if($reader){$reader.Dispose()}elseif($stream){$stream.Dispose()}
+  }
+  Start-Sleep -Milliseconds 25
+ }
+}
+function Claude-Config { Read-ClientText (Join-Path $env:CLAUDE_CONFIG_DIR 'settings.json')|ConvertFrom-Json }
+function Codex-Text { Read-ClientText (Join-Path $env:CODEX_HOME 'config.toml') }
 try {
  New-Item -ItemType Directory -Path $runtime,(Join-Path $runtime 'User'),(Join-Path $root '.tmp') -Force|Out-Null
  Remove-Item Env:RETRY_PROXY_CONFIG_JSON -ErrorAction SilentlyContinue
@@ -117,7 +143,8 @@ keep = "unchanged"
  Wait-For { (Claude-Config).env.ANTHROPIC_AUTH_TOKEN -eq 'abcdef0123456789abcdef0123456789' } 'Claude takeover failed'
  $claude=Claude-Config
  if($claude.env.ANTHROPIC_MODEL -ne 'retry-proxy-main[1M]' -or $claude.env.UNRELATED -ne 'keep' -or $claude.apiKeyHelper){throw 'Claude merge or independent main model failed'}
- if((Codex-Text) -notmatch 'fixture-provider' -or (Codex-Text) -notmatch '# Keep this comment' -or (Codex-Text) -notmatch 'http://127.0.0.1:28080/v1'){throw 'Codex takeover did not preserve structure'}
+ $codex=Codex-Text
+ if($codex -notmatch 'fixture-provider' -or $codex -notmatch '# Keep this comment' -or $codex -notmatch 'http://127.0.0.1:28080/v1'){throw 'Codex takeover did not preserve structure'}
  Invoke-Control 'SelectCodex'
  Invoke-Control 'switch-key'
  Wait-For { (Codex-Text) -match 'model\s*=\s*"codex-switched"' } 'Switch did not synchronize model'
@@ -125,6 +152,7 @@ keep = "unchanged"
  Invoke-Control '撤销' -Name
  Wait-For { (Codex-Text) -match 'model\s*=\s*"codex-original"' } 'Undo did not restore model'
  Invoke-Control 'ProxySettings'
+ Wait-For { $control=Find-Control 'ChannelListenPort'; $null -ne $control -and $control.Current.IsEnabled -and !$control.Current.IsOffscreen } 'Port settings drawer did not open'
  (Find-Control 'ChannelListenPort').GetCurrentPattern([Windows.Automation.ValuePattern]::Pattern).SetValue('28082')
  Invoke-Control 'DrawerSave'
  Invoke-Control '确认修改' -Name
@@ -137,12 +165,14 @@ keep = "unchanged"
  Invoke-Control 'ToggleProxy'
  Wait-For { (Codex-Text) -match '0123456789abcdef0123456789abcdef' } 'Manual restart did not take over again'
  Invoke-Control 'DrawerCancel'
+ Wait-For { $null -eq (Find-Control 'ChannelListenPort') } 'Proxy settings drawer did not close'
  Invoke-Control '软件设置' -Name
  Wait-For { $null -ne (Find-Control 'ClientSetup') } 'Client settings missing'
  Capture 'm4-client-settings'
  Stop-App
- if((Claude-Config).env.ANTHROPIC_AUTH_TOKEN -ne 'sk-claude-original' -or (Claude-Config).env.ANTHROPIC_MODEL -ne 'claude-main-fixture[1M]'){throw 'Claude exit restore failed'}
- if((Codex-Text) -notmatch 'sk-codex-original' -or (Codex-Text) -match '127.0.0.1:28080'){throw 'Codex exit restore failed'}
+ $claude=Claude-Config;$codex=Codex-Text
+ if($claude.env.ANTHROPIC_AUTH_TOKEN -ne 'sk-claude-original' -or $claude.env.ANTHROPIC_MODEL -ne 'claude-main-fixture[1M]'){throw 'Claude exit restore failed'}
+ if($codex -notmatch 'sk-codex-original' -or $codex -match '127.0.0.1:28082'){throw 'Codex exit restore failed'}
  $backups=Get-ChildItem -LiteralPath (Join-Path $runtime 'User/backup/client') -File -Recurse
  if(($backups|Where-Object Name -eq 'settings.json').Count -ne 1 -or ($backups|Where-Object Name -eq 'config.toml').Count -ne 1){throw 'Original backup missing'}
  if([IO.File]::ReadAllText(($backups|Where-Object Name -eq 'settings.json').FullName) -cne $claudeOriginal){throw 'Claude original backup changed'}
@@ -171,7 +201,16 @@ keep = "unchanged"
  Write-Host 'PASS: three-step setup, import/rename, isolated takeover, independent main model, model switch/undo, port change, manual stop/restart, original backups, exit direct restore, restart takeover, persistent cancellation, external change detection and preservation.'
 }
 catch {
- if($window -ne [IntPtr]::Zero -and $app -and !$app.HasExited){try{Capture 'm4-failure'}catch{}}
+ if($window -ne [IntPtr]::Zero -and $app -and !$app.HasExited){
+  try{Capture 'm4-failure'}catch{}
+  # 仅导出本脚本的隔离测试窗口，保留失败时的提示，区分业务拒绝与控件未就绪。
+  try {
+   $uia=[Windows.Automation.AutomationElement]::FromHandle($window)
+   $uia.FindAll([Windows.Automation.TreeScope]::Descendants,[Windows.Automation.Condition]::TrueCondition) |
+    ForEach-Object { if($_.Current.Name){ '{0}: {1}' -f $_.Current.ControlType.ProgrammaticName,$_.Current.Name } } |
+    Set-Content -LiteralPath (Join-Path $runtime 'ui-failure.txt') -Encoding utf8
+  } catch {}
+ }
  foreach($log in @('harness-error.txt','stderr.txt')){$errorFile=Join-Path $runtime $log;if(Test-Path -LiteralPath $errorFile){Get-Content -LiteralPath $errorFile}}
  throw
 }

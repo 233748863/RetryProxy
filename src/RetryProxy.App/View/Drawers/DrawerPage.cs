@@ -22,6 +22,7 @@ public abstract class DrawerPage : UserControl, IDisposable
     }
 
     public abstract string TitleKey { get; }
+    public virtual string SaveButtonKey => "保存";
     public abstract bool HasChanges { get; }
     public CancellationToken Lifetime { get; }
     public Func<Task<string?>>? CommitAsync { get; set; }

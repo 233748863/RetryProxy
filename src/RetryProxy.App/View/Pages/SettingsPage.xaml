@@ -4,8 +4,10 @@
       xmlns:b="http://schemas.microsoft.com/xaml/behaviors"
       xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
       xmlns:i18n="clr-namespace:RetryProxy.Service.I18n"
+      xmlns:markup="clr-namespace:RetryProxy.Markup"
       xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
       xmlns:pages="clr-namespace:RetryProxy.ViewModel.Pages"
+      xmlns:viewModel="clr-namespace:RetryProxy.ViewModel"
       xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
       Title="SettingsPage"
       d:DataContext="{d:DesignInstance Type=pages:SettingsPageViewModel}"
@@ -65,7 +67,7 @@
                 </ui:CardControl.Header>
             </ui:CardControl>
 
-            <!--  外观沿用主窗口的主题切换逻辑  -->
+            <!-- 直接复用主窗口的主题命令，避免页面通过祖先绑定取不到命令。 -->
             <ui:CardControl Margin="0,0,0,12" Icon="{ui:SymbolIcon Blur24}">
                 <ui:CardControl.Header>
                     <StackPanel>
@@ -75,7 +77,7 @@
                     </StackPanel>
                 </ui:CardControl.Header>
                 <ui:Button AutomationProperties.AutomationId="SwitchAppearance"
-                           Command="{Binding DataContext.SwitchBackdropCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                           Command="{Binding SwitchBackdropCommand, Source={markup:ServiceLocator Type={x:Type viewModel:MainWindowViewModel}}}"
                            Content="{i18n:T 切换外观}" Icon="{ui:SymbolIcon Blur24}" />
             </ui:CardControl>
 
@@ -102,7 +104,8 @@
                         </DataTemplate></ItemsControl.ItemTemplate>
                     </ItemsControl>
                     <TextBlock Text="{i18n:T 配置和备份含明文 Key，请妥善保管。}" TextWrapping="Wrap" />
-                    <TextBlock Text="{i18n:T Claude Code 项目目录中的地址设置可能覆盖接管配置；项目级覆盖不会被自动检测。}" TextWrapping="Wrap" Margin="0,6,0,0" />
+                    <TextBlock Text="{i18n:T 环境变量、项目配置或其他客户端目录可能覆盖本机地址；已接管仅确认当前配置文件，不代表所有窗口已连接代理。}" TextWrapping="Wrap" Margin="0,6,0,0" />
+                    <TextBlock Text="{i18n:T 本机代理统一使用当前 Key；本机其他程序也能使用该 Key。}" TextWrapping="Wrap" Margin="0,6,0,0" />
                     <TextBlock Text="{i18n:T 软件意外退出后，重新启动本软件可恢复连接。}" TextWrapping="Wrap" Margin="0,6,0,10" />
                     <ui:Button Content="{i18n:T 打开首次设置向导}" Command="{Binding ClientSetupCommand}" HorizontalAlignment="Left" AutomationProperties.AutomationId="ClientSetup" />
                 </StackPanel>

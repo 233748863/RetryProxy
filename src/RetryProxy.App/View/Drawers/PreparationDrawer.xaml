@@ -1,0 +1,98 @@
+<drawers:DrawerPage x:Class="RetryProxy.View.Drawers.PreparationDrawer"
+                    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:drawers="clr-namespace:RetryProxy.View.Drawers"
+                    xmlns:behavior="clr-namespace:RetryProxy.View.Behavior"
+                    xmlns:i18n="clr-namespace:RetryProxy.Service.I18n"
+                    xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+                    AutomationProperties.AutomationId="PreparationDrawer">
+    <StackPanel>
+        <TextBlock Text="{i18n:T 准备客户端}" Margin="0,0,0,4" />
+        <TextBlock x:Name="ClientText" FontWeight="SemiBold"
+                   AutomationProperties.AutomationId="PreparationClient" />
+        <TextBlock Text="{i18n:T 供应商来源}" Margin="0,16,0,4" />
+        <RadioButton x:Name="CurrentRadio" GroupName="preparation-source" Checked="SourceChanged"
+                     AutomationProperties.AutomationId="PreparationLocalProvider">
+            <TextBlock Text="{i18n:T 跟随当前}" AutomationProperties.AutomationId="PrepareCurrentProvider" />
+        </RadioButton>
+        <TextBlock x:Name="CurrentTargetText" Margin="28,4,0,0" TextWrapping="Wrap"
+                   Foreground="{ui:ThemeResource TextFillColorSecondaryBrush}" />
+        <RadioButton x:Name="ListRadio" GroupName="preparation-source" Checked="SourceChanged"
+                     Margin="0,8,0,0" Content="{i18n:T 从列表选择}"
+                     AutomationProperties.AutomationId="PreparationListProvider" />
+        <StackPanel x:Name="ListPanel" Margin="28,8,0,0" Visibility="Collapsed">
+            <TextBlock Text="{i18n:T 供应商}" Margin="0,0,0,4" />
+            <ComboBox x:Name="ProviderBox" SelectionChanged="ProviderChanged" HorizontalAlignment="Stretch"
+                      AutomationProperties.Name="{i18n:T 供应商}"
+                      AutomationProperties.AutomationId="PreparationProvider" />
+            <TextBlock x:Name="SelectionHint" Margin="0,8,0,6" TextWrapping="Wrap"
+                       Foreground="{ui:ThemeResource TextFillColorSecondaryBrush}" />
+            <StackPanel x:Name="KeyRows" />
+            <TextBlock x:Name="NoKeysText" Text="{i18n:T 该供应商还没有 Key}" TextWrapping="Wrap"
+                       Foreground="{ui:ThemeResource TextFillColorSecondaryBrush}" Visibility="Collapsed" />
+            <ui:Button x:Name="ClearSelectionButton" Content="{i18n:T 清空选择}" Click="ClearSelectionClicked"
+                       Appearance="Transparent" HorizontalAlignment="Left" Margin="0,4,0,0"
+                       AutomationProperties.AutomationId="PreparationClearKeys" />
+        </StackPanel>
+        <RadioButton x:Name="CustomRadio" GroupName="preparation-source" Checked="SourceChanged"
+                     Margin="0,8,0,0" AutomationProperties.AutomationId="PreparationCustomProvider">
+            <TextBlock Text="{i18n:T 手动填写}" AutomationProperties.AutomationId="PrepareCustomProvider" />
+        </RadioButton>
+        <StackPanel x:Name="CustomPanel" Margin="28,8,0,0" Visibility="Collapsed">
+            <TextBlock Text="{i18n:T 供应商地址}" Margin="0,0,0,4" />
+            <ui:TextBox x:Name="ProviderUrlBox" TextChanged="CredentialChanged"
+                        behavior:ClipboardInterceptor.EnableUrlPaste="True"
+                        AutomationProperties.Name="{i18n:T 供应商地址}"
+                        AutomationProperties.AutomationId="PreparationProviderUrl" />
+            <TextBlock Text="{i18n:T API Key}" Margin="0,12,0,4" />
+            <PasswordBox x:Name="SecretBox" PasswordChanged="SecretChanged"
+                         AutomationProperties.Name="{i18n:T API Key}"
+                         AutomationProperties.AutomationId="PreparationApiKey" />
+            <ui:TextBox x:Name="VisibleSecretBox" TextChanged="VisibleSecretChanged" Visibility="Collapsed"
+                        SpellCheck.IsEnabled="False" AutomationProperties.Name="{i18n:T API Key}"
+                        AutomationProperties.AutomationId="PreparationVisibleApiKey" />
+            <CheckBox x:Name="ShowSecretCheck" Content="{i18n:T 显示密钥}" Margin="0,8,0,0"
+                      Checked="SecretVisibilityChanged" Unchecked="SecretVisibilityChanged" />
+            <TextBlock Text="{i18n:T 密钥随任务保存在本机配置文件中，未加密。}" TextWrapping="Wrap"
+                       Margin="0,6,0,0" Foreground="{ui:ThemeResource TextFillColorSecondaryBrush}" />
+        </StackPanel>
+        <TextBlock Text="{i18n:T 准备模型}" Margin="0,20,0,4" />
+        <ComboBox x:Name="ModelBox" IsEditable="True" IsTextSearchEnabled="False" HorizontalAlignment="Stretch"
+                  AutomationProperties.Name="{i18n:T 准备模型}" AutomationProperties.AutomationId="PreparationModel"
+                  ToolTip="{i18n:T 可输入或粘贴模型名称，也可获取后选择}" />
+        <TextBlock x:Name="ModelHint" Margin="0,4,0,0" TextWrapping="Wrap"
+                   Foreground="{ui:ThemeResource TextFillColorSecondaryBrush}" />
+        <WrapPanel Margin="0,8,0,0">
+            <ui:Button x:Name="FetchButton" Content="{i18n:T 获取模型}" Click="FetchClicked"
+                       AutomationProperties.AutomationId="PreparationFetchModels" />
+            <ui:Button x:Name="CancelFetchButton" Content="{i18n:T 取消获取}" Click="CancelFetchClicked"
+                       Margin="8,0,0,0" Visibility="Collapsed" />
+        </WrapPanel>
+        <TextBlock x:Name="FetchStatus" Margin="0,6,0,0" TextWrapping="Wrap"
+                   AutomationProperties.LiveSetting="Polite"
+                   Foreground="{ui:ThemeResource TextFillColorSecondaryBrush}" />
+        <TextBlock Text="{i18n:T 思考强度}" Margin="0,12,0,4" />
+        <ComboBox x:Name="ReasoningEffortBox" SelectionChanged="InputSelectionChanged"
+                  HorizontalAlignment="Stretch" AutomationProperties.Name="{i18n:T 思考强度}"
+                  AutomationProperties.AutomationId="PreparationReasoningEffort"
+                  ToolTip="{i18n:T 默认沿用客户端设置；其余档位需要所选模型支持。}" />
+        <TextBlock Text="{i18n:T 准备及后续保活均使用所选强度}" TextWrapping="Wrap" Margin="0,4,0,0"
+                   Foreground="{ui:ThemeResource TextFillColorSecondaryBrush}" />
+        <TextBlock Text="{i18n:T 独立保活间隔}" Margin="0,12,0,4" />
+        <StackPanel Orientation="Horizontal">
+            <ui:TextBox x:Name="IdleMinutesBox" Width="88" TextChanged="InputChanged"
+                        AutomationProperties.Name="{i18n:T 独立保活间隔}"
+                        AutomationProperties.AutomationId="PreparationIdleMinutes"
+                        ToolTip="{i18n:T 允许输入 0.5～1440 分钟}" />
+            <TextBlock Text="{i18n:T 分钟}" VerticalAlignment="Center" Margin="8,0,0,0" />
+        </StackPanel>
+        <TextBlock x:Name="PlanText" Margin="0,16,0,0" TextWrapping="Wrap"
+                   AutomationProperties.AutomationId="PreparationPlan"
+                   AutomationProperties.LiveSetting="Polite"
+                   Foreground="{ui:ThemeResource TextFillColorSecondaryBrush}" />
+        <TextBlock x:Name="SourcePlanText" Margin="0,6,0,0" TextWrapping="Wrap"
+                   Foreground="{ui:ThemeResource TextFillColorSecondaryBrush}" />
+        <TextBlock Text="{i18n:T 准备结果不会发送到用户对话。}" Margin="0,6,0,0" TextWrapping="Wrap"
+                   Foreground="{ui:ThemeResource TextFillColorSecondaryBrush}" />
+    </StackPanel>
+</drawers:DrawerPage>

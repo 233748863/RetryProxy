@@ -300,7 +300,7 @@ public sealed class PreparationWorkspaceTests
         options.Mode = PrepareMode.LocalProvider;
         fixture.Preparations.LocalProviderResolver = _ => throw new WorkspaceException("本机配置不存在");
         Assert.False(fixture.Preparations.SubmitPrepareDialog(options));
-        Assert.Equal("本机配置不存在", options.Error);
+        Assert.Equal("无法读取准备目标，请检查供应商与 Key 设置", options.Error);
         Assert.Empty(fixture.Preparations.Tasks);
     }
 

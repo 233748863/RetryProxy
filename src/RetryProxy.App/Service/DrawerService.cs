@@ -84,7 +84,15 @@ public sealed class DrawerService
                 return await _legacyDialogs.ConfirmDeleteAsync(title, body);
             };
             drawer.EditKeyAsync = key => EditDraftKeyAsync(drawer.Draft, key);
-            drawer.CommitAsync = () => Task.FromResult(drawer.ReadDraft() ?? Workspace.SaveProvider(drawer.Draft, isNew));
+            drawer.CommitAsync = async () =>
+            {
+                if (drawer.ReadDraft() is { } error) return error;
+                var removed = Workspace.Config.ProviderById(drawer.Draft.Id)?.Keys
+                    .Where(key => drawer.Draft.KeyById(key.Id) is null)
+                    .Select(key => new PreparationKeyRef(drawer.Draft.Id, key.Id)).ToList() ?? [];
+                return await _workspaceService.PreparationManagement.ChangeAsync(removed,
+                    () => Workspace.SaveProvider(drawer.Draft, isNew), drawer.Lifetime);
+            };
             drawer.RefreshKeys();
             var previousSelection = string.Empty;
             void RefreshSelection()
@@ -131,6 +139,37 @@ public sealed class DrawerService
             using var drawer = new KeyDrawer(provider.Clone(), key, isNew, nested: false);
             drawer.CommitAsync = () => Task.FromResult(drawer.ReadDraft() ?? Workspace.SaveKey(providerId, drawer.Draft, isNew));
             if (await host.ShowAsync(drawer)) Saved();
+        }
+        finally { _editing = false; }
+    }
+
+    public async Task EditPreparationAsync(PreparationDialogState options)
+    {
+        var host = Host;
+        if (_editing || host.IsOpen) return;
+        _editing = true;
+        try
+        {
+            var preparations = _workspaceService.Preparations;
+            var task = preparations.Find(options.TaskId);
+            if (task is not null && !task.CanStart) { ShowMessage("请先停止这项准备，再修改设置"); return; }
+            using var drawer = new PreparationDrawer(preparations, Workspace, options, task is null);
+            drawer.CommitAsync = () =>
+            {
+                var error = drawer.ReadDraft();
+                if (error is null && !preparations.SubmitPrepareDialog(drawer.Draft)) error = drawer.Draft.Error;
+                return Task.FromResult(error);
+            };
+            _workspaceService.Refreshed += drawer.RefreshChoices;
+            try
+            {
+                if (await host.ShowAsync(drawer))
+                {
+                    _workspaceService.Flush();
+                    _workspaceService.ShowPreparationStarted(drawer.Draft.StartedCount);
+                }
+            }
+            finally { _workspaceService.Refreshed -= drawer.RefreshChoices; }
         }
         finally { _editing = false; }
     }
@@ -209,7 +248,7 @@ public sealed class DrawerService
         if (state is ServiceState.Starting or ServiceState.Stopping) return "代理正在启动或停止，请稍后再试";
         if (state == ServiceState.Running)
         {
-            if (!await ConfirmAsync("停止代理", "停止代理后，已接管的客户端将恢复直连当前 Key，当前连接将中断。已打开的 Codex 会话需要重新打开。", "确认停止")) return null;
+            if (!await ConfirmAsync("停止代理", "停止代理后，已接管的客户端将恢复直连当前 Key，当前连接将中断。已打开的客户端窗口需要重新打开。", "确认停止")) return null;
             drawer.Lifetime.ThrowIfCancellationRequested();
             if (_workspaceService.Clients.StopRoute(drawer.RouteId) is { } stopError) return stopError;
             _workspaceService.Flush();

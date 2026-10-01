@@ -93,6 +93,12 @@ public sealed partial class ProxyWorkspace
             }
         }
 
+        // 草稿打开后后台可能识别出了接口。未改查询来源时保留最新识别；改地址/模式则重新识别。
+        if (existing is not null)
+            provider.BalanceQuery.Detected = provider.BaseUrl == existing.BaseUrl && provider.BalanceQuery.Mode == existing.BalanceQuery.Mode
+                ? existing.BalanceQuery.Detected : null;
+        if (provider.BalanceQuery.Mode != BalanceQueryMode.Auto) provider.BalanceQuery.Detected = null;
+
         foreach (var key in provider.Keys)
         {
             if (key.Id.Length == 0)

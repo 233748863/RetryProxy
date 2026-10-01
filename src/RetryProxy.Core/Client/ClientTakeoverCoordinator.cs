@@ -28,6 +28,8 @@ public sealed class ClientTakeoverCoordinator
     private readonly Dictionary<ClientType, ServiceState> _states = new();
     private readonly Dictionary<ClientType, ChannelSnapshot> _snapshots = new();
     private readonly Dictionary<ClientType, ClientConnectionInfo> _connections = new();
+    private readonly Dictionary<ClientType, SynchronizationAttempt> _syncAttempts = new();
+    private const int MaxSynchronizationAttempts = 3;
     private bool _busy;
     private bool _closing;
 
@@ -104,12 +106,20 @@ public sealed class ClientTakeoverCoordinator
         var client = route.ClientType;
         var currentState = _workspace.RouteState(route.Id);
         var known = _states.TryGetValue(client, out var previousState);
-        _states[client] = currentState;
-        if (_workspace.Config.CurrentKeyOf(route) is null) return;
+        if (_workspace.Config.CurrentKeyOf(route) is null)
+        {
+            _states[client] = currentState;
+            _snapshots.Remove(client);
+            _syncAttempts.Remove(client);
+            return;
+        }
         var snapshot = _workspace.Config.SnapshotFor(route.Id);
         _snapshots.TryGetValue(client, out var previous);
-        _snapshots[client] = snapshot;
-        if (!State(client).Enabled || ClientConfigPaths.WritesBlocked) return;
+        if (!State(client).Enabled || ClientConfigPaths.WritesBlocked)
+        {
+            RememberSnapshot(client, currentState, snapshot);
+            return;
+        }
 
         bool? useProxy = null;
         var modelsOnly = false;
@@ -126,14 +136,52 @@ public sealed class ClientTakeoverCoordinator
             && (!SameModels(previous, snapshot) || previous.ApiKey != snapshot.ApiKey
                 || previous.UpstreamBaseUrl != snapshot.UpstreamBaseUrl || previous.AuthMode != snapshot.AuthMode))
             useProxy = false;
-        if (useProxy is null) return;
-        if (!CanUpdateAutomatically(client, previous ?? snapshot)
-            || modelsOnly && !Store(client).IsTakenOver(snapshot, route.ListenPort))
+        if (useProxy is null)
         {
-            ExternalChange(client);
+            RememberSnapshot(client, currentState, snapshot);
             return;
         }
-        if (Apply(client, useProxy.Value, modelsOnly) is { } error) Failed(client, error);
+
+        // 保存失败不冒充已同步；后续事件刷新最多再尝试两次，不新增轮询或重复弹出同一提示。
+        // 例如直连 A 改为 B 失败后，仍以成功写过的 A 核对文件，避免把旧配置误判成外部修改。
+        if (!_syncAttempts.TryGetValue(client, out var attempt) || !attempt.Matches(currentState, snapshot, route.ListenPort))
+            _syncAttempts[client] = attempt = new(currentState, snapshot, route.ListenPort);
+        if (attempt.Count >= MaxSynchronizationAttempts) return;
+        attempt.Count++;
+        try
+        {
+            if (!CanUpdateAutomatically(client, previous ?? snapshot)
+                || modelsOnly && !Store(client).IsTakenOver(snapshot, route.ListenPort))
+            {
+                RememberSnapshot(client, currentState, snapshot);
+                ExternalChange(client);
+                return;
+            }
+            if (Apply(client, useProxy.Value, modelsOnly) is { } error)
+                Failed(client, error, notify: attempt.Count == 1);
+        }
+        catch (ClientConfigException error)
+        {
+            LogFailure(client, error);
+            Failed(client, error.Message, notify: attempt.Count == 1);
+        }
+    }
+
+    private void RememberSnapshot(ClientType client, ServiceState state, ChannelSnapshot snapshot)
+    {
+        _states[client] = state;
+        _snapshots[client] = snapshot;
+        _syncAttempts.Remove(client);
+    }
+
+    private sealed class SynchronizationAttempt(ServiceState state, ChannelSnapshot snapshot, int listenPort)
+    {
+        public int Count { get; set; }
+
+        public bool Matches(ServiceState currentState, ChannelSnapshot current, int port) => state == currentState
+            && listenPort == port && snapshot.SameKeyAs(current) && SameModels(snapshot, current)
+            && snapshot.ApiKey == current.ApiKey && snapshot.AuthMode == current.AuthMode
+            && snapshot.UpstreamBaseUrl == current.UpstreamBaseUrl && snapshot.LocalToken == current.LocalToken;
     }
 
     public string? TakeOver(ClientType client)
@@ -175,6 +223,7 @@ public sealed class ClientTakeoverCoordinator
     public void Shutdown()
     {
         _closing = true;
+        _syncAttempts.Clear();
         foreach (var route in _workspace.Config.Routes.ToArray())
         {
             if (!State(route.ClientType).Enabled || ClientConfigPaths.WritesBlocked) continue;
@@ -198,6 +247,7 @@ public sealed class ClientTakeoverCoordinator
         if (_workspace.Config.CurrentKeyOf(route) is null) return "请先为当前客户端添加并选择 Key";
         try
         {
+            var serviceState = _workspace.RouteState(route.Id);
             var request = new ClientConfigRequest
             {
                 Channel = _workspace.Config.SnapshotFor(route.Id), ListenPort = route.ListenPort,
@@ -208,12 +258,22 @@ public sealed class ClientTakeoverCoordinator
                 if (_workspace.SaveClientTakeover(client, updated) is not null)
                     throw new ClientConfigException("接管状态保存失败，客户端配置已回滚");
             });
-            _snapshots[client] = request.Channel;
+            RememberSnapshot(client, serviceState, request.Channel);
             Detect(client);
             return null;
         }
-        catch (ClientConfigException error) { return error.Message; }
+        catch (ClientConfigException error)
+        {
+            LogFailure(client, error);
+            return error.Message;
+        }
         catch (ConfigException) { return "当前供应商配置无效，客户端配置未修改"; }
+    }
+
+    private void LogFailure(ClientType client, ClientConfigException error)
+    {
+        if (error.Diagnostic is { } diagnostic)
+            _workspace.Logger.Route(client.Label()).Warn($"客户端配置操作失败：{diagnostic}");
     }
 
     private bool CanUpdateAutomatically(ClientType client, ChannelSnapshot previous)

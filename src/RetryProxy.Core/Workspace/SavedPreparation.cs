@@ -47,12 +47,22 @@ public sealed class SavedPreparation
     /// <summary>保活间隔分钟数，保存对话框里提交成功的文本，例如 <c>7.5</c>。</summary>
     public string IdleMinutes { get; set; } = string.Empty;
 
-    /// <summary>来源为 <see cref="ListSource"/> 时的供应商 ID。</summary>
+    /// <summary>管理任务上次开始时实际绑定的供应商 ID；跟随当前也保存，便于唯一性检查和联动删除。</summary>
     public string ProviderId { get; set; } = string.Empty;
 
-    /// <summary>来源为 <see cref="ListSource"/> 时的 Key ID。</summary>
     public string KeyId { get; set; } = string.Empty;
 
-    /// <summary>上次退出时任务是否在运行；为 true 的任务启动后自动恢复（PRD-供应商管理 P10）。</summary>
+    public string ProviderName { get; set; } = string.Empty;
+
+    public string KeyName { get; set; } = string.Empty;
+
+    /// <summary>启动/停止意图；退出停止服务时保留，启动后由 ResumeRunning 恢复。</summary>
     public bool WasRunning { get; set; }
+
+    /// <summary>本地日期 yyyy-MM-dd；每日轮次含成功、失败、中断，不含仍在执行的轮次。</summary>
+    public string DailyDate { get; set; } = string.Empty;
+
+    public ulong DailyRounds { get; set; }
+
+    public ulong DailySuccesses { get; set; }
 }

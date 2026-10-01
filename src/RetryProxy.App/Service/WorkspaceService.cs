@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using RetryProxy.Core.Balance;
 using RetryProxy.Core.Config;
 using RetryProxy.Core.Client;
 using RetryProxy.Core.Cli;
@@ -8,6 +9,7 @@ using RetryProxy.Helpers.Win32;
 using RetryProxy.Service.Interface;
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
@@ -32,6 +34,10 @@ public sealed class WorkspaceService
     private readonly ProxyLogger _proxyLogger;
     private readonly DispatcherTimer _refreshTimer;
     private readonly DispatcherTimer _hintTimer;
+    private readonly DispatcherTimer _balanceTimer;
+    private readonly BalanceFetcher _balanceFetcher;
+    private ProxyConfig? _balanceConfig;
+    private DateTimeOffset? _nextBalanceRefreshAt;
     private readonly HashSet<object> _hintSubscribers = new();
     private int _refreshQueued;
     private bool _started;
@@ -43,40 +49,53 @@ public sealed class WorkspaceService
         _proxyLogger = proxyLogger;
         _snackbar = snackbar;
         var all = configService.Get();
-        Workspace = new ProxyWorkspace(proxyLogger, all.Proxy ?? ProxyConfig.Builtin(), config =>
-        {
-            var previous = all.Proxy;
-            try
-            {
-                all.Proxy = config;
-                configService.SaveChecked();
-            }
-            catch
-            {
-                all.Proxy = previous;
-                throw;
-            }
-        });
+        Workspace = new ProxyWorkspace(proxyLogger, all.Proxy ?? ProxyConfig.Builtin(), SaveProxyConfig);
         Workspace.BeforeDestructiveChange = configService.BackupBeforeDeletion;
         Workspace.NoticePosted += OnNoticePosted;
         I18n.I18nService.Instance.PropertyChanged += (_, _) => RequestRefresh();
         Preparations = new PreparationWorkspace(proxyLogger, all.Preparations, preparations =>
         {
-            all.Preparations = preparations;
-            configService.Save();
-        }, client =>
+            var previous = all.Preparations;
+            try
+            {
+                all.Preparations = preparations;
+                configService.SaveChecked();
+            }
+            catch
+            {
+                all.Preparations = previous;
+                throw;
+            }
+        }, targetResolver: (client, key) => PreparationCatalog.Resolve(Workspace.Config, client, key));
+        PreparationManagement = new PreparationCatalog(() => Workspace.Config, Preparations, (proxy, preparations) =>
         {
-            var route = Workspace.Config.RouteFor(client);
-            var provider = route is null ? null : Workspace.Config.ProviderById(route.CurrentProviderId);
-            var key = route is null ? null : Workspace.Config.CurrentKeyOf(route);
-            if (provider is null || key is null) throw new WorkspaceException("请先为当前客户端添加并选择 Key");
-            return CliCredential.Create(key.ApiKey, provider.BaseUrl, authMode: provider.AuthMode);
+            var previousProxy = all.Proxy;
+            var previousPreparations = all.Preparations;
+            try
+            {
+                all.Proxy = proxy;
+                all.Preparations = preparations;
+                configService.SaveChecked();
+            }
+            catch
+            {
+                all.Proxy = previousProxy;
+                all.Preparations = previousPreparations;
+                throw;
+            }
         });
         Preparations.NoticePosted += ShowNotice;
         _refreshTimer = new DispatcherTimer(DispatcherPriority.Background) { Interval = NotifyRepaintDelay };
         _refreshTimer.Tick += (_, _) => Flush();
         _hintTimer = new DispatcherTimer(DispatcherPriority.Background) { Interval = TimeSpan.FromSeconds(1) };
         _hintTimer.Tick += (_, _) => Tick?.Invoke();
+        _balanceFetcher = new BalanceFetcher(Global.Version);
+        Balances = new BalanceWorkspace((request, cancellation) => _balanceFetcher.FetchAsync(
+            request.BaseUrl, request.ApiKey, request.Query, cancellation), Workspace.RememberBalanceDetection);
+        Balances.SetUiNotifier(RequestRefresh);
+        SynchronizeBalances();
+        _balanceTimer = new DispatcherTimer(DispatcherPriority.Background) { Interval = BalanceWorkspace.BackgroundRefreshAge };
+        _balanceTimer.Tick += (_, _) => RefreshBackgroundBalances();
         Workspace.SetUiNotifier(RequestRefresh);
         Preparations.SetUiNotifier(RequestRefresh);
         Workspace.RefreshServices();
@@ -92,6 +111,61 @@ public sealed class WorkspaceService
     public ProxyWorkspace Workspace { get; }
 
     public PreparationWorkspace Preparations { get; }
+    public PreparationCatalog PreparationManagement { get; }
+    public BalanceWorkspace Balances { get; }
+
+    private void SynchronizeBalances()
+    {
+        if (ReferenceEquals(_balanceConfig, Workspace.Config)) return;
+        _balanceConfig = Workspace.Config;
+        Balances.Synchronize(_balanceConfig);
+    }
+
+    public void RefreshClientBalances(ClientType client)
+    {
+        SynchronizeBalances();
+        Balances.RefreshClient(client);
+    }
+
+    public void RefreshProviderBalance(string providerId)
+    {
+        SynchronizeBalances();
+        Balances.RefreshProvider(providerId);
+    }
+
+    private void RefreshBackgroundBalances()
+    {
+        if (!_started) return;
+        SynchronizeBalances();
+        var current = Workspace.Config.Routes.Select(route => new BalanceKey(route.CurrentProviderId, route.CurrentKeyId));
+        var ready = Preparations.Tasks.Where(task => task.IsReady && task.Mode != PrepareMode.CustomProvider)
+            .Select(task => new BalanceKey(task.ProviderId, task.KeyId));
+        var keys = current.Concat(ready).Distinct().ToArray();
+        Balances.RefreshBackground(keys);
+        // 按最早到期项唤醒，不做固定轮询。例如第 25 分钟手动刷新后，下次在第 55 分钟查询。
+        var next = Balances.NextBackgroundRefreshAt(keys);
+        if (next == _nextBalanceRefreshAt && _balanceTimer.IsEnabled) return;
+        _balanceTimer.Stop();
+        _nextBalanceRefreshAt = next;
+        if (next is null) return;
+        var delay = next.Value - DateTimeOffset.UtcNow;
+        _balanceTimer.Interval = delay > TimeSpan.Zero ? delay : TimeSpan.FromMilliseconds(1);
+        _balanceTimer.Start();
+    }
+
+    private void SaveProxyConfig(ProxyConfig config) => PreparationManagement.SaveProxy(config);
+
+    public void PrepareKeys(ClientType client, IEnumerable<PreparationKeyRef> keys)
+    {
+        var error = Preparations.PrepareKeys(client, keys, out var started);
+        if (error is not null) ShowNotice(error);
+        else if (started > 0) ShowPreparationStarted(started);
+        else ShowNotice("所选 Key 已在准备或保活中");
+        Flush();
+    }
+
+    public void ShowPreparationStarted(int count) => ShowNotice(string.Format(
+        I18n.I18nService.Instance.Translate("已开始准备 {0} 个 Key"), count));
 
     /// <summary>界面线程上的日志缓冲。</summary>
     public LogBuffer Logs { get; } = new();
@@ -116,15 +190,19 @@ public sealed class WorkspaceService
         _started = true;
         _ = Task.Run(ConsumeLogsAsync);
         Workspace.StartDesiredRoutes();
+        Preparations.ResumeRunning();
         Clients.Detect();
         Flush();
     }
 
     public void Shutdown()
     {
+        _started = false;
+        _balanceTimer.Stop();
+        Balances.Dispose();
+        _balanceFetcher.Dispose();
         Clients.Shutdown();
-        Preparations.Shutdown();
-        Workspace.Shutdown();
+        PreparationManagement.Shutdown(Workspace);
         _refreshTimer.Stop();
         _hintTimer.Stop();
     }
@@ -191,6 +269,11 @@ public sealed class WorkspaceService
             Workspace.PollServiceErrors();
             Clients.Refresh();
             Preparations.Poll();
+            // 先撤销旧地址/密钥的查询，再接纳结果；识别回写配置后同步下一轮请求快照。
+            SynchronizeBalances();
+            Balances.Poll();
+            SynchronizeBalances();
+            RefreshBackgroundBalances();
             while (Workspace.PollPreparationEvents())
             {
             }

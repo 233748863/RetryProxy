@@ -20,7 +20,7 @@ using Xunit;
 namespace RetryProxy.Tests;
 
 /// <summary>
-/// PRD-供应商管理 §4.2、§7、§12.4–12.6：本地口令注入与透传、访问限制，以及用假上游 A、B 验证的即时切换。
+/// PRD-供应商管理 §4.2、§7、§12.4–12.6：统一注入当前 Key、访问限制，以及用假上游 A、B 验证的即时切换。
 /// </summary>
 public class ChannelSwitchTests
 {
@@ -79,38 +79,43 @@ public class ChannelSwitchTests
 
     // ---------------------------------------------------------------- 注入与透传（§7）
 
-    [Fact]
-    public async Task OnlyRequestsCarryingTheLocalTokenGetTheCurrentKey()
+    [Theory]
+    [InlineData(ClientType.Claude)]
+    [InlineData(ClientType.Codex)]
+    public async Task AllManagedRequestsUseTheCurrentKeyRegardlessOfIncomingCredentials(ClientType clientType)
     {
         var seen = new ConcurrentQueue<(string Authorization, string ApiKey, string Body)>();
         await using var fixture = await Start(async context =>
         {
             seen.Enqueue((context.Request.Headers.Authorization.ToString(), context.Request.Headers["x-api-key"].ToString(), await Upstream.ReadBody(context)));
+            Assert.False(context.Request.Headers.ContainsKey("api-key"));
             await Upstream.Json(context, 200, "{\"ok\":true}");
-        }, upstream => Key(upstream, "a", "sk-real-a", "gpt-5.2"));
+        }, upstream => Key(upstream, "a", "sk-real-a", "gpt-5.2", clientType), clientType);
         using var client = TestClient.Create();
         const string body = "{\"model\":\"gpt-4o\",\"input\":\"hi\"}";
-        var url = $"{fixture.Address}/v1/responses";
+        var url = $"{fixture.Address}/v1/{(clientType == ClientType.Claude ? "messages" : "responses")}";
         Assert.Equal(HttpStatusCode.OK, await Post(client, url, body, Token()));
         await TestClock.WaitUntil(() => fixture.Metrics.Snapshot().ActiveRequests == 0);
         // 保活模板取注入前的请求头：内存里只有本地口令，没有真实 Key。
         Assert.Equal($"Bearer {LocalToken}", fixture.Proxy.KeepAlive.Template()!.Headers.Get("authorization"));
         Assert.Equal(HttpStatusCode.OK, await Post(client, url, body, new Dictionary<string, string> { ["x-api-key"] = LocalToken }));
-        // 未接管的旧用法（客户端自带 Key）与口令不对的请求：原样透传，不注入、不改模型。
+        // 旧真实 Key、不匹配的口令、空凭据以及混合认证头都由代理替换，绝不发给当前供应商。
         Assert.Equal(HttpStatusCode.OK, await Post(client, url, body, Auth("Bearer sk-client")));
         Assert.Equal(HttpStatusCode.OK, await Post(client, url, body, Auth($"Bearer {LocalToken}-other")));
+        Assert.Equal(HttpStatusCode.OK, await Post(client, url, body, new()));
+        Assert.Equal(HttpStatusCode.OK, await Post(client, url, body, new()
+        {
+            ["Authorization"] = "Bearer sk-client", ["x-api-key"] = "sk-old-api-key", ["api-key"] = "sk-legacy-key",
+        }));
 
         const string injectedBody = "{\"model\":\"gpt-5.2\",\"input\":\"hi\"}";
-        Assert.Collection(seen,
-            injected => Assert.Equal(("Bearer sk-real-a", string.Empty, injectedBody), injected),
-            injected => Assert.Equal(("Bearer sk-real-a", string.Empty, injectedBody), injected),
-            passed => Assert.Equal(("Bearer sk-client", string.Empty, body), passed),
-            passed => Assert.Equal(($"Bearer {LocalToken}-other", string.Empty, body), passed));
+        Assert.Equal(6, seen.Count);
+        Assert.All(seen, injected => Assert.Equal(("Bearer sk-real-a", string.Empty, injectedBody), injected));
         var logs = await fixture.CompletedLogs();
         Assert.Contains("，Any · 主号，模型改写 gpt-4o → gpt-5.2", logs);
-        Assert.Contains("，Any · 客户端凭据", logs);
+        Assert.DoesNotContain("客户端凭据", logs);
         var health = await client.GetStringAsync($"{fixture.Address}/_retry/health");
-        foreach (var secret in new[] { "sk-real-a", LocalToken })
+        foreach (var secret in new[] { "sk-real-a", LocalToken, "sk-client", "sk-old-api-key", "sk-legacy-key" })
         {
             Assert.DoesNotContain(secret, logs);
             Assert.DoesNotContain(secret, health);
@@ -140,7 +145,7 @@ public class ChannelSwitchTests
     }
 
     [Fact]
-    public async Task TokenRequestsWithoutAKeyAreAnsweredLocally()
+    public async Task ManagedRequestsWithoutAKeyAreAnsweredLocally()
     {
         var hits = 0;
         await using var fixture = await Start(context =>
@@ -156,12 +161,12 @@ public class ChannelSwitchTests
             Assert.Equal("no_provider_key", error.RootElement.GetProperty("error").GetProperty("type").GetString());
         }
 
+        Assert.Equal(HttpStatusCode.Forbidden, await Post(client, $"{fixture.Address}/v1/responses", "{\"input\":\"hi\"}", Auth("Bearer sk-client")));
+        Assert.Equal(HttpStatusCode.Forbidden, await Post(client, $"{fixture.Address}/v1/responses", "{\"input\":\"hi\"}", new()));
         Assert.Equal(0, hits);
-        Assert.Equal(HttpStatusCode.OK, await Post(client, $"{fixture.Address}/v1/responses", "{\"input\":\"hi\"}", Auth("Bearer sk-client")));
-        Assert.Equal(1, hits);
         var logs = await fixture.CompletedLogs();
         Assert.Contains("当前供应商“Any”没有 Key，未转发，向客户端返回 HTTP 403", logs);
-        Assert.Equal(1UL, fixture.Metrics.Snapshot().FailedRequests);
+        Assert.Equal(3UL, fixture.Metrics.Snapshot().FailedRequests);
     }
 
     [Fact]
@@ -206,10 +211,57 @@ public class ChannelSwitchTests
     // ---------------------------------------------------------------- 即时切换（§4.2、§12.4）
 
     [Theory]
-    [InlineData("backoff")]
-    [InlineData("response")]
-    [InlineData("generation")]
-    public async Task SwitchingResendsUndeliveredRequestsToTheNewKeyImmediately(string stage)
+    [InlineData(ClientType.Claude, false)]
+    [InlineData(ClientType.Codex, false)]
+    [InlineData(ClientType.Claude, true)]
+    [InlineData(ClientType.Codex, true)]
+    public async Task ExistingManagedClientsFollowSwitchAndUndoWithoutChangingTheirSettings(ClientType clientType, bool oldCredentials)
+    {
+        var seen = new ConcurrentQueue<(string Provider, string Authorization, string Body)>();
+        await using var upstreamB = await FakeUpstream.StartAsync(async context =>
+        {
+            seen.Enqueue(("b", context.Request.Headers.Authorization.ToString(), await Upstream.ReadBody(context)));
+            await Upstream.Json(context, 200, "{\"ok\":true}");
+        });
+        ChannelSnapshot? snapshotA = null;
+        await using var fixture = await Start(async context =>
+        {
+            seen.Enqueue(("a", context.Request.Headers.Authorization.ToString(), await Upstream.ReadBody(context)));
+            await Upstream.Json(context, 200, "{\"ok\":true}");
+        }, upstream => snapshotA = Key(upstream, "a", "sk-real-a", "model-a", clientType), clientType);
+        using var first = TestClient.Create();
+        using var second = TestClient.Create();
+        using var third = TestClient.Create();
+        var clients = new[] { first, second, third };
+        var url = $"{fixture.Address}/v1/{(clientType == ClientType.Claude ? "messages" : "responses")}";
+        const string body = "{\"model\":\"old-client-model\",\"input\":\"hi\"}";
+        var headers = oldCredentials ? Auth("Bearer sk-old-window-key") : Token();
+
+        // 三个已打开的窗口保留同一地址、旧凭据和旧模型；切换与撤销都只改代理快照，不重建客户端。
+        async Task AssertRound(string provider, string apiKey, string model)
+        {
+            var statuses = await Task.WhenAll(clients.Select(client => Post(client, url, body, headers)));
+            Assert.All(statuses, status => Assert.Equal(HttpStatusCode.OK, status));
+            Assert.Equal(clients.Length, seen.Count);
+            while (seen.TryDequeue(out var request))
+                Assert.Equal((provider, $"Bearer {apiKey}", $"{{\"model\":\"{model}\",\"input\":\"hi\"}}"), request);
+        }
+
+        await AssertRound("a", "sk-real-a", "model-a");
+        fixture.Proxy.UpdateSnapshot(Key(upstreamB.BaseUrl, "b", "sk-real-b", "model-b", clientType, provider: "other"));
+        await AssertRound("b", "sk-real-b", "model-b");
+        fixture.Proxy.UpdateSnapshot(snapshotA!);
+        await AssertRound("a", "sk-real-a", "model-a");
+    }
+
+    [Theory]
+    [InlineData("backoff", false)]
+    [InlineData("response", false)]
+    [InlineData("generation", false)]
+    [InlineData("backoff", true)]
+    [InlineData("response", true)]
+    [InlineData("generation", true)]
+    public async Task SwitchingResendsUndeliveredRequestsToTheNewKeyImmediately(string stage, bool oldCredentials)
     {
         var hitsA = 0;
         var seenB = new ConcurrentQueue<(string Authorization, string Target, string Body)>();
@@ -237,7 +289,8 @@ public class ChannelSwitchTests
             }
         }, upstream => Key(upstream, "a", "sk-real-a", "model-a", backoff: 30.0));
         using var client = TestClient.Create(10.0);
-        var request = TestClient.Send(client, HttpMethod.Post, $"{fixture.Address}/v1/responses?trace=1", "{\"model\":\"gpt-4o\",\"stream\":true}", headers: Token());
+        var request = TestClient.Send(client, HttpMethod.Post, $"{fixture.Address}/v1/responses?trace=1", "{\"model\":\"gpt-4o\",\"stream\":true}",
+            headers: oldCredentials ? Auth("Bearer sk-old-window-key") : Token());
         var phase = stage switch
         {
             "backoff" => RequestPhase.WaitingRetry,
@@ -303,7 +356,7 @@ public class ChannelSwitchTests
     }
 
     [Fact]
-    public async Task PassThroughRequestsStayOnTheProviderTheyStartedWith()
+    public async Task OldCredentialRequestsSwitchWithoutForwardingTheirCredentials()
     {
         var hitsA = 0;
         var seenB = new ConcurrentQueue<string>();
@@ -321,20 +374,21 @@ public class ChannelSwitchTests
         var request = TestClient.Send(client, HttpMethod.Post, url, "{\"input\":\"hi\"}", headers: Auth("Bearer sk-client"));
         await TestClock.WaitUntil(() => fixture.Metrics.Snapshot().Requests.Any(item => item.Phase == RequestPhase.WaitingRetry));
 
-        // 客户端自带的密钥属于原供应商，不能发给新供应商：不算未输出的请求，退避后仍在 A 上重试。
-        Assert.Equal(0, fixture.Proxy.UpdateSnapshot(Key(upstreamB.BaseUrl, "b", "sk-real-b", provider: "other")));
+        // 旧凭据不再透传；尚未输出的请求立即改投 B，并注入 B 的 Key。
+        Assert.Equal(1, fixture.Proxy.UpdateSnapshot(Key(upstreamB.BaseUrl, "b", "sk-real-b", provider: "other")));
         using (var response = await request)
         {
-            Assert.Equal("{\"from\":\"a\"}", await response.Content.ReadAsStringAsync());
+            Assert.Equal("{\"from\":\"b\"}", await response.Content.ReadAsStringAsync());
         }
 
-        Assert.Equal(2, Volatile.Read(ref hitsA));
-        Assert.Empty(seenB);
-        // 之后的新请求按当前供应商转发，仍透传客户端自带的凭据。
+        Assert.Equal(1, Volatile.Read(ref hitsA));
+        Assert.Equal("Bearer sk-real-b", Assert.Single(seenB));
         Assert.Equal(HttpStatusCode.OK, await Post(client, url, "{\"input\":\"hi\"}", Auth("Bearer sk-client")));
-        Assert.Equal("Bearer sk-client", Assert.Single(seenB));
+        Assert.Equal(2, seenB.Count);
+        Assert.All(seenB, value => Assert.Equal("Bearer sk-real-b", value));
         var logs = await fixture.CompletedLogs();
-        Assert.DoesNotContain("已切换", logs);
+        Assert.Contains("已切换", logs);
+        Assert.DoesNotContain("sk-client", logs);
     }
 
     [Fact]

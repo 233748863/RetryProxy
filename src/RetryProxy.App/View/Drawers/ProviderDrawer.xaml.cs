@@ -38,6 +38,7 @@ public partial class ProviderDrawer : DrawerPage
         UrlBox.Text = Draft.BaseUrl;
         WebsiteBox.Text = Draft.WebsiteUrl;
         NotesBox.Text = Draft.Notes;
+        BalanceModeBox.SelectedIndex = (int)Draft.BalanceQuery.Mode;
         AuthBox.SelectedIndex = Draft.AuthMode == ClaudeAuthMode.Bearer ? 0 : 1;
         ModelBox.Text = Draft.Models.Model;
         ContextCheck.IsChecked = Draft.Models.Context1M;
@@ -73,6 +74,7 @@ public partial class ProviderDrawer : DrawerPage
         Haiku = new { HaikuField.ModelText, HaikuField.ExplicitContext },
         Fable = new { FableField.ModelText, FableField.ExplicitContext },
         Window = ContextWindowBox.Text, Compact = AutoCompactBox.Text, Draft.Keys, Draft.FetchedModels,
+        BalanceMode = BalanceModeBox.SelectedIndex,
     });
 
     public string? ReadDraft()
@@ -95,6 +97,7 @@ public partial class ProviderDrawer : DrawerPage
         Draft.BaseUrl = UrlBox.Text.Trim().TrimEnd('/');
         Draft.WebsiteUrl = website;
         Draft.Notes = NotesBox.Text.Trim();
+        Draft.BalanceQuery.Mode = (BalanceQueryMode)BalanceModeBox.SelectedIndex;
         Draft.AuthMode = Draft.ClientType == ClientType.Claude && AuthBox.SelectedIndex == 1 ? ClaudeAuthMode.ApiKey : ClaudeAuthMode.Bearer;
         Draft.Models.Model = ModelBox.Text.Trim();
         Draft.Models.Context1M = ContextCheck.IsChecked == true;

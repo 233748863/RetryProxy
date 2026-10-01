@@ -3,6 +3,7 @@ using System.Globalization;
 using System.IO;
 using System.Security.Cryptography;
 using System.Text;
+using System.Threading;
 using RetryProxy.Core.Cli;
 using RetryProxy.Core.Config;
 
@@ -20,7 +21,10 @@ public sealed class ClientConfigStore
     private readonly Func<DateTime> _clock;
     private readonly Action? _beforeWrite;
     private readonly Func<bool>? _writesBlocked;
+    private readonly Action<TimeSpan> _retryDelay;
     private readonly object _gate = new();
+    private const int FileAccessRetries = 20;
+    private static readonly TimeSpan FileAccessRetryDelay = TimeSpan.FromMilliseconds(25);
 
     public ClientConfigStore(string backupRoot, IClientConfigEditor editor, string configPath)
         : this(backupRoot, editor, configPath, null) { }
@@ -28,7 +32,7 @@ public sealed class ClientConfigStore
     /// <summary>测试只替换落盘边界；附加禁止条件只能收紧权限，不能绕过真实环境变量的保护。</summary>
     internal ClientConfigStore(string backupRoot, IClientConfigEditor editor, string configPath,
         Action<string, string, bool>? atomicReplace, Func<DateTime>? clock = null,
-        Action? beforeWrite = null, Func<bool>? writesBlocked = null)
+        Action? beforeWrite = null, Func<bool>? writesBlocked = null, Action<TimeSpan>? retryDelay = null)
     {
         try
         {
@@ -42,6 +46,7 @@ public sealed class ClientConfigStore
             _clock = clock ?? (() => DateTime.Now);
             _beforeWrite = beforeWrite;
             _writesBlocked = writesBlocked;
+            _retryDelay = retryDelay ?? Thread.Sleep;
         }
         catch
         {
@@ -53,19 +58,21 @@ public sealed class ClientConfigStore
 
     public ClientProfile ReadProfile()
     {
+        var stage = ClientConfigStage.ReadProfile;
         try
         {
             var file = ReadFile(ConfigPath);
             var profile = _editor.Read(file.Text);
             if (_editor.ClientType != ClientType.Codex || !string.IsNullOrWhiteSpace(profile.ApiKey)) return profile;
+            stage = ClientConfigStage.ReadAuth;
             var auth = ReadFile(Path.Combine(Path.GetDirectoryName(ConfigPath)!, "auth.json"));
             return auth.Bytes is null ? profile : _editor.Read(file.Text, auth.Text);
         }
-        catch (ClientConfigException) { throw; }
-        catch
+        catch (ClientConfigException error) { throw new ClientConfigException(error.Message, stage, error); }
+        catch (Exception error)
         {
             // 不附带原异常：解析器错误、路径以及回调错误都可能包含密钥。
-            throw new ClientConfigException("无法读取客户端配置，请检查文件格式和访问权限。");
+            throw new ClientConfigException("无法读取客户端配置，请检查文件格式和访问权限。", stage, error);
         }
     }
 
@@ -86,7 +93,7 @@ public sealed class ClientConfigStore
     public string CurrentHash()
     {
         try { return Hash(ReadBytes(ConfigPath)); }
-        catch { throw new ClientConfigException("无法检查客户端配置，请检查文件访问权限。"); }
+        catch (Exception error) { throw new ClientConfigException("无法检查客户端配置，请检查文件访问权限。", ClientConfigStage.CheckHash, error); }
     }
 
     public ClientTakeoverState Apply(ClientConfigRequest request, ClientTakeoverState previous,
@@ -102,10 +109,12 @@ public sealed class ClientConfigStore
             FileContent? original = null;
             string? writtenHash = null;
             var replacementAttempted = false;
+            var stage = ClientConfigStage.ReadOriginal;
             try
             {
                 // 每次从磁盘重新合并，不能拿上次接管时的内容覆盖用户新增的其他键。
                 original = ReadFile(ConfigPath);
+                stage = ClientConfigStage.Edit;
                 var text = _editor.Write(original.Text, request);
                 var bytes = text == original.Text ? original.Bytes : original.Encode(text);
                 writtenHash = Hash(bytes);
@@ -114,61 +123,77 @@ public sealed class ClientConfigStore
                 state.ConfigPath = ConfigPath;
                 state.LastWrittenHash = writtenHash;
 
+                stage = ClientConfigStage.VerifyOriginal;
                 _beforeWrite?.Invoke();
                 EnsureWritesAllowed();
                 VerifyHash(original.Hash);
                 // BackupPath 是目录。取消后重新接管仍沿用最初备份；改路径则为新文件另建备份。
                 if (string.IsNullOrEmpty(previous.BackupPath) || !SamePath(previous.ConfigPath, ConfigPath))
+                {
+                    stage = ClientConfigStage.Backup;
                     state.BackupPath = Backup(original);
+                }
 
                 if (writtenHash != original.Hash)
                 {
-                    AtomicWrite(bytes!, original.Hash, () => replacementAttempted = true);
+                    AtomicWrite(bytes!, original.Hash, () => replacementAttempted = true, value => stage = value);
+                    stage = ClientConfigStage.VerifyWritten;
                     VerifyHash(writtenHash);
                 }
                 else
                 {
+                    stage = ClientConfigStage.VerifyOriginal;
                     VerifyHash(original.Hash);
                 }
 
                 // 即使内容没变，也要保存用户选择；回调修改传入对象不会改变返回值或 previous。
+                stage = ClientConfigStage.PersistState;
                 persist(state.Clone());
                 return state;
             }
-            catch (ClientConfigException) when (!replacementAttempted)
+            catch (ClientConfigException error) when (!replacementAttempted)
             {
                 // 编辑器已将解析器错误转成固定中文提示；保留内联表等可操作的拒写原因。
-                throw;
+                throw new ClientConfigException(error.Message, stage, error);
             }
-            catch
+            catch (Exception error)
             {
+                var failedStage = stage;
                 if (replacementAttempted && original is not null && writtenHash is not null)
                 {
                     try
                     {
+                        stage = ClientConfigStage.RollbackRead;
                         var current = Hash(ReadBytes(ConfigPath));
                         if (current != original.Hash)
                         {
                             // 回滚也核对哈希，避免覆盖事务期间其他程序再次写入的内容。
+                            stage = ClientConfigStage.RollbackVerify;
                             if (current != writtenHash)
                                 throw new IOException();
                             if (original.Bytes is null)
                             {
-                                EnsureWritesAllowed();
-                                VerifyHash(writtenHash);
-                                File.Delete(ConfigPath);
+                                RetryFileAccess(() =>
+                                {
+                                    stage = ClientConfigStage.RollbackVerify;
+                                    EnsureWritesAllowed();
+                                    VerifyHashOnce(writtenHash);
+                                    stage = ClientConfigStage.RollbackDelete;
+                                    File.Delete(ConfigPath);
+                                });
                             }
                             else
-                                AtomicWrite(original.Bytes, writtenHash);
+                                AtomicWrite(original.Bytes, writtenHash, stageChanged: value => stage = value);
                         }
                     }
-                    catch
+                    catch (Exception rollbackError)
                     {
-                        throw new ClientConfigException("客户端配置保存失败，且无法自动恢复。原配置已备份，请检查文件权限或外部修改。");
+                        throw new ClientConfigException("客户端配置保存失败，且无法自动恢复。原配置已备份，请检查文件权限或外部修改。",
+                            failedStage, error, stage, rollbackError);
                     }
-                    throw new ClientConfigException("客户端配置保存失败，已恢复写入前的文件。");
+                    throw new ClientConfigException("客户端配置保存失败，已恢复写入前的文件。", failedStage, error);
                 }
-                throw new ClientConfigException("客户端配置未保存，请检查文件格式、访问权限或是否被其他程序修改。");
+                throw new ClientConfigException("客户端配置未保存，请检查文件格式、访问权限或是否被其他程序修改。", failedStage, error);
             }
         }
     }
@@ -206,8 +231,10 @@ public sealed class ClientConfigStore
         return directory;
     }
 
-    private void AtomicWrite(byte[] bytes, string expectedHash, Action? replacing = null)
+    private void AtomicWrite(byte[] bytes, string expectedHash, Action? replacing = null,
+        Action<ClientConfigStage>? stageChanged = null)
     {
+        stageChanged?.Invoke(ClientConfigStage.WriteTemporary);
         EnsureWritesAllowed();
         var directory = Path.GetDirectoryName(ConfigPath)!;
         Directory.CreateDirectory(directory);
@@ -215,10 +242,16 @@ public sealed class ClientConfigStore
         try
         {
             WriteNewFile(temporary, bytes);
-            EnsureWritesAllowed();
-            VerifyHash(expectedHash);
-            replacing?.Invoke();
-            _replace(temporary, ConfigPath, expectedHash.Length != 0);
+            RetryFileAccess(() =>
+            {
+                // 例如客户端正在重读配置时暂缓替换；每次重试仍核对原字节，不能覆盖期间的外部修改。
+                stageChanged?.Invoke(ClientConfigStage.VerifyBeforeReplace);
+                EnsureWritesAllowed();
+                VerifyHashOnce(expectedHash);
+                stageChanged?.Invoke(ClientConfigStage.Replace);
+                replacing?.Invoke();
+                _replace(temporary, ConfigPath, expectedHash.Length != 0);
+            }, retryReplaceFailure: expectedHash.Length != 0);
         }
         finally
         {
@@ -227,10 +260,34 @@ public sealed class ClientConfigStore
         }
     }
 
-    private void VerifyHash(string expected)
+    private void VerifyHash(string expected) => RetryFileAccess(() => VerifyHashOnce(expected));
+
+    private void VerifyHashOnce(string expected)
     {
-        if (Hash(ReadBytes(ConfigPath)) != expected)
+        if (Hash(ReadBytesOnce(ConfigPath)) != expected)
             throw new IOException();
+    }
+
+    private void RetryFileAccess(Action operation, bool retryReplaceFailure = false) => RetryFileAccess(() =>
+    {
+        operation();
+        return true;
+    }, retryReplaceFailure);
+
+    private T RetryFileAccess<T>(Func<T> operation, bool retryReplaceFailure = false)
+    {
+        for (var retry = 0; ; retry++)
+        {
+            try { return operation(); }
+            catch (IOException error) when (retry < FileAccessRetries
+                && ((error.HResult & 0xffff) is 32 or 33
+                    || retryReplaceFailure && (error.HResult & 0xffff) == 1175))
+            {
+                // 替换时 1175 表示旧文件无法移除、两份文件仍保留；与共享/锁冲突一样累计等待 500 ms。
+                // 不重试 1176/1177：它们可能已移动文件，必须走原有回滚；其他权限、磁盘与内容冲突也立即报错。
+                _retryDelay(FileAccessRetryDelay);
+            }
+        }
     }
 
     private static void Replace(string temporary, string destination, bool exists)
@@ -252,15 +309,24 @@ public sealed class ClientConfigStore
 
     private static string Hash(byte[]? bytes) => bytes is null ? string.Empty : Convert.ToHexString(SHA256.HashData(bytes));
 
-    private static byte[]? ReadBytes(string path)
+    private byte[]? ReadBytes(string path) => RetryFileAccess(() => ReadBytesOnce(path));
+
+    private static byte[]? ReadBytesOnce(string path)
     {
+        // 允许其他程序原子替换文件，但不允许同时原地改写；打开的句柄始终读取同一份完整内容。
         // File.Exists 会把无权限等错误当作不存在；只把确实缺文件的情况按空内容处理。
-        try { return File.ReadAllBytes(path); }
+        try
+        {
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete);
+            var bytes = new byte[stream.Length];
+            stream.ReadExactly(bytes);
+            return bytes;
+        }
         catch (FileNotFoundException) { return null; }
         catch (DirectoryNotFoundException) { return null; }
     }
 
-    private static FileContent ReadFile(string path) => new(ReadBytes(path));
+    private FileContent ReadFile(string path) => new(ReadBytes(path));
 
     private sealed class FileContent
     {

@@ -50,5 +50,13 @@
         <TextBlock Text="{i18n:T Key 列表}" FontWeight="SemiBold" Margin="0,20,0,8" />
         <StackPanel x:Name="KeyRows" />
         <ui:Button Content="{i18n:T 添加 Key}" Click="AddKeyClicked" HorizontalAlignment="Left" Margin="0,8,0,0" />
+        <TextBlock Text="{i18n:T 余额查询方式}" Margin="0,20,0,4" />
+        <ComboBox x:Name="BalanceModeBox" AutomationProperties.AutomationId="BalanceQueryMode" AutomationProperties.Name="{i18n:T 余额查询方式}">
+            <ComboBoxItem Content="{i18n:T 自动识别}" />
+            <ComboBoxItem Content="{i18n:T 通用用量接口}" />
+            <ComboBoxItem Content="{i18n:T 余额接口}" />
+            <ComboBoxItem Content="{i18n:T OpenAI 兼容账单接口}" />
+            <ComboBoxItem Content="{i18n:T 不查询}" />
+        </ComboBox>
     </StackPanel>
 </drawers:DrawerPage>

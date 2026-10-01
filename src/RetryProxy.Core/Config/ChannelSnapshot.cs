@@ -7,7 +7,7 @@ namespace RetryProxy.Core.Config;
 /// <summary>
 /// 通道在某一时刻的"供应商 · Key"与重试参数（PRD-供应商管理 §9）。代理在每次尝试开头读取一份，
 /// 切换 Key、改供应商或改参数时整体换成新的一份；已经发出的尝试继续用旧的那份。
-/// 例：Claude Code 通道当前是 "Any · 主号"：地址 https://anyrouter.top，带本地口令的请求按 Bearer 注入主号的密钥。
+/// 例：Claude Code 通道当前是 "Any · 主号"：地址 https://anyrouter.top，所有进入该通道的请求按 Bearer 注入主号的密钥。
 /// </summary>
 public sealed class ChannelSnapshot
 {
@@ -29,7 +29,7 @@ public sealed class ChannelSnapshot
 
     public string UpstreamBaseUrl { get; init; } = string.Empty;
 
-    /// <summary>本地口令：只对带它的请求注入 Key；为空表示不识别口令，全部请求原样透传。</summary>
+    /// <summary>写入客户端的占位口令，用于识别配置是否已接管；普通通道统一注入当前 Key，不以它鉴权。后台准备代理仍校验口令。</summary>
     public string LocalToken { get; init; } = string.Empty;
 
     public ProviderModels Models { get; init; } = new();

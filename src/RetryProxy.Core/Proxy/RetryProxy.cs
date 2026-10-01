@@ -479,11 +479,8 @@ public sealed class RetryProxy
 
         public required ChannelSnapshot Snapshot { get; init; }
 
-        /// <summary>带本地口令、但当前供应商没有 Key：不转发，在本地返回错误。</summary>
+        /// <summary>管理通道当前没有 Key：不转发，在本地返回错误。</summary>
         public bool MissingKey { get; init; }
-
-        /// <summary>带本地口令、注入了当前 Key；为 false 表示原样透传客户端自带的凭据。</summary>
-        public bool Injects { get; init; }
 
         public HeaderList Headers { get; init; } = new();
 
@@ -1018,9 +1015,8 @@ public sealed class RetryProxy
         var streaming = metadata.Stream || (accept is not null && accept.ToLowerInvariant().Contains("text/event-stream", StringComparison.Ordinal));
         var requireValidContext = _preparationProxy && KeepAlive.Snapshot().Preparing
             && HttpMethods.IsPost(method) && KeepAliveFlavorExtensions.Detect(safePath) != KeepAliveFlavor.Unknown;
-        // 只有带本地口令、由代理注入 Key 的真实请求在输出前跟随切换；
-        // 透传客户端自带凭据的请求不改投：原供应商的密钥不能发给新供应商。
-        var followsSwitch = ctx.FollowsSwitch && CarriesToken(baseHeaders.Get("authorization"), baseHeaders.Get("x-api-key"), _channel.Current.LocalToken);
+        // 所有真实请求在输出前跟随切换；例如旧窗口仍带旧 Key，代理也会在每次尝试中替换成当前 Key。
+        var followsSwitch = ctx.FollowsSwitch;
         using var undelivered = followsSwitch ? _channel.EnterUndelivered() : null;
         AttemptPlan? plan = null;
         // Claude 注入 Key 被拒后改用另一种认证格式；换了"供应商 · Key"后重新从供应商设置的格式开始。
@@ -1033,8 +1029,7 @@ public sealed class RetryProxy
         while (true)
         {
             var (current, version, switchToken) = _channel.Read();
-            // 透传请求换了供应商后，剩下的重试留在开始时的供应商上走完；同一供应商内改参数、改地址照常用于下一次尝试。
-            if (plan is null || (plan.Version != version && (plan.Injects || plan.Snapshot.ProviderId == current.ProviderId)))
+            if (plan is null || plan.Version != version)
             {
                 if (plan is not null && !plan.Snapshot.SameKeyAs(current))
                 {
@@ -1241,16 +1236,17 @@ public sealed class RetryProxy
     }
 
     /// <summary>
-    /// 按快照算出本次尝试的上游请求（PRD-供应商管理 §6、§7、§9）：带本地口令的请求注入当前 Key 并映射模型，
-    /// 其余请求原样透传客户端自带的凭据；目标地址按客户端的地址规则拼接。
+    /// 按快照算出本次尝试的上游请求（PRD-供应商管理 §6、§7、§9）：管理通道统一注入当前 Key 并映射模型，
+    /// 客户端自带的认证头全部替换；目标地址按客户端的地址规则拼接。
     /// </summary>
     private AttemptPlan BuildAttempt(RequestContext ctx, ChannelSnapshot snapshot, long version, HeaderList baseHeaders, ReadOnlyMemory<byte> body,
         string? requestModel, bool streaming, string rawQuery)
     {
-        var inject = CarriesToken(baseHeaders.Get("authorization"), baseHeaders.Get("x-api-key"), snapshot.LocalToken);
+        // 普通通道始终有占位口令；是否匹配入站凭据不影响注入。仅未关联管理配置的基础转发实例保留原始凭据。
+        var inject = snapshot.LocalToken.Length > 0 || snapshot.HasKey;
         if (inject && !snapshot.HasKey)
         {
-            return new AttemptPlan { Version = version, Snapshot = snapshot, Injects = true, MissingKey = true };
+            return new AttemptPlan { Version = version, Snapshot = snapshot, MissingKey = true };
         }
 
         var headers = baseHeaders.Clone();
@@ -1312,7 +1308,6 @@ public sealed class RetryProxy
         {
             Version = version,
             Snapshot = snapshot,
-            Injects = inject,
             Headers = headers,
             AlternateHeaders = alternate,
             HeaderOrder = order,
@@ -1357,7 +1352,7 @@ public sealed class RetryProxy
     private static string TitleCase(string name) =>
         string.Join('-', name.Split('-').Select(part => part.Length == 0 ? part : char.ToUpperInvariant(part[0]) + part[1..]));
 
-    /// <summary>带本地口令、但当前供应商没有 Key：不转发，直接告诉客户端（PRD-供应商管理 §7）。</summary>
+    /// <summary>管理通道当前没有 Key：不转发，直接告诉客户端（PRD-供应商管理 §7）。</summary>
     private static ProxyResponse MissingKeyResponse(RequestContext ctx, ChannelSnapshot snapshot)
     {
         var provider = snapshot.ProviderName.Length > 0 ? $"“{snapshot.ProviderName}”" : string.Empty;

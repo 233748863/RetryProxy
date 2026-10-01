@@ -56,5 +56,24 @@ public interface IClientConfigEditor
     string Write(string text, ClientConfigRequest request);
 }
 
+internal enum ClientConfigStage
+{
+    ReadProfile, ReadAuth, CheckHash, ReadOriginal, Edit, VerifyOriginal, Backup,
+    WriteTemporary, VerifyBeforeReplace, Replace, VerifyWritten, PersistState,
+    RollbackRead, RollbackVerify, RollbackDelete,
+}
+
 /// <summary>仅含可直接显示的中文说明，不附带原始文件片段或解析器错误（其中可能有 Key）。</summary>
-public sealed class ClientConfigException(string message) : Exception(message);
+public sealed class ClientConfigException(string message) : Exception(message)
+{
+    // 阶段来自固定枚举，错误只保留数值。例如 Replace/0x80070020 能定位共享冲突，不暴露文件名。
+    internal string? Diagnostic { get; private init; }
+
+    internal ClientConfigException(string message, ClientConfigStage stage, Exception error,
+        ClientConfigStage? rollbackStage = null, Exception? rollbackError = null) : this(message)
+    {
+        Diagnostic = $"阶段 {stage}，HRESULT 0x{error.HResult:X8}";
+        if (rollbackStage is { } failedStage && rollbackError is not null)
+            Diagnostic += $"；恢复阶段 {failedStage}，HRESULT 0x{rollbackError.HResult:X8}";
+    }
+}

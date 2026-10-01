@@ -172,7 +172,7 @@ public partial class DrawerHost : UserControl
         if (!IsOpen) return;
         var page = _entries.Peek().Page;
         TitleText.Text = DrawerText.T(page.TitleKey);
-        SaveButton.Content = DrawerText.T(_entries.Count > 1 ? "保存并返回" : "保存");
+        SaveButton.Content = DrawerText.T(_entries.Count > 1 ? "保存并返回" : page.SaveButtonKey);
         BackButton.Visibility = _entries.Count > 1 ? Visibility.Visible : Visibility.Collapsed;
         var enabled = !_saving && !_transitioning && !page.IsBusy;
         SaveButton.IsEnabled = enabled;

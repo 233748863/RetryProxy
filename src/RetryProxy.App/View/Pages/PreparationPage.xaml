@@ -46,7 +46,7 @@
             <TextBlock Margin="0,0,0,12"
                        Style="{StaticResource CaptionTextBlockStyle}"
                        Foreground="{DynamicResource TextFillColorTertiaryBrush}"
-                       Text="{i18n:T 每项准备单独启停，设置会保存；重启软件后需手动重新开始。}"
+                       Text="{i18n:T 每项准备单独启停，设置会保存；重启软件后自动恢复退出时运行中的任务。}"
                        TextWrapping="Wrap" />
 
             <Border Style="{StaticResource PreparationCard}"
@@ -77,13 +77,14 @@
                             <ItemsControl ItemsSource="{Binding Tasks}">
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate DataType="{x:Type pages:PreparationTaskViewModel}">
-                                        <Border Style="{StaticResource PreparationCard}" AutomationProperties.AutomationId="{Binding Id}">
+                                        <Border Style="{StaticResource PreparationCard}" AutomationProperties.AutomationId="{Binding Id}"
+                                                ToolTip="{Binding Hint}" AutomationProperties.HelpText="{Binding Hint}">
                                             <StackPanel>
-                                                <!-- 一项任务一行，计数和原有运行详情放到悬停提示中。 -->
+                                                <!-- 一项任务一行，今日计数和失败原因放到悬停提示中。 -->
                                                 <Grid>
                                                     <Grid.ColumnDefinitions>
                                                         <ColumnDefinition Width="1.2*" />
-                                                        <ColumnDefinition Width="1.1*" />
+                                                        <ColumnDefinition Width="Auto" />
                                                         <ColumnDefinition Width="1.7*" />
                                                         <ColumnDefinition Width="Auto" />
                                                     </Grid.ColumnDefinitions>
@@ -108,7 +109,8 @@
                                                                          Visibility="{Binding IsPreparing, Converter={StaticResource BooleanToVisibilityConverter}}" />
                                                         <TextBlock Grid.Column="1" Style="{StaticResource CaptionTextBlockStyle}"
                                                                    Text="{Binding Status}" TextTrimming="CharacterEllipsis"
-                                                                   AutomationProperties.AutomationId="PreparationStatus" />
+                                                                   AutomationProperties.AutomationId="{Binding StatusAutomationId}"
+                                                                   AutomationProperties.HelpText="{Binding Hint}" />
                                                     </Grid>
                                                     <TextBlock Grid.Column="2" Margin="0,0,8,0" VerticalAlignment="Center"
                                                                Style="{StaticResource CaptionTextBlockStyle}"
@@ -125,23 +127,30 @@
                                                         <ui:Button Margin="0,0,6,0" Padding="8,4" Appearance="Primary"
                                                                    Command="{Binding DataContext.StartPreparationCommand, RelativeSource={RelativeSource AncestorType=Page}}"
                                                                    CommandParameter="{Binding Id}" Content="{i18n:T 开始}" AutomationProperties.Name="{i18n:T 开始}"
+                                                                   AutomationProperties.AutomationId="{Binding StartAutomationId}"
                                                                    ToolTip="{i18n:T 开始准备}"
                                                                    Visibility="{Binding CanStart, Converter={StaticResource BooleanToVisibilityConverter}}" />
                                                         <ui:Button Margin="0,0,6,0" Padding="8,4"
                                                                    Command="{Binding DataContext.StopPreparationCommand, RelativeSource={RelativeSource AncestorType=Page}}"
                                                                    CommandParameter="{Binding Id}" Content="{i18n:T 停止}" AutomationProperties.Name="{i18n:T 停止}"
+                                                                   AutomationProperties.AutomationId="{Binding StopAutomationId}"
                                                                    ToolTip="{Binding StopText}"
                                                                    Visibility="{Binding CanStop, Converter={StaticResource BooleanToVisibilityConverter}}" />
                                                         <ui:Button Margin="0,0,6,0" Padding="8,4"
                                                                    Command="{Binding DataContext.EditPreparationCommand, RelativeSource={RelativeSource AncestorType=Page}}"
                                                                    CommandParameter="{Binding Id}" Content="{i18n:T 修改}"
+                                                                   Visibility="{Binding IsManual, Converter={StaticResource BooleanToVisibilityConverter}}"
                                                                    IsEnabled="{Binding CanStart}" />
                                                         <ui:Button Click="OnTaskMenuClick" Padding="6,4" Content="⋯"
                                                                            AutomationProperties.Name="{i18n:T 任务操作}"
+                                                                           AutomationProperties.AutomationId="{Binding MenuAutomationId}"
                                                                            Tag="{Binding DataContext, RelativeSource={RelativeSource AncestorType=Page}}">
                                                             <ui:Button.ContextMenu>
                                                                 <ContextMenu DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}"
                                                                              Tag="{Binding PlacementTarget.Tag, RelativeSource={RelativeSource Self}}">
+                                                                    <MenuItem Header="{i18n:T 修改}"
+                                                                              Command="{Binding Tag.EditPreparationCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                                                              CommandParameter="{Binding Id}" IsEnabled="{Binding CanStart}" />
                                                                     <MenuItem Header="{i18n:T 删除}"
                                                                               Command="{Binding Tag.RemovePreparationCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
                                                                               CommandParameter="{Binding Id}" IsEnabled="{Binding CanStart}" />
@@ -153,10 +162,6 @@
                                                         </ui:Button>
                                                     </StackPanel>
                                                 </Grid>
-                                                <TextBlock Margin="0,6,0,0" Style="{StaticResource CaptionTextBlockStyle}"
-                                                           Foreground="{DynamicResource SystemFillColorCautionBrush}"
-                                                           Text="{Binding Error}" TextWrapping="Wrap"
-                                                           Visibility="{Binding HasError, Converter={StaticResource BooleanToVisibilityConverter}}" />
                                             </StackPanel>
                                         </Border>
                                     </DataTemplate>

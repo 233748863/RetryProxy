@@ -229,6 +229,7 @@ try {
         selected_route_id = 'e2e'
         providers = @(@{
             id = 'fixture-provider'; client_type = 'codex'; name = 'local'; base_url = "http://127.0.0.1:$upstreamPort"
+            balance_query = @{ mode = 'none' }
             keys = @(@{ id = 'fixture-key'; name = '默认'; api_key = 'fixture-only-key' })
         })
         routes = @(@{

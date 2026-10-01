@@ -39,7 +39,7 @@ public sealed class ClientTakeoverService(WorkspaceService service, IConfigServi
             AddTakeoverPreview(panel, client);
             if (await ShowAsync("确认接管客户端", panel, "接管", "取消") != ContentDialogResult.Primary) return;
             if (await TakeOverConfirmedAsync(client) is { } error) Notice(error);
-            else Notice("客户端已接管；已打开的 Codex 会话需要重新打开");
+            else Notice("客户端配置已接管；首次接管后请重开已打开的客户端窗口");
         }
         catch (ClientConfigException error) { Notice(error.Message); }
         finally { _showing = false; service.Flush(); }
@@ -52,7 +52,7 @@ public sealed class ClientTakeoverService(WorkspaceService service, IConfigServi
         try
         {
             var panel = new StackPanel();
-            panel.Children.Add(Text("取消后，客户端将直连当前 Key，之后启动本软件不再自动接管。已打开的 Codex 会话需要重新打开。"));
+            panel.Children.Add(Text("取消后，客户端将直连当前 Key，之后启动本软件不再自动接管。已打开的客户端窗口需要重新打开。"));
             if (await ShowAsync("取消接管", panel, "确认取消接管", "返回", danger: true) != ContentDialogResult.Primary) return;
             Notice(service.Clients.CancelTakeover(client) ?? "已取消接管，客户端已恢复直连");
         }
@@ -114,7 +114,7 @@ public sealed class ClientTakeoverService(WorkspaceService service, IConfigServi
                 }
                 else if (step == 1)
                 {
-                    panel.Children.Add(Text("接管会修改以下客户端配置，原文件先备份；之后换 Key 无需重开客户端。"));
+                    panel.Children.Add(Text("接管会先备份并修改以下配置；首次接管后请重开旧窗口，之后在本机代理内换 Key 无需重开。"));
                     foreach (var entry in entries)
                     {
                         var readable = AddTakeoverPreview(panel, entry.Client);
@@ -140,7 +140,7 @@ public sealed class ClientTakeoverService(WorkspaceService service, IConfigServi
                         panel.Children.Add(Text((route.ClientType == ClientType.Codex ? route.LocalUrl + "/v1" : route.LocalUrl), literal: true));
                         panel.Children.Add(Text(StatusText(service.Clients.Connection(client).Status)));
                     }
-                    panel.Children.Add(Text("已打开的 Codex 会话需要重新打开；Claude Code 会自动读取新配置。"));
+                    panel.Children.Add(Text("首次接管后请重开 Claude Code 和 Codex 的旧窗口；已连接本机代理的窗口会一起切换供应商。"));
                 }
                 var title = step switch { 0 => "首次设置 · 1/3 保存现有配置", 1 => "首次设置 · 2/3 接管", _ => "首次设置 · 3/3 完成" };
                 var result = await ShowAsync(title, panel, step == 2 ? "完成" : "确认并继续", "跳过此步");
@@ -212,6 +212,7 @@ public sealed class ClientTakeoverService(WorkspaceService service, IConfigServi
             if (client == ClientType.Codex && (profile.ProviderName.Length == 0 || profile.ProviderName == "openai"))
                 panel.Children.Add(Text("将使用 retry_proxy 供应商名称，Codex 历史会话列表会按新名称分组。"));
             panel.Children.Add(Text("配置和备份含明文 Key，请妥善保管。"));
+            panel.Children.Add(Text("本机代理统一使用当前 Key；本机其他程序也能使用该 Key。"));
             return true;
         }
         catch (ClientConfigException error)

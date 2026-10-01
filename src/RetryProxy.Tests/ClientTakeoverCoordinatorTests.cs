@@ -182,6 +182,211 @@ public sealed class ClientTakeoverCoordinatorTests
         Assert.Equal("kept-user-value", fixture.Document(client)["unmanaged"]!.GetValue<string>());
     }
 
+    [Theory]
+    [InlineData(ClientType.Claude)]
+    [InlineData(ClientType.Codex)]
+    public void FailedModelSynchronization_IsRetriedOnFollowingRefresh(ClientType client)
+    {
+        using var fixture = new ClientLifecycleFixture();
+        fixture.StartTakenOver(client);
+        fixture.Key(client).ModelOverride = new KeyModelOverride { Model = "redacted-new-model" };
+        fixture.FailSave = true;
+        fixture.Coordinator.Refresh();
+        Assert.Equal("redacted-model", fixture.Profile(client).Models.Model);
+        Assert.Equal(ClientConnectionStatus.Unavailable, fixture.Coordinator.Connection(client).Status);
+
+        fixture.FailSave = false;
+        fixture.Coordinator.Refresh();
+
+        Assert.Equal("redacted-new-model", fixture.Profile(client).Models.Model);
+        Assert.Equal(ClientConnectionStatus.TakenOver, fixture.Coordinator.Connection(client).Status);
+        var writes = fixture.Editor(client).Writes;
+        fixture.Coordinator.Refresh();
+        Assert.Equal(writes, fixture.Editor(client).Writes);
+    }
+
+    [Fact]
+    public void PersistentSynchronizationFailure_StopsAfterThreeAttemptsAndOnlyNotifiesOnce()
+    {
+        using var fixture = new ClientLifecycleFixture();
+        const ClientType client = ClientType.Codex;
+        fixture.StartTakenOver(client);
+        var notices = 0;
+        fixture.Workspace.NoticePosted += _ => notices++;
+        var writes = fixture.Editor(client).Writes;
+        fixture.Key(client).ModelOverride = new KeyModelOverride { Model = "redacted-new-model" };
+        fixture.FailSave = true;
+
+        for (var i = 0; i < 12; i++) fixture.Coordinator.Refresh();
+
+        Assert.Equal(writes + 3, fixture.Editor(client).Writes);
+        Assert.Equal(1, notices);
+        Assert.Equal("redacted-model", fixture.Profile(client).Models.Model);
+        Assert.Equal(ClientConnectionStatus.Unavailable, fixture.Coordinator.Connection(client).Status);
+        fixture.FailSave = false;
+        fixture.Key(client).ModelOverride = new KeyModelOverride { Model = "redacted-another-model" };
+        fixture.Coordinator.Refresh();
+        Assert.Equal("redacted-another-model", fixture.Profile(client).Models.Model);
+    }
+
+    [Fact]
+    public void FailedSynchronization_ExplicitTakeoverCanRecoverAfterRetryBudgetIsExhausted()
+    {
+        using var fixture = new ClientLifecycleFixture();
+        const ClientType client = ClientType.Codex;
+        fixture.StartTakenOver(client);
+        fixture.Key(client).ModelOverride = new KeyModelOverride { Model = "redacted-new-model" };
+        fixture.FailSave = true;
+        for (var i = 0; i < 5; i++) fixture.Coordinator.Refresh();
+        fixture.FailSave = false;
+
+        Assert.Null(fixture.Coordinator.TakeOver(client));
+        Assert.Equal("redacted-new-model", fixture.Profile(client).Models.Model);
+        var writes = fixture.Editor(client).Writes;
+        fixture.Coordinator.Refresh();
+        Assert.Equal(writes, fixture.Editor(client).Writes);
+    }
+
+    [Fact]
+    public void FailedSynchronization_RetryPreservesExternalConfigurationAndStopsFurtherAttempts()
+    {
+        using var fixture = new ClientLifecycleFixture();
+        const ClientType client = ClientType.Claude;
+        fixture.StartTakenOver(client);
+        fixture.Key(client).ModelOverride = new KeyModelOverride { Model = "redacted-new-model" };
+        fixture.FailSave = true;
+        fixture.Coordinator.Refresh();
+        fixture.FailSave = false;
+        fixture.ChangeDocument(client, value => value["url"] = "https://external-edit.invalid");
+        var original = File.ReadAllBytes(fixture.PathFor(client));
+        var writes = fixture.Editor(client).Writes;
+
+        for (var i = 0; i < 5; i++) fixture.Coordinator.Refresh();
+
+        Assert.Equal(writes, fixture.Editor(client).Writes);
+        Assert.Equal(original, File.ReadAllBytes(fixture.PathFor(client)));
+        Assert.Equal(ClientConnectionStatus.Modified, fixture.Coordinator.Connection(client).Status);
+    }
+
+    [Fact]
+    public void FailedSynchronization_CancellationClearsPendingAutomaticWrite()
+    {
+        using var fixture = new ClientLifecycleFixture();
+        const ClientType client = ClientType.Codex;
+        fixture.StartTakenOver(client);
+        fixture.Key(client).ModelOverride = new KeyModelOverride { Model = "redacted-new-model" };
+        fixture.FailSave = true;
+        fixture.Coordinator.Refresh();
+        fixture.FailSave = false;
+
+        Assert.Null(fixture.Coordinator.CancelTakeover(client));
+        var writes = fixture.Editor(client).Writes;
+        for (var i = 0; i < 5; i++) fixture.Coordinator.Refresh();
+        Assert.Equal(writes, fixture.Editor(client).Writes);
+        Assert.False(fixture.State(client).Enabled);
+        Assert.Equal(fixture.Key(client).ApiKey, fixture.Profile(client).ApiKey);
+    }
+
+    [Fact]
+    public void FailedSynchronization_ShutdownRestoresCurrentKeyWithoutLaterRetries()
+    {
+        using var fixture = new ClientLifecycleFixture();
+        const ClientType client = ClientType.Claude;
+        fixture.StartTakenOver(client);
+        fixture.Key(client).ModelOverride = new KeyModelOverride { Model = "redacted-new-model" };
+        fixture.FailSave = true;
+        fixture.Coordinator.Refresh();
+        fixture.FailSave = false;
+
+        fixture.Coordinator.Shutdown();
+        var writes = fixture.Editor(client).Writes;
+        fixture.Coordinator.Refresh();
+        Assert.Equal(writes, fixture.Editor(client).Writes);
+        Assert.Equal(fixture.Key(client).ApiKey, fixture.Profile(client).ApiKey);
+        Assert.Equal("redacted-new-model", fixture.Profile(client).Models.Model);
+    }
+
+    [Fact]
+    public void FailedStoppedKeySynchronization_RetryUsesLastSuccessfullyWrittenCredentials()
+    {
+        using var fixture = new ClientLifecycleFixture();
+        const ClientType client = ClientType.Claude;
+        fixture.StartTakenOver(client);
+        fixture.SetState(client, ServiceState.Stopped);
+        fixture.Coordinator.Refresh();
+        var previousKey = fixture.Profile(client).ApiKey;
+        fixture.Route(client).CurrentKeyId = fixture.Provider(client).Keys[1].Id;
+        fixture.FailSave = true;
+        fixture.Coordinator.Refresh();
+        Assert.Equal(previousKey, fixture.Profile(client).ApiKey);
+        fixture.FailSave = false;
+
+        fixture.Coordinator.Refresh();
+
+        Assert.Equal(fixture.Key(client).ApiKey, fixture.Profile(client).ApiKey);
+        Assert.Equal(ClientConnectionStatus.Direct, fixture.Coordinator.Connection(client).Status);
+    }
+
+    [Fact]
+    public void FailedSynchronization_LogsOnlySafeDiagnosticOncePerAttempt()
+    {
+        using var fixture = new ClientLifecycleFixture();
+        const ClientType client = ClientType.Codex;
+        fixture.StartTakenOver(client);
+        fixture.Key(client).ModelOverride = new KeyModelOverride { Model = "redacted-new-model" };
+        fixture.OnSave = _ => throw new IOException("secret-path-and-api-key");
+
+        fixture.Coordinator.Refresh();
+
+        using var stream = new FileStream(fixture.Logger.FilePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        using var reader = new StreamReader(stream);
+        var logs = reader.ReadToEnd().Split('\n');
+        var diagnostic = Assert.Single(logs, line => line.Contains("客户端配置操作失败："));
+        Assert.Contains("阶段 PersistState，HRESULT 0x", diagnostic);
+        Assert.DoesNotContain("secret-path", diagnostic);
+        Assert.DoesNotContain(fixture.PathFor(client), diagnostic);
+        Assert.DoesNotContain(fixture.Route(client).LocalToken, diagnostic);
+        Assert.DoesNotContain(fixture.Key(client).ApiKey, diagnostic);
+    }
+
+    [Fact]
+    public void StateChangeDuringSuccessfulSynchronization_IsHandledOnFollowingRefresh()
+    {
+        using var fixture = new ClientLifecycleFixture();
+        const ClientType client = ClientType.Claude;
+        fixture.MarkManaged(client);
+        fixture.State(client).Enabled = true;
+        fixture.SetState(client, ServiceState.Running);
+        fixture.OnSave = _ => fixture.SetState(client, ServiceState.Error);
+        fixture.Coordinator.Refresh();
+        Assert.Equal(fixture.Route(client).LocalToken, fixture.Profile(client).ApiKey);
+
+        fixture.OnSave = null;
+        fixture.Coordinator.Refresh();
+
+        Assert.Equal(fixture.Key(client).ApiKey, fixture.Profile(client).ApiKey);
+        Assert.Equal(ClientConnectionStatus.Direct, fixture.Coordinator.Connection(client).Status);
+    }
+
+    [Fact]
+    public void FailedStartupSynchronization_IsRetriedWithoutASecondStateTransition()
+    {
+        using var fixture = new ClientLifecycleFixture();
+        const ClientType client = ClientType.Codex;
+        fixture.MarkManaged(client);
+        fixture.State(client).Enabled = true;
+        fixture.SetState(client, ServiceState.Running);
+        fixture.FailSave = true;
+        fixture.Coordinator.Refresh();
+        Assert.Equal(fixture.Key(client).ApiKey, fixture.Profile(client).ApiKey);
+        fixture.FailSave = false;
+
+        fixture.Coordinator.Refresh();
+
+        Assert.Equal(fixture.Route(client).LocalToken, fixture.Profile(client).ApiKey);
+        Assert.Equal(ClientConnectionStatus.TakenOver, fixture.Coordinator.Connection(client).Status);
+    }
+
     [Fact]
     public void Detect_ExternalChangesAreReportedWithoutWritingOrReclaiming()
     {

@@ -363,6 +363,361 @@ public sealed class ClientConfigStoreTests : IDisposable
         Assert.Empty(Directory.GetFiles(Path.GetDirectoryName(ConfigPath)!, "*.tmp"));
     }
 
+    [Theory]
+    [InlineData(32)]
+    [InlineData(33)]
+    [InlineData(1175)]
+    public void Apply_TransientFileLockRetriesWithoutRepeatingBackupOrPersist(int errorCode)
+    {
+        Put(Original);
+        var replacements = 0;
+        var saves = 0;
+        var store = Store(replace: (temporary, target, _) =>
+        {
+            if (++replacements == 1)
+                throw new IOException("redacted-file-lock", unchecked((int)0x80070000) | errorCode);
+            File.Replace(temporary, target, null);
+        });
+
+        var state = store.Apply(Request(), new(), true, _ => saves++);
+
+        Assert.True(state.Enabled);
+        Assert.Equal(2, replacements);
+        Assert.Equal(1, saves);
+        Assert.Single(Directory.GetDirectories(Path.Combine(BackupRoot, "claude")));
+        Assert.Equal("new", JsonNode.Parse(File.ReadAllText(ConfigPath))!["managed"]!.GetValue<string>());
+        Assert.Empty(Directory.GetFiles(Path.GetDirectoryName(ConfigPath)!, "*.tmp"));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ReadProfileAndHash_RetryUntilExclusiveFileLockIsReleased(bool hashOnly)
+    {
+        Put(Original);
+        using var blocker = new FileStream(ConfigPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+        var retries = 0;
+        var store = Store(retryDelay: delay =>
+        {
+            Assert.Equal(TimeSpan.FromMilliseconds(25), delay);
+            retries++;
+            blocker.Dispose();
+        });
+
+        if (hashOnly) Assert.Equal(Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(Original))), store.CurrentHash());
+        else
+        {
+            store.ReadProfile();
+            Assert.Equal(Original, _editor.ReadText);
+        }
+        Assert.Equal(1, retries);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ReadProfileAndHash_PersistentFileLockStopsAfterBoundedRetries(bool hashOnly)
+    {
+        Put(Original);
+        using var blocker = new FileStream(ConfigPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+        var retries = 0;
+        var store = Store(retryDelay: _ => retries++);
+
+        var error = Assert.Throws<ClientConfigException>(() =>
+        {
+            if (hashOnly) store.CurrentHash();
+            else store.ReadProfile();
+        });
+
+        Assert.Equal(20, retries);
+        Assert.DoesNotContain(ConfigPath, error.ToString());
+        Assert.Null(error.InnerException);
+    }
+
+    [Fact]
+    public void Apply_ExistingReaderDoesNotTurnTransientReplaceLockIntoFailure()
+    {
+        Put(Original);
+        using var reader = new FileStream(ConfigPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        var retries = 0;
+        var store = Store(retryDelay: _ =>
+        {
+            retries++;
+            reader.Dispose();
+        });
+
+        store.Apply(Request(), new(), true, _ => { });
+
+        Assert.Equal(1, retries);
+        Assert.Equal("new", JsonNode.Parse(File.ReadAllText(ConfigPath))!["managed"]!.GetValue<string>());
+        Assert.Single(Directory.GetDirectories(Path.Combine(BackupRoot, "claude")));
+    }
+
+    [Fact]
+    public void Apply_RetriesPostWriteVerificationWithoutRepeatingReplacement()
+    {
+        Put(Original);
+        FileStream? blocker = null;
+        var replacements = 0;
+        var retries = 0;
+        var store = Store(replace: (temporary, target, _) =>
+        {
+            replacements++;
+            File.Replace(temporary, target, null);
+            blocker = new FileStream(target, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+        }, retryDelay: _ =>
+        {
+            retries++;
+            blocker!.Dispose();
+        });
+        try
+        {
+            store.Apply(Request(), new(), true, _ => { });
+            Assert.Equal(1, replacements);
+            Assert.Equal(1, retries);
+            Assert.Equal("new", JsonNode.Parse(File.ReadAllText(ConfigPath))!["managed"]!.GetValue<string>());
+        }
+        finally { blocker?.Dispose(); }
+    }
+
+    [Fact]
+    public void Apply_PersistentReplaceLockKeepsOriginalAndStopsAfterBoundedRetries()
+    {
+        Put(Original);
+        using var reader = new FileStream(ConfigPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        var retries = 0;
+        var replacements = 0;
+        var persisted = false;
+        var store = Store(replace: (temporary, target, _) =>
+        {
+            replacements++;
+            File.Replace(temporary, target, null);
+        }, retryDelay: _ => retries++);
+
+        var error = Assert.Throws<ClientConfigException>(() => store.Apply(Request(), new(), true, _ => persisted = true));
+
+        Assert.Equal(20, retries);
+        Assert.Equal(21, replacements);
+        Assert.False(persisted);
+        Assert.Equal(Original, File.ReadAllText(ConfigPath));
+        Assert.Contains("已恢复", error.Message);
+        Assert.Empty(Directory.GetFiles(Path.GetDirectoryName(ConfigPath)!, "*.tmp"));
+    }
+
+    [Theory]
+    [InlineData(32)]
+    [InlineData(1175)]
+    public void Apply_ExternalChangeWhileWaitingForFileLockIsNotOverwritten(int errorCode)
+    {
+        Put(Original);
+        var replacements = 0;
+        var store = Store(replace: (_, _, _) =>
+        {
+            replacements++;
+            throw new IOException("redacted-file-lock", unchecked((int)0x80070000) | errorCode);
+        }, retryDelay: _ => Put("{\"external\":true}"));
+        var persisted = false;
+
+        Assert.Throws<ClientConfigException>(() => store.Apply(Request(), new(), true, _ => persisted = true));
+
+        Assert.Equal(1, replacements);
+        Assert.False(persisted);
+        Assert.Equal("{\"external\":true}", File.ReadAllText(ConfigPath));
+        Assert.Equal(Original, File.ReadAllText(Assert.Single(Directory.GetFiles(BackupRoot, "settings.json", SearchOption.AllDirectories))));
+        Assert.Empty(Directory.GetFiles(Path.GetDirectoryName(ConfigPath)!, "*.tmp"));
+    }
+
+    [Theory]
+    [InlineData(32)]
+    [InlineData(1175)]
+    public void Apply_RechecksWriteBlockBeforeRetryingReplacement(int errorCode)
+    {
+        Put(Original);
+        var blocked = false;
+        var replacements = 0;
+        var store = Store(replace: (_, _, _) =>
+        {
+            replacements++;
+            throw new IOException("redacted-file-lock", unchecked((int)0x80070000) | errorCode);
+        }, writesBlocked: () => blocked, retryDelay: _ => blocked = true);
+
+        Assert.Throws<ClientConfigException>(() => store.Apply(Request(), new(), true, _ => { }));
+
+        Assert.Equal(1, replacements);
+        Assert.Equal(Original, File.ReadAllText(ConfigPath));
+        Assert.Empty(Directory.GetFiles(Path.GetDirectoryName(ConfigPath)!, "*.tmp"));
+    }
+
+    [Theory]
+    [InlineData(5)]
+    [InlineData(112)]
+    [InlineData(1176)]
+    [InlineData(1177)]
+    public void Apply_AccessAndDiskErrorsAreNotRetried(int errorCode)
+    {
+        Put(Original);
+        var retries = 0;
+        var replacements = 0;
+        var store = Store(replace: (_, _, _) =>
+        {
+            replacements++;
+            throw new IOException("redacted-secret", unchecked((int)0x80070000) | errorCode);
+        }, retryDelay: _ => retries++);
+
+        var error = Assert.Throws<ClientConfigException>(() => store.Apply(Request(), new(), true, _ => { }));
+
+        Assert.Equal(1, replacements);
+        Assert.Equal(0, retries);
+        Assert.Equal(Original, File.ReadAllText(ConfigPath));
+        Assert.DoesNotContain("redacted-secret", error.ToString());
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Apply_RollbackRetriesFileLocksForExistingAndNewFiles(bool existed)
+    {
+        if (existed) Put(Original);
+        FileStream? reader = null;
+        var saves = 0;
+        var retries = 0;
+        var store = Store(retryDelay: _ =>
+        {
+            retries++;
+            reader!.Dispose();
+        });
+        try
+        {
+            var error = Assert.Throws<ClientConfigException>(() => store.Apply(Request(), new(), true, _ =>
+            {
+                saves++;
+                reader = new FileStream(ConfigPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                throw new IOException("redacted-persist-failure");
+            }));
+
+            Assert.Equal(1, saves);
+            Assert.Equal(1, retries);
+            Assert.Contains("已恢复", error.Message);
+            if (existed) Assert.Equal(Original, File.ReadAllText(ConfigPath));
+            else Assert.False(File.Exists(ConfigPath));
+            Assert.Empty(Directory.GetFiles(Path.GetDirectoryName(ConfigPath)!, "*.tmp"));
+        }
+        finally { reader?.Dispose(); }
+    }
+
+    [Fact]
+    public void Apply_RollbackRetryPreservesExternalChanges()
+    {
+        Put(Original);
+        var replacements = 0;
+        var store = Store(replace: (temporary, target, _) =>
+        {
+            if (++replacements == 2)
+                throw new IOException("redacted-file-lock", unchecked((int)0x80070020));
+            File.Replace(temporary, target, null);
+        }, retryDelay: _ => Put("{\"external\":true}"));
+
+        var error = Assert.Throws<ClientConfigException>(() => store.Apply(Request(), new(), true,
+            _ => throw new IOException("redacted-persist-failure")));
+
+        Assert.Equal(2, replacements);
+        Assert.Contains("无法自动恢复", error.Message);
+        Assert.Equal("{\"external\":true}", File.ReadAllText(ConfigPath));
+        Assert.Empty(Directory.GetFiles(Path.GetDirectoryName(ConfigPath)!, "*.tmp"));
+    }
+
+    [Fact]
+    public void Apply_DoesNotRetryStatePersistenceCallback()
+    {
+        Put(Original);
+        var saves = 0;
+        var retries = 0;
+        var store = Store(retryDelay: _ => retries++);
+
+        Assert.Throws<ClientConfigException>(() => store.Apply(Request(), new(), true, _ =>
+        {
+            saves++;
+            throw new IOException("redacted-file-lock", unchecked((int)0x80070020));
+        }));
+
+        Assert.Equal(1, saves);
+        Assert.Equal(0, retries);
+        Assert.Equal(Original, File.ReadAllText(ConfigPath));
+    }
+
+    [Fact]
+    public void Apply_ReplaceRemovalFailureStopsAfterBoundedRetriesAndKeepsSafeDiagnostic()
+    {
+        Put(Original);
+        var replacements = 0;
+        var retries = 0;
+        var saves = 0;
+        var store = Store(replace: (_, _, _) =>
+        {
+            replacements++;
+            throw new IOException("secret-key-in-native-message", unchecked((int)0x80070497));
+        }, retryDelay: _ => retries++);
+
+        var error = Assert.Throws<ClientConfigException>(() => store.Apply(Request(), new(), true, _ => saves++));
+
+        Assert.Equal(21, replacements);
+        Assert.Equal(20, retries);
+        Assert.Equal(0, saves);
+        Assert.Equal(Original, File.ReadAllText(ConfigPath));
+        Assert.Equal("阶段 Replace，HRESULT 0x80070497", error.Diagnostic);
+        Assert.DoesNotContain("secret-key", error.ToString());
+        Assert.DoesNotContain(ConfigPath, error.ToString());
+        Assert.Null(error.InnerException);
+        Assert.Empty(Directory.GetFiles(Path.GetDirectoryName(ConfigPath)!, "*.tmp"));
+    }
+
+    [Fact]
+    public void Apply_RollbackRetriesReplaceRemovalFailureWithoutRepeatingPersistence()
+    {
+        Put(Original);
+        var replacements = 0;
+        var retries = 0;
+        var saves = 0;
+        var store = Store(replace: (temporary, target, _) =>
+        {
+            if (++replacements == 2)
+                throw new IOException("redacted-removal-failure", unchecked((int)0x80070497));
+            File.Replace(temporary, target, null);
+        }, retryDelay: _ => retries++);
+
+        var error = Assert.Throws<ClientConfigException>(() => store.Apply(Request(), new(), true, _ =>
+        {
+            saves++;
+            throw new IOException("secret-persistence-message", unchecked((int)0x80070070));
+        }));
+
+        Assert.Equal(3, replacements);
+        Assert.Equal(1, retries);
+        Assert.Equal(1, saves);
+        Assert.Equal(Original, File.ReadAllText(ConfigPath));
+        Assert.Equal("阶段 PersistState，HRESULT 0x80070070", error.Diagnostic);
+        Assert.Null(error.InnerException);
+    }
+
+    [Fact]
+    public void Apply_PostWriteConflictRecordsVerificationAndRollbackStagesWithoutFileContents()
+    {
+        Put(Original);
+        const string external = "{\"external-secret\":true}";
+        var store = Store(replace: (temporary, target, _) =>
+        {
+            File.Replace(temporary, target, null);
+            File.WriteAllText(target, external);
+        });
+
+        var error = Assert.Throws<ClientConfigException>(() => store.Apply(Request(), new(), true, _ => { }));
+
+        Assert.Equal("阶段 VerifyWritten，HRESULT 0x80131620；恢复阶段 RollbackVerify，HRESULT 0x80131620", error.Diagnostic);
+        Assert.DoesNotContain("external-secret", error.ToString());
+        Assert.Equal(external, File.ReadAllText(ConfigPath));
+        Assert.Null(error.InnerException);
+    }
+
     [Fact]
     public void Apply_BackupFailureLeavesClientAndMetadataUntouched()
     {
@@ -502,8 +857,8 @@ public sealed class ClientConfigStoreTests : IDisposable
     }
 
     private ClientConfigStore Store(Action<string, string, bool>? replace = null, Func<DateTime>? clock = null,
-        Action? beforeWrite = null, Func<bool>? writesBlocked = null) =>
-        new(BackupRoot, _editor, ConfigPath, replace, clock, beforeWrite, writesBlocked);
+        Action? beforeWrite = null, Func<bool>? writesBlocked = null, Action<TimeSpan>? retryDelay = null) =>
+        new(BackupRoot, _editor, ConfigPath, replace, clock, beforeWrite, writesBlocked, retryDelay);
 
     private void Put(string text)
     {

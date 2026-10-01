@@ -74,7 +74,7 @@
                 <ItemsControl.ItemTemplate><DataTemplate>
                     <Border Style="{StaticResource ProviderCard}" AllowDrop="True" Drop="OnProviderDrop" DragOver="OnDragOver" AutomationProperties.AutomationId="{Binding Id}">
                         <StackPanel>
-                            <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                            <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                                 <TextBlock Text="≡" FontSize="22" Margin="0,0,10,0" VerticalAlignment="Center" Cursor="SizeAll" ToolTip="{i18n:T 拖动排序}"
                                            PreviewMouseLeftButtonDown="OnDragStart" MouseMove="OnProviderDrag" />
                                 <StackPanel Grid.Column="1" Margin="0,0,8,0">
@@ -84,10 +84,14 @@
                                 </StackPanel>
                                 <ui:Button Grid.Column="2" Icon="{ui:SymbolIcon Open24}" Command="{Binding WebsiteCommand}" ToolTip="{i18n:T 打开官网}"
                                            Visibility="{Binding HasWebsite, Converter={StaticResource BooleanToVisibilityConverter}}" VerticalAlignment="Center" Padding="6" />
-                                <ui:Button Grid.Column="3" Content="⋯" Click="OnMenuClick" VerticalAlignment="Center" Margin="6,0,0,0" Padding="8,3" AutomationProperties.Name="{i18n:T 供应商操作}">
+                                <ui:Button Grid.Column="3" Content="{i18n:T 刷新余额}" Command="{Binding RefreshBalanceCommand}" VerticalAlignment="Center"
+                                           Margin="6,0,0,0" Padding="8,4" AutomationProperties.AutomationId="{Binding RefreshBalanceId}"
+                                           Visibility="{Binding BalanceEnabled, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                                <ui:Button Grid.Column="4" Content="⋯" Click="OnMenuClick" VerticalAlignment="Center" Margin="6,0,0,0" Padding="8,3" AutomationProperties.Name="{i18n:T 供应商操作}" AutomationProperties.AutomationId="{Binding MenuId}">
                                     <ui:Button.ContextMenu><ContextMenu DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">
                                         <MenuItem Header="{i18n:T 编辑}" Command="{Binding EditCommand}" />
                                         <MenuItem Header="{i18n:T 复制供应商}" Command="{Binding DuplicateCommand}" />
+                                        <MenuItem Header="{i18n:T 准备全部 Key}" Command="{Binding PrepareAllCommand}" />
                                         <MenuItem Header="{i18n:T 打开官网}" Command="{Binding WebsiteCommand}" IsEnabled="{Binding HasWebsite}" />
                                         <Separator/><MenuItem Header="{i18n:T 删除}" Command="{Binding DeleteCommand}" />
                                     </ContextMenu></ui:Button.ContextMenu>
@@ -95,16 +99,34 @@
                             </Grid>
                             <ItemsControl Margin="0,8,0,0" ItemsSource="{Binding Keys}"><ItemsControl.ItemTemplate><DataTemplate>
                                 <Grid Margin="0,3" AllowDrop="True" Drop="OnKeyDrop"><Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/>
                                 </Grid.ColumnDefinitions>
                                     <TextBlock Text="{Binding Marker}" Margin="2,0,10,0" VerticalAlignment="Center" Cursor="SizeAll" ToolTip="{i18n:T 拖动排序}"
                                                PreviewMouseLeftButtonDown="OnDragStart" MouseMove="OnKeyDrag" />
                                     <StackPanel Grid.Column="1" Margin="0,0,8,0" VerticalAlignment="Center">
                                         <TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis" ToolTip="{Binding Name}" />
                                         <TextBlock Text="{Binding MaskedKey}" FontFamily="Consolas" Style="{StaticResource SecondaryText}" />
+                                        <TextBlock Text="{Binding Balance}" ToolTip="{Binding BalanceHint}" TextTrimming="CharacterEllipsis"
+                                                   Visibility="{Binding BalanceEnabled, Converter={StaticResource BooleanToVisibilityConverter}}"
+                                                   AutomationProperties.AutomationId="{Binding BalanceStatusId}">
+                                            <TextBlock.Style><Style TargetType="TextBlock">
+                                                <Style.Triggers><DataTrigger Binding="{Binding BalanceCritical}" Value="True">
+                                                    <Setter Property="Foreground" Value="{DynamicResource SystemFillColorCriticalBrush}" />
+                                                </DataTrigger></Style.Triggers>
+                                            </Style></TextBlock.Style>
+                                        </TextBlock>
+                                        <TextBlock Text="{Binding PreparationState}" ToolTip="{Binding PreparationHint}" TextWrapping="Wrap"
+                                                   AutomationProperties.AutomationId="{Binding PreparationStatusId}">
+                                            <TextBlock.Style><Style TargetType="TextBlock" BasedOn="{StaticResource SecondaryText}">
+                                                <Style.Triggers><DataTrigger Binding="{Binding PreparationFailed}" Value="True">
+                                                    <Setter Property="Foreground" Value="{DynamicResource SystemFillColorCriticalBrush}" />
+                                                </DataTrigger></Style.Triggers>
+                                            </Style></TextBlock.Style>
+                                        </TextBlock>
                                     </StackPanel>
                                     <ui:Button Grid.Column="2" Content="{Binding SwitchText}" Command="{Binding SwitchCommand}" VerticalAlignment="Center" Padding="10,4" AutomationProperties.AutomationId="{Binding Id}" />
-                                    <ui:Button Grid.Column="3" Content="⋯" Margin="6,0,0,0" Click="OnMenuClick" VerticalAlignment="Center" Padding="8,3" AutomationProperties.Name="{i18n:T Key 操作}">
+                                    <ui:Button Grid.Column="3" Content="{Binding PreparationAction}" Command="{Binding PrepareCommand}" Margin="6,0,0,0" VerticalAlignment="Center" Padding="8,4" AutomationProperties.AutomationId="{Binding PrepareId}" />
+                                    <ui:Button Grid.Column="4" Content="⋯" Margin="6,0,0,0" Click="OnMenuClick" VerticalAlignment="Center" Padding="8,3" AutomationProperties.Name="{i18n:T Key 操作}">
                                         <ui:Button.ContextMenu><ContextMenu DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">
                                             <MenuItem Header="{i18n:T 编辑}" Command="{Binding EditCommand}" />
                                             <MenuItem Header="{i18n:T 复制 Key}" Command="{Binding CopyCommand}" />
@@ -115,6 +137,7 @@
                             </DataTemplate></ItemsControl.ItemTemplate></ItemsControl>
                             <WrapPanel Margin="0,8,0,0">
                                 <ui:Button Content="{i18n:T 添加 Key}" Icon="{ui:SymbolIcon Add24}" Command="{Binding AddKeyCommand}" Padding="8,4" />
+                                <ui:Button Content="{i18n:T 准备全部 Key}" Command="{Binding PrepareAllCommand}" Margin="8,0,0,0" Padding="8,4" AutomationProperties.AutomationId="{Binding PrepareAllId}" />
                                 <ui:Button Content="{Binding FoldText}" Command="{Binding FoldCommand}" Margin="8,0,0,0" Padding="8,4" Visibility="{Binding CanFold, Converter={StaticResource BooleanToVisibilityConverter}}" />
                             </WrapPanel>
                         </StackPanel>

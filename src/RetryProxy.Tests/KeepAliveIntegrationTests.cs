@@ -143,7 +143,7 @@ public class KeepAliveIntegrationTests
             Assert.Equal(0UL, fixture.Metrics.Snapshot().TotalRequests);
             var logs = fixture.DrainLogs();
             Assert.True(
-                logs.Exists(line => line.Contains(client) && line.Contains("响应未完成") && line.Contains("随机等待 1.500～2.500 秒后继续重试") && line.Contains("终止准备")),
+                logs.Exists(line => line.Contains(client) && line.Contains("响应未完成") && line.Contains("1.500～2.500秒后重试")),
                 string.Join("\n", logs));
 
             Assert.True(watchdog.CancelPreparation());
@@ -256,11 +256,11 @@ while ($null -ne $line) {
         Assert.Equal("preserved", metadata.GetProperty("fixture_field").GetString());
         Assert.Equal("{\"thread_id\":\"fake-thread\"}", metadata.GetProperty("x-codex-turn-metadata").GetString());
         var logs = await fixture.CompletedLogs();
-        Assert.True(logs.Contains("[通道保活][准备][会话 ") && logs.Contains("Codex CLI，沿用本机客户端配置，问题："), logs);
+        Assert.True(logs.Contains("[通道保活][准备][会话 ") && logs.Contains("Codex CLI，本机客户端配置，问："), logs);
         Assert.DoesNotContain("[自动保活]", logs);
-        Assert.True(logs.Contains("Codex CLI 完成，当前会话 52/50000 token") && logs.Contains("回答：Java CLI 验证回答") && logs.Contains("自动保活已关闭"), logs);
+        Assert.True(logs.Contains("Codex CLI 完成，上下文 52/50000 token") && logs.Contains("答：Java CLI 验证回答") && logs.Contains("自动保活已关闭"), logs);
         // 本轮结论不重复请求行已有的用量，一次请求只对应一条带 token 的日志。
-        Assert.Equal(1, logs.Split("输入 40 / 输出 12 token").Length - 1);
+        Assert.Equal(1, logs.Split("输入/输出 40/12 token").Length - 1);
         Assert.DoesNotContain("local-validation-token", logs);
 
         // 再问一轮复用同一会话（同一个 CLI 进程），轮次递增。

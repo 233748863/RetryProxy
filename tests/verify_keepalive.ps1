@@ -363,8 +363,8 @@ while ($null -ne $line) {
     Write-Host '通道独立设置检查通过。'
     $request = @{ model = 'client-format-model'; stream = $true; store = $false; instructions = 'required client system instructions'; tools = @(@{ type = 'function'; name = 'client_tool'; parameters = @{ type = 'object' } }); input = @(@{ role = 'user'; content = @(@{ type = 'input_text'; text = '正常客户端验证消息' }) }) } | ConvertTo-Json -Depth 10
     $null = Invoke-WebRequest "http://127.0.0.1:$proxyPort/v1/responses?beta=a%20b" -Method Post -ContentType 'application/json; charset=utf-8' -Headers @{ 'User-Agent' = 'client-validation/1'; originator = 'cli-client'; Authorization = 'Bearer local-validation-token' } -Body ([Text.Encoding]::UTF8.GetBytes($request)) -TimeoutSec 15
-    Wait-Condition { (Get-Content -LiteralPath $logPath -Raw) -match '输入 40 / 输出 12 token' } '正常客户端请求未完成'
-    Wait-Condition { (Get-Content -LiteralPath $logPath -Raw) -match '\[通道保活\].*回答：' } '空闲 30 秒后未执行自动保活' 45
+    Wait-Condition { (Get-Content -LiteralPath $logPath -Raw) -match '输入/输出 40/12 token' } '正常客户端请求未完成'
+    Wait-Condition { (Get-Content -LiteralPath $logPath -Raw) -match '\[通道保活\].*答：' } '空闲 30 秒后未执行自动保活' 45
     # 第二轮由模拟 CLI 卡住，真实请求到达后必须让行，不以旧手动准备入口代替。
     Wait-Condition { (Get-Content -LiteralPath $cliEventPath -Raw) -match 'HELD' } '第二轮自动保活没有进入等待状态' 45
     $null = Invoke-WebRequest "http://127.0.0.1:$proxyPort/v1/responses?beta=a%20b" -Method Post -ContentType 'application/json; charset=utf-8' -Headers @{ 'User-Agent' = 'client-validation/1'; originator = 'cli-client'; Authorization = 'Bearer local-validation-token' } -Body ([Text.Encoding]::UTF8.GetBytes($request)) -TimeoutSec 15
@@ -393,7 +393,7 @@ while ($null -ne $line) {
         return $false
     } '窗口没有保留正确的累计轮次和最近成功用量'
     $logs = Get-Content -LiteralPath $logPath -Raw
-    foreach ($value in @('随机题号', '首字', '耗时', '回答：', '当前会话 52/50000 token')) {
+    foreach ($value in @('题 ', '首字', '总 ', '答：', '上下文 52/50000 token')) {
         if (-not $logs.Contains($value)) { throw "日志缺少：$value" }
     }
     $screenshotPath = $null

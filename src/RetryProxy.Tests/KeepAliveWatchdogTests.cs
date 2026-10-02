@@ -310,7 +310,7 @@ public class KeepAliveWatchdogTests
             }
 
             using var probe = watchdog.BeginDueProbe()!;
-            probe.Fail("上游 HTTP 500");
+            probe.Fail("HTTP 500");
             Assert.False(watchdog.Snapshot().Enabled);
         }
 
@@ -359,7 +359,7 @@ public class KeepAliveWatchdogTests
             }
 
             using var probe = watchdog.BeginDueProbe()!;
-            probe.Fail("上游 HTTP 500");
+            probe.Fail("HTTP 500");
         }
 
         Assert.True(watchdog.Snapshot().Preparing);

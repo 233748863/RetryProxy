@@ -37,6 +37,74 @@ public class LegacyLogRestoreTests : IDisposable
         File.WriteAllText(Path.Combine(_directory, name), string.Concat(lines.Select(line => line + "\n")), new UTF8Encoding(false));
     }
 
+    [Theory]
+    [InlineData("模型 actual", "actual")]
+    [InlineData("模型 requested -> actual (不一致)", "actual")]
+    [InlineData("模型 requested -> 未报告", "requested")]
+    [InlineData("模型 未指定 -> actual", "actual")]
+    public void CompactCompletionRestoresModelUsageAndCacheKey(string modelField, string expectedModel)
+    {
+        WriteLog("retry-proxy.log",
+            $"2026-09-19 01:00:00 INFO [通道代理][通道][请求 11111111] POST /v1/messages -> HTTP 200，{modelField}，思考 high，输入/输出 100/2 token，缓存 75.0%（读 900 / 写 200），缓存标识 客户端，首字 0.10秒 / 总 0.20秒",
+            "2026-09-19 01:00:01 WARNING [通道代理][通道][请求 22222222] POST /v1/messages -> HTTP 200，响应未完成：上游错误，已转发，不重试");
+
+        var records = LegacyLogRestore.Restore(_directory, "通道", Date);
+        Assert.Equal(RequestOutcome.Success, records["11111111"].Outcome);
+        Assert.Equal(CacheKeyState.Client, records["11111111"].CacheKey);
+        var cache = records["11111111"].Cache!;
+        Assert.Equal(expectedModel, cache.Model);
+        Assert.Equal((1200UL, 900UL), cache.Usage());
+        Assert.Equal(200UL, cache.CacheCreationTokens);
+        Assert.Equal(RequestOutcome.Failure, records["22222222"].Outcome);
+    }
+
+    [Theory]
+    [InlineData("客户端", CacheKeyState.Client)]
+    [InlineData("已补全", CacheKeyState.Added)]
+    [InlineData("未补全（缺会话）", CacheKeyState.MissingSession)]
+    [InlineData("未补全（上游不支持）", CacheKeyState.Unsupported)]
+    public void CompactFieldsWithoutCachePercentageRemainRestorable(string keyLabel, CacheKeyState state)
+    {
+        WriteLog("retry-proxy.log",
+            $"2026-09-19 01:00:00 INFO [通道代理][通道][请求 11111111] POST /v1/responses -> HTTP 200，模型 m，输入/输出 未获取/1 token，缓存（读 42），缓存标识 {keyLabel}，总 0.20秒");
+        var request = LegacyLogRestore.Restore(_directory, "通道", Date)["11111111"];
+        Assert.Equal(state, request.CacheKey);
+        Assert.Null(request.Cache!.InputTokens);
+        Assert.Equal(42UL, request.Cache.CachedTokens);
+    }
+
+    [Theory]
+    [InlineData("HTTP 429（上游请求超限）")]
+    [InlineData("HTTP 200，上游请求超限，未转发")]
+    [InlineData("HTTP 无，等待上游响应超时")]
+    public void CompactRetryNoticesDeduplicateWithoutCountingCompatibilityOrSwitches(string response)
+    {
+        var retry = $"2026-09-19 01:00:00 WARNING [通道代理][通道][请求 11111111] 第 1 次 POST /v1/responses -> {response}，0.1秒后重试";
+        WriteLog("retry-proxy.log.1", retry);
+        WriteLog("retry-proxy.log", retry,
+            "2026-09-19 01:00:01 INFO [通道代理][通道][请求 11111111] 上游不接受代理补充的缓存标识，原请求兼容重发一次；同接口、模型及鉴权暂停补充",
+            "2026-09-19 01:00:02 INFO [通道代理][通道][请求 11111111] 改投 供应商 · Key，未输出，立即重发（不计重试）",
+            "2026-09-19 01:00:03 INFO [通道代理][通道][请求 11111111] POST /v1/responses -> HTTP 200（重试 1 次），模型 m，输入/输出 10/2 token");
+
+        var record = LegacyLogRestore.Restore(_directory, "通道", Date)["11111111"];
+        Assert.Equal(1UL, record.RetryCount);
+        Assert.Equal(1UL, record.LastRetryAttempt);
+        Assert.Equal(RequestOutcome.Success, record.Outcome);
+        Assert.True(record.CacheFallback);
+    }
+
+    [Fact]
+    public void CompactAttemptNumbersDoNotInventRetriesOutsideRetainedNotices()
+    {
+        WriteLog("retry-proxy.log",
+            "2026-09-19 01:00:00 WARNING [通道代理][通道][请求 11111111] 第 451 次 POST /v1/responses -> HTTP 无，等待上游响应超时，本次 1.00秒，0.1秒后重试",
+            "2026-09-19 01:00:01 WARNING [通道代理][通道][请求 11111111] 第 452 次 POST /v1/responses -> HTTP 无，等待上游响应超时，本次 1.00秒，已达到重试上限");
+
+        var record = LegacyLogRestore.Restore(_directory, "通道", Date)["11111111"];
+        Assert.Equal(1UL, record.RetryCount);
+        Assert.Equal(RequestOutcome.Failure, record.Outcome);
+    }
+
     [Fact]
     public void RetainedLogsDeduplicateAttemptsAndTerminalResultsAndExcludeKeepalive()
     {

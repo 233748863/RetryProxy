@@ -513,17 +513,25 @@ internal sealed class ResponseStats
         {
             foreach (var (label, value) in _errorFields)
             {
-                fields.Append('，').Append(label).Append(' ').Append(value);
+                var shortLabel = label switch
+                {
+                    "上游错误码" => "错误码",
+                    "上游错误类型" => "错误类型",
+                    "错误参数" => "参数",
+                    "未完成原因" => "未完成",
+                    _ => label,
+                };
+                fields.Append('，').Append(shortLabel).Append(' ').Append(value);
             }
 
             if (_upstreamRequestId is not null)
             {
-                fields.Append("，上游请求 ID ").Append(_upstreamRequestId);
+                fields.Append("，上游 ID ").Append(_upstreamRequestId);
             }
 
             if (_format == BodyFormat.EventStream && _isApiResponse)
             {
-                fields.Append("，生成内容：").Append(_firstContentSeconds is not null ? "已读取到" : "未读取到");
+                fields.Append("，内容 ").Append(_firstContentSeconds is not null ? "已收到" : "未收到");
                 if (_lastEventType is not null)
                 {
                     fields.Append("，最后事件 ").Append(_lastEventType);
@@ -531,24 +539,23 @@ internal sealed class ResponseStats
             }
         }
 
-        if (_model is not null)
-        {
-            fields.Append("，模型 ").Append(DiagnosticText.ComparisonDisplay(_model));
-        }
-
         if (_isApiResponse)
         {
-            AppendComparison(fields, "模型对照", _requestModel, _responseModel, _requestModelIdentity != _responseModelIdentity);
-            AppendComparison(fields, "思考等级", _requestEffort, _responseEffort);
+            AppendComparison(fields, "模型", _requestModel, _responseModel, _requestModelIdentity != _responseModelIdentity);
+            AppendComparison(fields, "思考", _requestEffort, _responseEffort);
+        }
+        else if (_model is not null)
+        {
+            fields.Append("，模型 ").Append(DiagnosticText.ComparisonDisplay(_model));
         }
 
         // 失败时两项用量都没读到就整段不写，只读到一项才提示不完整。
         if (_isApiResponse && !(failed && _usage.Input is null && _usage.Output is null))
         {
-            fields.Append("，输入 ").Append(Count(_usage.Input)).Append(" / 输出 ").Append(Count(_usage.Output)).Append(" token");
+            fields.Append("，输入/输出 ").Append(Count(_usage.Input)).Append('/').Append(Count(_usage.Output)).Append(" token");
             if (failed && (_usage.Input is null || _usage.Output is null))
             {
-                fields.Append("（用量统计不完整）");
+                fields.Append("（用量不全）");
             }
         }
 
@@ -558,21 +565,21 @@ internal sealed class ResponseStats
             fields.Append("，推理 ").Append(reasoning.ToString(CultureInfo.InvariantCulture)).Append(" token");
         }
 
-        if (_cacheKeyState.Label() is { } keyLabel)
+        if (_cacheKeyState.LogLabel() is { } keyLabel)
         {
-            fields.Append("，缓存标识：").Append(keyLabel);
+            fields.Append("，缓存标识 ").Append(keyLabel);
         }
 
         if (_contentEncoding is not null)
         {
-            fields.Append("，响应压缩 ").Append(_contentEncoding);
+            fields.Append("，压缩 ").Append(_contentEncoding);
             if (_decoder is null)
             {
-                fields.Append("（不支持解压，未解析）");
+                fields.Append("（未支持，未解析）");
             }
             else if (_decoder.Failed)
             {
-                fields.Append("（解压失败，未解析）");
+                fields.Append("（解压失败）");
             }
         }
 
@@ -581,20 +588,32 @@ internal sealed class ResponseStats
 
     private static void AppendComparison(StringBuilder fields, string label, string? sent, string? reported, bool? mismatch = null)
     {
-        // 避免字段分隔符和差异标记被模型名伪造；比较仍使用原值。
-        fields.Append('，').Append(label).Append(" 发出 ").Append(DiagnosticText.ComparisonDisplay(sent ?? "未指定"))
-            .Append(" → 返回 ").Append(DiagnosticText.ComparisonDisplay(reported ?? "未报告"));
-        if (sent is not null && reported is not null && (mismatch ?? !string.Equals(sent, reported, StringComparison.Ordinal)))
+        // 两端都缺失时省略；明确相同时只写一次，单端缺失仍保留方向，避免把“未报告”当作已确认。
+        if (sent is null && reported is null)
         {
-            fields.Append("（不一致）");
+            return;
+        }
+
+        var bothKnown = sent is not null && reported is not null;
+        var different = mismatch ?? !string.Equals(sent, reported, StringComparison.Ordinal);
+        fields.Append('，').Append(label).Append(' ').Append(DiagnosticText.ComparisonDisplay(sent ?? "未指定"));
+        if (bothKnown && !different)
+        {
+            return;
+        }
+
+        fields.Append(" -> ").Append(DiagnosticText.ComparisonDisplay(reported ?? "未报告"));
+        if (bothKnown && different)
+        {
+            fields.Append(" (不一致)");
         }
     }
 
     private static string Count(ulong? value) => value?.ToString(CultureInfo.InvariantCulture) ?? "未获取";
 
     /// <summary>
-    /// 缓存用量合成一段：能算命中率时 <c>，缓存 95.9%（命中 114681 / 写入 4907）</c>，一点没命中时 <c>，缓存 0.0%（完全未命中 / 写入 4907）</c>；
-    /// 算不出命中率时 <c>，缓存（命中 42）</c>；上游没报缓存用量时不写。
+    /// 缓存用量合成一段，例：<c>，缓存 95.9%（读 114681 / 写 4907）</c>；零命中直接写读 0。
+    /// 算不出命中率时写 <c>，缓存（读 42）</c>；上游没报缓存用量时不写。
     /// </summary>
     private void AppendCacheFields(StringBuilder fields)
     {
@@ -602,16 +621,16 @@ internal sealed class ResponseStats
         var parts = new List<string>(2);
         if (usage is { Cached: 0 })
         {
-            parts.Add("完全未命中");
+            parts.Add("读 0");
         }
         else if (_usage.CacheRead is { } read)
         {
-            parts.Add($"命中 {read.ToString(CultureInfo.InvariantCulture)}");
+            parts.Add($"读 {read.ToString(CultureInfo.InvariantCulture)}");
         }
 
         if (_usage.CacheCreation is { } creation)
         {
-            parts.Add($"写入 {creation.ToString(CultureInfo.InvariantCulture)}");
+            parts.Add($"写 {creation.ToString(CultureInfo.InvariantCulture)}");
         }
 
         if (parts.Count == 0)

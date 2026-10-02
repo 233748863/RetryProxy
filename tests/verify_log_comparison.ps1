@@ -129,16 +129,16 @@ function Get-Health([int]$Port) {
 $cases = @(
     @{ id='lc01'; client='codex'; path='/v1/responses'; status=200; type='application/json'; model='lc01-gpt'; effort='high'; stream=$false;
        response='{"id":"fixture-lc01","model":"lc01-gpt","reasoning":{"effort":"high"},"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"fixture ok"}]}],"usage":{"input_tokens":10,"output_tokens":2}}';
-       fields=@('模型 lc01-gpt','模型对照 发出 lc01-gpt → 返回 lc01-gpt','思考等级 发出 high → 返回 high'); mismatches=0 },
+       fields=@('模型 lc01-gpt','思考 high','输入/输出 10/2 token'); mismatches=0 },
     @{ id='lc02'; client='codex'; path='/v1/responses'; status=200; type='text/event-stream'; model='lc02-sent'; effort='max'; stream=$true;
        response="event: response.created`ndata: {`"type`":`"response.created`",`"response`":{`"id`":`"fixture-lc02`",`"model`":`"lc02-returned`",`"reasoning`":{`"effort`":`"high`"}}}`n`nevent: response.output_text.delta`ndata: {`"type`":`"response.output_text.delta`",`"delta`":`"fixture ok`"}`n`nevent: response.completed`ndata: {`"type`":`"response.completed`",`"response`":{`"status`":`"completed`",`"model`":`"lc02-returned`",`"reasoning`":{`"effort`":`"high`"},`"output`":[],`"usage`":{`"input_tokens`":10,`"output_tokens`":2}}}`n`n";
-       fields=@('模型 lc02-returned','模型对照 发出 lc02-sent → 返回 lc02-returned（不一致）','思考等级 发出 max → 返回 high（不一致）'); mismatches=2 },
+       fields=@('模型 lc02-sent -> lc02-returned (不一致)','思考 max -> high (不一致)'); mismatches=2 },
     @{ id='lc03'; client='claude'; path='/v1/messages'; status=200; type='text/event-stream'; model='lc03-claude'; effort='max'; stream=$true;
        response="event: message_start`ndata: {`"type`":`"message_start`",`"message`":{`"id`":`"fixture-lc03`",`"type`":`"message`",`"role`":`"assistant`",`"model`":`"lc03-claude`",`"output_config`":{`"effort`":`"high`"},`"content`":[],`"usage`":{`"input_tokens`":10,`"output_tokens`":0}}}`n`nevent: content_block_delta`ndata: {`"type`":`"content_block_delta`",`"index`":0,`"delta`":{`"type`":`"text_delta`",`"text`":`"fixture ok`"}}`n`nevent: message_delta`ndata: {`"type`":`"message_delta`",`"delta`":{`"stop_reason`":`"end_turn`"},`"usage`":{`"output_tokens`":2}}`n`nevent: message_stop`ndata: {`"type`":`"message_stop`"}`n`n";
-       fields=@('模型 lc03-claude','模型对照 发出 lc03-claude → 返回 lc03-claude','思考等级 发出 max → 返回 high（不一致）'); mismatches=1 },
+       fields=@('模型 lc03-claude','思考 max -> high (不一致)'); mismatches=1 },
     @{ id='lc04'; client='claude'; path='/v1/messages'; status=200; type='application/json'; model='lc04-missing'; effort='max'; stream=$false;
        response='{"id":"fixture-lc04","type":"message","role":"assistant","content":[{"type":"text","text":"fixture metadata absent"}],"stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":2}}';
-       fields=@('模型 lc04-missing','模型对照 发出 lc04-missing → 返回 未报告','思考等级 发出 max → 返回 未报告'); mismatches=0 },
+       fields=@('模型 lc04-missing -> 未报告','思考 max -> 未报告'); mismatches=0 },
     @{ id='lc05'; client='codex'; path='/v1/responses'; status=400; type='application/json'; model='lc05-http400'; effort='high'; stream=$false;
        response='{"error":{"type":"fixture_bad_request","message":"lc05 fixture HTTP400"}}'; fields=@('HTTP 400'); mismatches=0 },
     @{ id='lc06'; client='claude'; path='/v1/messages'; status=500; type='application/json'; model='lc06-http500'; effort='max'; stream=$false;
@@ -244,7 +244,7 @@ try {
             $found.text = @($lines | Where-Object { $line=$_; @($case.fields | Where-Object { !$line.Contains($_) }).Count -eq 0 } | Select-Object -First 1)[0]
             !!$found.text
         } "$($case.id)：UIA LogRows 未出现完整对照字段"
-        if ([regex]::Matches($found.text,'（不一致）').Count -ne $case.mismatches) { throw "$($case.id)：不一致标记数量错误" }
+        if ([regex]::Matches($found.text,' \(不一致\)').Count -ne $case.mismatches) { throw "$($case.id)：不一致标记数量错误" }
         ($record.cases | Where-Object id -eq $case.id).uiaText=$found.text
         Capture ('dark-'+$case.id)
     }

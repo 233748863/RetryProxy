@@ -22,11 +22,11 @@ public static class SafeCliError
 
     private static readonly (string[] Markers, string Reason)[] Keywords =
     {
-        (new[] { "401", "invalid_api_key", "authentication_error" }, "CLI 认证失败，请检查本机客户端登录或密钥配置"),
-        (new[] { "403", "permission_denied" }, "CLI 请求被供应商拒绝（权限不足）"),
-        (new[] { "429", "rate_limit" }, "CLI 请求触发供应商限流"),
-        (new[] { "context_length", "context window" }, "CLI 会话达到供应商上下文限制，已清理会话"),
-        (new[] { "model_not_found", "unsupported model" }, "本机 CLI 配置的模型不可用"),
+        (new[] { "401", "invalid_api_key", "authentication_error" }, "CLI 认证失败，检查登录或密钥配置"),
+        (new[] { "403", "permission_denied" }, "CLI 权限不足，供应商拒绝"),
+        (new[] { "429", "rate_limit" }, "CLI 触发供应商限流"),
+        (new[] { "context_length", "context window" }, "CLI 上下文超限，会话已清理"),
+        (new[] { "model_not_found", "unsupported model" }, "CLI 配置的模型不可用"),
         (new[] { "timeout", "timed out" }, "CLI 请求超时"),
         (new[] { "connection", "connect error", "network" }, "CLI 无法连接供应商"),
     };
@@ -121,7 +121,7 @@ public static class SafeCliError
             }
         }
 
-        return $"CLI 未完成本轮回复{codeText}；诊断编号 {diagnosticId}；原始错误输出不写入日志，以保护认证信息";
+        return $"CLI 回复未完成{codeText}；诊断编号 {diagnosticId}";
     }
 
     internal static string SafeProtocolDetail(string text)
@@ -158,7 +158,7 @@ public static class SafeCliError
             }
         }
 
-        return "拒绝原因未识别，原始错误输出不写入日志";
+        return "拒绝原因未识别";
     }
 
     private static string ToAsciiLowercase(string text)

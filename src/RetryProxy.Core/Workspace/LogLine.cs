@@ -252,9 +252,15 @@ public static class LogLine
             }
 
             var field = body.AsSpan(fieldStart, fieldEnd - fieldStart);
-            if ((field.StartsWith("模型对照 ", StringComparison.Ordinal)
+            // 兼容已有文件里的长格式；新格式必须同时有方向和差异标记，普通模型名不着色。
+            var legacy = (field.StartsWith("模型对照 ", StringComparison.Ordinal)
                     || field.StartsWith("思考等级 ", StringComparison.Ordinal))
-                && field.EndsWith("（不一致）", StringComparison.Ordinal))
+                && field.EndsWith("（不一致）", StringComparison.Ordinal);
+            var compact = (field.StartsWith("模型 ", StringComparison.Ordinal)
+                    || field.StartsWith("思考 ", StringComparison.Ordinal))
+                && field.Contains(" -> ", StringComparison.Ordinal)
+                && field.EndsWith(" (不一致)", StringComparison.Ordinal);
+            if (legacy || compact)
             {
                 ranges.Add((fieldStart, fieldEnd));
             }

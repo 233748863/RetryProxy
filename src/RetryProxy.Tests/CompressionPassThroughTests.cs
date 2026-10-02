@@ -182,14 +182,14 @@ public class CompressionPassThroughTests
         Assert.False(stats.Outcome!.Value.IsFailed);
         Assert.False(stats.MissingTerminalEvent);
         Assert.Equal(1242UL, stats.ContextTokens(true));
-        Assert.Contains("，响应压缩 br", stats.LogFields());
+        Assert.Contains("，压缩 br", stats.LogFields());
 
         var broken = new ResponseStats(headers, "/v1/messages", "claude-test");
         broken.Observe(Encoding.UTF8.GetBytes(string.Concat(CompletedStream)), 0.1);
         broken.Finish(0.2);
         Assert.False(broken.MissingTerminalEvent);
         Assert.Null(broken.Outcome);
-        Assert.Contains("响应压缩 br（解压失败，未解析）", broken.LogFields());
+        Assert.Contains("压缩 br（解压失败）", broken.LogFields());
         Assert.True(new GenerationGate(ContentDecoder.Create("br")).Observe("not brotli"u8));
     }
 
@@ -229,9 +229,9 @@ public class CompressionPassThroughTests
         Assert.Equal(ClientEncoding, seenEncoding);
 
         var logs = await fixture.CompletedLogs();
-        Assert.Contains("上游 HTTP 200", logs);
-        Assert.Contains("输入 1200 / 输出 42 token", logs);
-        Assert.Contains($"响应压缩 {coding}", logs);
+        Assert.Contains("HTTP 200", logs);
+        Assert.Contains("输入/输出 1200/42 token", logs);
+        Assert.Contains($"压缩 {coding}", logs);
         Assert.DoesNotContain("未收到完成事件", logs);
         var snapshot = fixture.Metrics.Snapshot();
         Assert.Equal(1UL, snapshot.SuccessfulRequests);
@@ -300,7 +300,7 @@ public class CompressionPassThroughTests
         Assert.Equal(string.Concat(CompletedStream), Decompress("gzip", body));
         var logs = await fixture.CompletedLogs();
         Assert.Equal(2, hits);
-        Assert.Contains("等待生成达到 0.25 秒", logs);
+        Assert.Contains("等待生成达到 0.25秒", logs);
         Assert.Equal(1UL, fixture.Metrics.Snapshot().RetryCount);
         Assert.Equal(1UL, fixture.Metrics.Snapshot().SuccessfulRequests);
     }
@@ -320,7 +320,7 @@ public class CompressionPassThroughTests
             new Dictionary<string, string> { ["accept-encoding"] = ClientEncoding });
         Assert.Equal(garbage, await TestClient.TryReadAll(response));
         var logs = await fixture.CompletedLogs();
-        Assert.Contains("响应压缩 gzip（解压失败，未解析）", logs);
+        Assert.Contains("压缩 gzip（解压失败）", logs);
         Assert.DoesNotContain("未收到完成事件", logs);
     }
 

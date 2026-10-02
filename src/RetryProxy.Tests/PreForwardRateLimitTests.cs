@@ -97,8 +97,8 @@ public class PreForwardRateLimitTests
         Assert.Equal(Encoding.UTF8.GetBytes(Configs.GeneratedStream),
             await response.Content.ReadAsByteArrayAsync().WaitAsync(TimeSpan.FromSeconds(5)));
         var logs = await AssertOutcome(fixture, 1, true);
-        Assert.Contains("上游请求超限，尚未向客户端转发响应", logs);
-        Assert.Contains("上游请求 ID discarded", logs);
+        Assert.Contains("上游请求超限，未转发", logs);
+        Assert.Contains("上游 ID discarded", logs);
         Assert.DoesNotContain("响应未完成", logs);
         Assert.DoesNotContain("private-error", logs);
         Assert.Equal(2, Volatile.Read(ref requests));
@@ -188,8 +188,8 @@ public class PreForwardRateLimitTests
         Assert.Equal(Configs.GeneratedStream,
             await response.Content.ReadAsStringAsync().WaitAsync(TimeSpan.FromSeconds(5)));
         var logs = await AssertOutcome(fixture, 1, true);
-        Assert.Contains("上游请求超限，尚未向客户端转发响应", logs);
-        Assert.Contains("上游错误码 rate_limit_exceeded", logs);
+        Assert.Contains("上游请求超限，未转发", logs);
+        Assert.Contains("错误码 rate_limit_exceeded", logs);
         Assert.DoesNotContain("存在未识别的消息", logs);
         Assert.Equal(2, Volatile.Read(ref requests));
     }
@@ -339,7 +339,7 @@ public class PreForwardRateLimitTests
         using var response = await Request(client, fixture);
         Assert.Equal(expected, await response.Content.ReadAsByteArrayAsync().WaitAsync(TimeSpan.FromSeconds(5)));
         var logs = await AssertOutcome(fixture, 0, false);
-        Assert.Contains("1048576 字节暂存上限", logs);
+        Assert.Contains("1048576 字节", logs);
         Assert.Equal(1, Volatile.Read(ref requests));
     }
 

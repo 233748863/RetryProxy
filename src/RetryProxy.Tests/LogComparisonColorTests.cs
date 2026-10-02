@@ -7,6 +7,30 @@ namespace RetryProxy.Tests;
 
 public class LogComparisonColorTests
 {
+    [Theory]
+    [InlineData("模型 requested -> actual (不一致)")]
+    [InlineData("思考 xhigh -> low (不一致)")]
+    public void CompactFieldsKeepMismatchHighlight(string field)
+    {
+        var body = $"HTTP 200，{field}，输入/输出 100/2 token，首字 1.00秒 / 总 2.00秒";
+        var range = Assert.Single(LogLine.FindComparisonMismatchRanges(body));
+        Assert.Equal(field, body[range.Start..range.End]);
+    }
+
+    [Theory]
+    [InlineData("模型 gpt-test，思考 high")]
+    [InlineData("模型 sent -> 未报告，思考 未指定 -> high")]
+    [InlineData("模型 a (不一致)")]
+    [InlineData("思考 high -> low (不一致) 后缀")]
+    [InlineData("说明 模型 a -> b (不一致)")]
+    [InlineData("模型x a -> b (不一致)")]
+    [InlineData("思考x high -> low (不一致)")]
+    [InlineData("模型 a -> b [不一致]")]
+    public void CompactUnmarkedFieldsAreNotHighlighted(string body)
+    {
+        Assert.Empty(LogLine.FindComparisonMismatchRanges(body));
+    }
+
     [Fact]
     public void HighlightsOnlyCompleteMismatchedComparisonFields()
     {

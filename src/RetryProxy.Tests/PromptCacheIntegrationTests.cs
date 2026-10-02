@@ -184,7 +184,7 @@ public class PromptCacheIntegrationTests
             Assert.Equal(bodies[index], seen[index].Replace(addition, string.Empty));
         }
 
-        Assert.True(logs.Contains("缓存标识：代理已补全"), logs);
+        Assert.True(logs.Contains("缓存标识 已补全"), logs);
         Assert.True(logs.Contains("缓存 50.0%（"), logs);
         foreach (var privateText in new[] { "fixture-secret", "private-one", "fixture-thread", key })
         {

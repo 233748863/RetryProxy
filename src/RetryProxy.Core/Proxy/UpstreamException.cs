@@ -112,7 +112,7 @@ internal enum NetworkPhase
 
 /// <summary>
 /// 网络错误的日志文案（对应 proxy.rs 的 network_error_label / network_cause_fields）。
-/// 正文用大白话只说"发生了什么"，不猜测原因；专业信息统一收进末尾的"（技术细节：…）"，
+/// 正文简述发生了什么，不猜测原因；诊断信息统一收进末尾的“（诊断：…）”，
 /// 且只含类型名、枚举名与数字，不带任何异常消息文本（消息里可能含 URL、密钥）。
 /// </summary>
 internal static class NetworkErrorLabel
@@ -125,18 +125,18 @@ internal static class NetworkErrorLabel
         {
             kind = "Timeout";
             reason = error.IsConnect
-                ? "连上游一直连不上，已等到超时"
-                : phase == NetworkPhase.AwaitingResponse ? "上游一直没回复，已等到超时" : "上游回复到一半就没了动静，已等到超时";
+                ? "连接上游超时"
+                : phase == NetworkPhase.AwaitingResponse ? "等待上游响应超时" : "读取上游响应超时";
         }
         else if (error.IsConnect)
         {
             kind = "ConnectError";
-            reason = "连不上上游";
+            reason = "连接上游失败";
         }
         else
         {
             kind = "ClientError";
-            reason = phase == NetworkPhase.AwaitingResponse ? "请求已发出，但没等到上游回复连接就断了" : "上游回复到一半，连接就断了";
+            reason = phase == NetworkPhase.AwaitingResponse ? "上游响应前断连" : "读取上游响应时断连";
         }
 
         var diagnosis = Diagnose(error);
@@ -146,7 +146,7 @@ internal static class NetworkErrorLabel
         return $"{reason}{cause}，链路：{route}{TechnicalDetails(kind, diagnosis)}";
     }
 
-    /// <summary>只根据异常链给出"，大白话原因（技术细节：…）"，供单元测试与不经过 Describe 的调用方使用。</summary>
+    /// <summary>只根据异常链给出“，原因（诊断：…）”，供单元测试与不经过 Describe 的调用方使用。</summary>
     public static string CauseFields(Exception error)
     {
         var diagnosis = Diagnose(error);
@@ -176,7 +176,7 @@ internal static class NetworkErrorLabel
             parts.Add($"异常链 {string.Join(" > ", diagnosis.Chain)}");
         }
 
-        return parts.Count == 0 ? string.Empty : $"（技术细节：{string.Join("；", parts)}）";
+        return parts.Count == 0 ? string.Empty : $"（诊断：{string.Join("；", parts)}）";
     }
 
     private sealed record Diagnosis(string Plain, HttpRequestError? Category, int? Code, IReadOnlyList<string> Chain);
@@ -229,10 +229,10 @@ internal static class NetworkErrorLabel
                     : category is { } known
                         ? DescribeCategory(known)
                         : cancelled
-                            ? "这次操作被取消了"
+                            ? "操作已取消"
                             : chain.Count == 0
-                                ? "没有更具体的原因"
-                                : "原因程序认不出来";
+                                ? "无具体原因"
+                                : "原因未识别";
         int? code = cause is SocketException socket ? socket.NativeErrorCode : win32?.NativeErrorCode;
         return new Diagnosis(plain, category, code, chain.Select(item => item.GetType().Name).ToList());
     }
@@ -243,20 +243,20 @@ internal static class NetworkErrorLabel
         {
             return socket.SocketErrorCode switch
             {
-                SocketError.ConnectionRefused => "对方拒绝了连接",
-                SocketError.ConnectionReset => "连接被对方强行掐断",
-                SocketError.ConnectionAborted => "连接中途被中止",
-                SocketError.TimedOut => "网络长时间没有响应",
-                SocketError.NotConnected => "连接还没建立起来",
-                SocketError.Shutdown => "连接已经关闭",
-                SocketError.AccessDenied => "系统不允许本程序联网",
-                SocketError.AddressNotAvailable => "本机的网络地址不可用",
-                SocketError.AddressAlreadyInUse => "网络端口已被别的程序占用",
-                SocketError.HostUnreachable => "网络不通，到不了上游",
-                SocketError.NetworkUnreachable => "网络不通，到不了上游",
-                SocketError.HostNotFound => "查不到上游网址对应的服务器（域名解析失败）",
-                SocketError.OperationAborted => "本机取消了这次网络操作",
-                _ => "网络出了错",
+                SocketError.ConnectionRefused => "对端拒绝连接",
+                SocketError.ConnectionReset => "对端重置连接",
+                SocketError.ConnectionAborted => "连接中止",
+                SocketError.TimedOut => "网络响应超时",
+                SocketError.NotConnected => "连接未建立",
+                SocketError.Shutdown => "连接已关闭",
+                SocketError.AccessDenied => "系统拒绝联网",
+                SocketError.AddressNotAvailable => "本机网络地址不可用",
+                SocketError.AddressAlreadyInUse => "端口已占用",
+                SocketError.HostUnreachable => "上游主机不可达",
+                SocketError.NetworkUnreachable => "上游网络不可达",
+                SocketError.HostNotFound => "上游域名解析失败",
+                SocketError.OperationAborted => "本机取消网络操作",
+                _ => "网络错误",
             };
         }
 
@@ -267,34 +267,34 @@ internal static class NetworkErrorLabel
 
         if (cause is EndOfStreamException)
         {
-            return "对方主动关闭了连接";
+            return "对端关闭连接";
         }
 
         if (cause is InvalidDataException)
         {
-            return "上游回复的内容看不懂（格式不对）";
+            return "上游响应格式错误";
         }
 
-        return "网络出了错";
+        return "网络错误";
     }
 
-    /// <summary>.NET 请求错误类别的大白话；对端正常关闭（FIN）落在 ResponseEnded，与被掐断、超时可区分。</summary>
+    /// <summary>.NET 请求错误类别的中文说明；对端正常关闭（FIN）落在 ResponseEnded，与重置、超时可区分。</summary>
     private static string DescribeCategory(HttpRequestError error)
     {
         return error switch
         {
-            HttpRequestError.ResponseEnded => "对方主动关闭了连接",
-            HttpRequestError.InvalidResponse => "上游回复的内容看不懂（格式不对）",
-            HttpRequestError.ConnectionError => "连接中途被中止",
-            HttpRequestError.NameResolutionError => "查不到上游网址对应的服务器（域名解析失败）",
-            HttpRequestError.SecureConnectionError => "加密连接（HTTPS）没建立起来",
-            HttpRequestError.ProxyTunnelError => "系统代理没能帮忙连到上游",
-            HttpRequestError.UserAuthenticationError => "代理或上游要求的身份验证没通过",
-            HttpRequestError.HttpProtocolError => "上游的 HTTP 通信不符合规范",
-            HttpRequestError.VersionNegotiationError => "和上游谈不拢用哪个 HTTP 版本",
-            HttpRequestError.ExtendedConnectNotSupported => "上游不支持这种连接方式",
-            HttpRequestError.ConfigurationLimitExceeded => "超出了本程序的连接数限制",
-            _ => "网络出了错",
+            HttpRequestError.ResponseEnded => "对端关闭连接",
+            HttpRequestError.InvalidResponse => "上游响应格式错误",
+            HttpRequestError.ConnectionError => "连接中止",
+            HttpRequestError.NameResolutionError => "上游域名解析失败",
+            HttpRequestError.SecureConnectionError => "HTTPS 连接建立失败",
+            HttpRequestError.ProxyTunnelError => "系统代理隧道连接失败",
+            HttpRequestError.UserAuthenticationError => "代理或上游认证失败",
+            HttpRequestError.HttpProtocolError => "上游 HTTP 协议错误",
+            HttpRequestError.VersionNegotiationError => "HTTP 版本协商失败",
+            HttpRequestError.ExtendedConnectNotSupported => "上游不支持该连接方式",
+            HttpRequestError.ConfigurationLimitExceeded => "程序连接数超限",
+            _ => "网络错误",
         };
     }
 }

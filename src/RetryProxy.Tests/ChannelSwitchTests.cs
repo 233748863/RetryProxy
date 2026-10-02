@@ -112,9 +112,9 @@ public class ChannelSwitchTests
         Assert.Equal(6, seen.Count);
         Assert.All(seen, injected => Assert.Equal(("Bearer sk-real-a", string.Empty, injectedBody), injected));
         var logs = await fixture.CompletedLogs();
-        Assert.Contains("，Any · 主号，模型改写 gpt-4o → gpt-5.2", logs);
-        Assert.Contains("模型对照 发出 gpt-5.2 → 返回 未报告", logs);
-        Assert.DoesNotContain("模型对照 发出 gpt-4o", logs);
+        Assert.Contains("，Any · 主号，模型改写 gpt-4o -> gpt-5.2", logs);
+        Assert.Contains("模型 gpt-5.2 -> 未报告", logs);
+        Assert.DoesNotContain("模型 gpt-4o", logs);
         Assert.DoesNotContain("客户端凭据", logs);
         var health = await client.GetStringAsync($"{fixture.Address}/_retry/health");
         foreach (var secret in new[] { "sk-real-a", LocalToken, "sk-client", "sk-old-api-key", "sk-legacy-key" })
@@ -311,8 +311,8 @@ public class ChannelSwitchTests
         Assert.Equal(1, Volatile.Read(ref hitsA));
         Assert.Equal(("Bearer sk-real-b", "/v1/responses?trace=1", "{\"model\":\"model-b\",\"stream\":true}"), Assert.Single(seenB));
         var logs = await fixture.CompletedLogs();
-        Assert.Contains("已切换到 Any · 群号，本请求尚未向客户端输出，立即改用新 Key 重发（不计入重试次数）", logs);
-        Assert.Contains("，Any · 群号，模型改写 gpt-4o → model-b", logs);
+        Assert.Contains("改投 Any · 群号，未输出，立即重发（不计重试）", logs);
+        Assert.Contains("，Any · 群号，模型改写 gpt-4o -> model-b", logs);
         Assert.DoesNotContain("sk-real", logs);
     }
 
@@ -354,7 +354,7 @@ public class ChannelSwitchTests
         Assert.Contains("response.completed", received.ToString());
         Assert.Equal((1, 0), (Volatile.Read(ref hitsA), Volatile.Read(ref hitsB)));
         var logs = await fixture.CompletedLogs();
-        Assert.DoesNotContain("已切换", logs);
+        Assert.DoesNotContain("改投 ", logs);
     }
 
     [Fact]
@@ -389,7 +389,7 @@ public class ChannelSwitchTests
         Assert.Equal(2, seenB.Count);
         Assert.All(seenB, value => Assert.Equal("Bearer sk-real-b", value));
         var logs = await fixture.CompletedLogs();
-        Assert.Contains("已切换", logs);
+        Assert.Contains("改投 ", logs);
         Assert.DoesNotContain("sk-client", logs);
     }
 
@@ -420,6 +420,6 @@ public class ChannelSwitchTests
         Assert.Equal(1, Volatile.Read(ref hitsA));
         Assert.Equal("Bearer sk-real-a2", Assert.Single(seenB));
         var logs = await fixture.CompletedLogs();
-        Assert.DoesNotContain("已切换", logs);
+        Assert.DoesNotContain("改投 ", logs);
     }
 }

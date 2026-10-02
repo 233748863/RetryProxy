@@ -24,6 +24,15 @@ public enum CacheKeyState
 
 public static class CacheKeyStateExtensions
 {
+    public static string? LogLabel(this CacheKeyState state) => state switch
+    {
+        CacheKeyState.Client => "客户端",
+        CacheKeyState.Added => "已补全",
+        CacheKeyState.MissingSession => "未补全（缺会话）",
+        CacheKeyState.Unsupported => "未补全（上游不支持）",
+        _ => null,
+    };
+
     public static string? Label(this CacheKeyState state) => state switch
     {
         CacheKeyState.Client => "客户端已设置",

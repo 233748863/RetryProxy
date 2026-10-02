@@ -273,7 +273,7 @@ public class RequestLifecycleMoreTests
             var logs = await fixture.CompletedLogs();
             Assert.True(1 == hits, payload);
             Assert.Equal(0UL, fixture.Metrics.Snapshot().RetryCount);
-            Assert.Contains("不再重试", logs);
+            Assert.Contains("不重试", logs);
         }
     }
 
@@ -352,7 +352,7 @@ public class RequestLifecycleMoreTests
             {
                 Assert.Equal(prefix, received);
                 Assert.Equal(1, hits);
-                Assert.Contains("1048576 字节暂存上限", logs);
+                Assert.Contains("1048576 字节", logs);
             }
             else
             {
@@ -402,17 +402,19 @@ public class RequestLifecycleMoreTests
         string? completion = null;
         foreach (var line in logs.Split('\n'))
         {
-            if (line.Contains("上游 HTTP 200"))
+            if (line.Contains("HTTP 200"))
             {
                 completion = line;
             }
         }
 
         Assert.NotNull(completion);
-        foreach (var field in new[] { "首字 ", "耗时 " })
+        foreach (var field in new[] { "首字 ", "总 " })
         {
-            var after = completion[(completion.IndexOf(field, StringComparison.Ordinal) + field.Length)..];
-            var seconds = double.Parse(after.Split(' ')[0], System.Globalization.CultureInfo.InvariantCulture);
+            var offset = completion.IndexOf(field, StringComparison.Ordinal);
+            Assert.True(offset >= 0, completion);
+            var after = completion[(offset + field.Length)..];
+            var seconds = double.Parse(after.Split('秒')[0], System.Globalization.CultureInfo.InvariantCulture);
             Assert.True(seconds >= 0.15, completion);
         }
     }
@@ -459,7 +461,7 @@ public class RequestLifecycleMoreTests
         Assert.Equal(expected, actual.ToArray());
         Assert.Equal(1, hits);
         var logs = await fixture.CompletedLogs();
-        Assert.Contains("1048576 字节暂存上限", logs);
+        Assert.Contains("1048576 字节", logs);
         Assert.DoesNotContain("重试耗尽", logs);
         var snapshot = fixture.Metrics.Snapshot();
         Assert.Equal(1UL, snapshot.TotalRequests);
@@ -589,7 +591,7 @@ public class RequestLifecycleMoreTests
         var logs = await fixture.CompletedLogs();
         Assert.Equal(1UL, fixture.Metrics.Snapshot().TotalRequests);
         Assert.Equal(0, hits);
-        Assert.Contains("总等待达到 0.2 秒", logs);
+        Assert.Contains("总等待达到 0.2秒", logs);
     }
 
     [Fact]
@@ -625,7 +627,7 @@ public class RequestLifecycleMoreTests
         await Task.Delay(1200);
         Assert.Equal(1, hits);
         Assert.Equal(1UL, fixture.Metrics.Snapshot().FailedRequests);
-        Assert.Contains("不再重试", logs);
+        Assert.Contains("不重试", logs);
     }
 
     [Fact]
@@ -805,8 +807,8 @@ public class RequestLifecycleMoreTests
         Assert.Equal(1, hits);
         Assert.Equal(1UL, fixture.Metrics.Snapshot().FailedRequests);
         Assert.Equal(0UL, fixture.Metrics.Snapshot().SuccessfulRequests);
-        Assert.Contains("总等待达到 0.35 秒", logs);
-        Assert.Contains("不再重试", logs);
+        Assert.Contains("总等待达到 0.35秒", logs);
+        Assert.Contains("不重试", logs);
     }
 
     [Fact]
@@ -839,7 +841,7 @@ public class RequestLifecycleMoreTests
         Assert.True(await stream.ReadAsync(first) > 0);
         var logs = await fixture.CompletedLogs();
         Assert.Equal(1UL, fixture.Metrics.Snapshot().FailedRequests);
-        Assert.Contains("总等待达到 0.4 秒", logs);
+        Assert.Contains("总等待达到 0.4秒", logs);
     }
 
     [Fact]
@@ -1043,7 +1045,7 @@ public class RequestLifecycleMoreTests
             Assert.Equal(1, hits);
             if (!complete)
             {
-                foreach (var expectedText in new[] { "上游回复到一半，连接就断了", "最后事件 content_block_delta", "上游请求 ID claude-local-stream", "不再重试（已进入响应转发阶段）" })
+                foreach (var expectedText in new[] { "读取上游响应时断连", "最后事件 content_block_delta", "上游 ID claude-local-stream", "已转发，不重试" })
                 {
                     Assert.Contains(expectedText, logs);
                 }

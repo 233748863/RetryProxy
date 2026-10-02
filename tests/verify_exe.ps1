@@ -31,8 +31,13 @@ function Wait-TrayCondition([scriptblock]$Condition, [string]$Failure, [int]$Sec
     while (-not (& $Condition)) {
         if ($timer.Elapsed.TotalSeconds -ge $Seconds) {
             if ($VerifyTray -and $null -ne $mainWindow -and $mainWindow -ne [IntPtr]::Zero) {
-                $bounds = [RetryProxyTrayVerification]::Bounds($mainWindow)
-                $Failure += " (visible=$([RetryProxyTrayVerification]::IsWindowVisible($mainWindow)), minimized=$([RetryProxyTrayVerification]::IsIconic($mainWindow)), bounds=$($bounds.Left),$($bounds.Top),$($bounds.Right),$($bounds.Bottom))"
+                # 关闭超时时窗口可能已经销毁；诊断失败不能盖掉真正的等待错误。
+                try {
+                    $bounds = [RetryProxyTrayVerification]::Bounds($mainWindow)
+                    $Failure += " (visible=$([RetryProxyTrayVerification]::IsWindowVisible($mainWindow)), minimized=$([RetryProxyTrayVerification]::IsIconic($mainWindow)), bounds=$($bounds.Left),$($bounds.Top),$($bounds.Right),$($bounds.Bottom))"
+                } catch {
+                    $Failure += " (window diagnostics unavailable: $($_.Exception.GetType().Name))"
+                }
             }
             throw $Failure
         }
@@ -452,8 +457,23 @@ try {
             (Invoke-RestMethod "http://127.0.0.1:$proxyPort/_retry/health" -TimeoutSec 2).metrics.active_requests -eq 0
         } 'Last request did not finish before restart'
         $dailyBeforeRestart = Invoke-RestMethod "http://127.0.0.1:$proxyPort/_retry/health" -TimeoutSec 2
-        Send-TrayWindowMessage $mainWindow 0x0010 0
-        Wait-TrayCondition { $process.HasExited } 'Closing the window no longer exits the program' 20
+        $closeCheck = [ordered]@{ pid=$process.Id; startedAt=$process.StartTime.ToString('o'); timeoutSeconds=20; elapsedSeconds=0; exited=$false; exitCode=$null; failure=$null }
+        $closeTimer = [Diagnostics.Stopwatch]::StartNew()
+        try {
+            Send-TrayWindowMessage $mainWindow 0x0010 0
+            Wait-TrayCondition { $process.HasExited } 'Closing the window no longer exits the program' 20
+            $closeCheck.exited = $true
+            $closeCheck.exitCode = $process.ExitCode
+            if ($closeCheck.exitCode -ne 0) { throw 'Closing the window returned a nonzero exit code' }
+        } catch {
+            $closeCheck.failure = $_.Exception.Message
+            throw
+        } finally {
+            # 沿用 20 秒退出标准，先保存关闭阶段证据，再由外层清理测试进程。
+            $closeCheck.elapsedSeconds = [Math]::Round($closeTimer.Elapsed.TotalSeconds, 3)
+            $closeCheck | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $runtimeDir 'close-process-check.json') -Encoding UTF8
+            Write-Host ($closeCheck | ConvertTo-Json -Compress)
+        }
         Write-Host 'Close-to-exit check passed.'
     }
     if ($null -eq $dailyBeforeRestart) {

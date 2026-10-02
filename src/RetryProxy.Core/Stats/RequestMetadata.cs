@@ -58,7 +58,9 @@ internal static class DiagnosticText
     public static string? ModelIdentity(string? value) => value is null ? null
         : Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value)));
 
-    public static string ComparisonDisplay(string value) => value.Replace('，', ',').Replace('（', '(').Replace('）', ')');
+    public static string ComparisonDisplay(string value) => value.Replace('，', ',').Replace('（', '(').Replace('）', ')')
+        // 日志差异标记使用半角括号；模型原值里的同名文本改用方括号，避免一致模型伪装成差异字段。
+        .Replace("(不一致)", "[不一致]", StringComparison.Ordinal).Replace(" -> ", " → ", StringComparison.Ordinal);
 
     public static string? CleanModel(string? model)
     {

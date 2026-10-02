@@ -946,9 +946,9 @@ public sealed class KeepAliveWatchdog
         _lastSuccess = new KeepAliveSuccess { Model = model, ContextTokens = contextTokens };
         var contextLimit = _contextLimit;
         string? resetReason = contextTokens is null
-            ? "CLI 未返回完整用量，已清理后台会话，下轮新建"
+            ? "CLI 用量不完整，会话已清理，下轮重建"
             : contextTokens > contextLimit
-                ? $"当前会话超过 {contextLimit} token，已清理后台会话，下轮新建"
+                ? $"上下文超过 {contextLimit} token，会话已清理，下轮重建"
                 : null;
         if (resetReason is not null)
         {

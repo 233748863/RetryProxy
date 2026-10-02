@@ -55,7 +55,7 @@ public class RequestLifecycleTests
         var logs = await fixture.CompletedLogs();
         Assert.Equal(2, hits);
         Assert.True(heartbeats >= 2);
-        Assert.Contains("等待生成达到 0.25 秒", logs);
+        Assert.Contains("等待生成达到 0.25秒", logs);
         Assert.Contains("最后事件 keepalive", logs);
         Assert.Contains("old-attempt", logs);
         var snapshot = fixture.Metrics.Snapshot();
@@ -157,7 +157,7 @@ public class RequestLifecycleTests
         var logs = await fixture.CompletedLogs();
         Assert.Equal(1, hits);
         Assert.Equal(1UL, fixture.Metrics.Snapshot().FailedRequests);
-        Assert.Contains("总等待达到 0.3 秒", logs);
+        Assert.Contains("总等待达到 0.3秒", logs);
         Assert.Contains("HTTP 504", logs);
     }
 
@@ -177,6 +177,6 @@ public class RequestLifecycleTests
         Assert.Equal(1UL, fixture.Metrics.Snapshot().FailedRequests);
         Assert.Equal(1, hits);
         Assert.Contains("客户端在响应转发前断开", logs);
-        Assert.Contains("不再重试", logs);
+        Assert.Contains("不重试", logs);
     }
 }

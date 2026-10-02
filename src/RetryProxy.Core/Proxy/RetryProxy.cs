@@ -309,13 +309,13 @@ public sealed class RetryProxy
             ? snapshot.TotalTimeoutSeconds + 30
             : Math.Min(snapshot.TimeoutSeconds, snapshot.TotalTimeoutSeconds);
         var sessionLabel = probe.SessionId.Length > 8 ? probe.SessionId[..8] : probe.SessionId;
-        var configuration = _preparationProxy ? "经后台临时代理转发"
-            : probe.UsesChannelToken ? "经本通道使用当前 Key"
-            : probe.UsesSuppliedKey ? "使用本次输入的 Key 经本通道转发"
-            : "沿用本机客户端配置";
+        var configuration = _preparationProxy ? "经后台代理"
+            : probe.UsesChannelToken ? "经本通道·当前 Key"
+            : probe.UsesSuppliedKey ? "经本通道·指定 Key"
+            : "本机客户端配置";
         var preparing = probe.IsPreparation;
         var logger = Logger.WithActivity(preparing ? LogActivity.Preparation : LogActivity.KeepAlive);
-        logger.Info($"[会话 {sessionLabel}] 第 {probe.Turn} 轮，随机题号 {probe.QuestionIndex + 1}/{KeepAliveQuestions.Count}，{probe.Flavor.Label()} CLI，{configuration}，问题：{probe.Question}");
+        logger.Info($"[会话 {sessionLabel}] 第 {probe.Turn} 轮，题 {probe.QuestionIndex + 1}/{KeepAliveQuestions.Count}，{probe.Flavor.Label()} CLI，{configuration}，问：{probe.Question}");
 
         Cli.CliReply? reply = null;
         string? failure = null;
@@ -358,22 +358,22 @@ public sealed class RetryProxy
         }
 
         var elapsed = startedAt.Elapsed.TotalSeconds;
-        var nextRound = KeepAlive.Enabled ? $"空闲 {(long)KeepAlive.Idle.TotalSeconds} 秒后进行下一轮" : "自动保活已关闭";
+        var nextRound = KeepAlive.Enabled ? $"空闲 {(long)KeepAlive.Idle.TotalSeconds}秒后下轮" : "自动保活已关闭";
         var afterFailure = KeepAlive.Snapshot().Preparing && !Cancel.IsCancellationRequested
-            ? $"准备未完成，随机等待 {KeepAliveWatchdog.PreparationRetryMinDelay.TotalSeconds:F3}～{KeepAliveWatchdog.PreparationRetryMaxDelay.TotalSeconds:F3} 秒后继续重试；可点击“终止准备”取消"
+            ? $"{KeepAliveWatchdog.PreparationRetryMinDelay.TotalSeconds:F3}～{KeepAliveWatchdog.PreparationRetryMaxDelay.TotalSeconds:F3}秒后重试"
             : nextRound;
         var prefix = $"[会话 {sessionLabel}] 第 {probe.Turn} 轮 {probe.Flavor.Label()} CLI";
         if (interruption is not null)
         {
             probe.Interrupt(interruption);
-            logger.Info($"{prefix}，本轮已中断：{interruption}，耗时 {elapsed:F2} 秒，{afterFailure}");
+            logger.Info($"{prefix}，本轮已中断：{interruption}，总 {elapsed:F2}秒，{afterFailure}");
             return;
         }
 
         if (failure is not null)
         {
             probe.Fail(failure, timedOut && preparing);
-            logger.Warn($"{prefix}，响应未完成：{failure}，耗时 {elapsed:F2} 秒，{afterFailure}");
+            logger.Warn($"{prefix}，响应未完成：{failure}，总 {elapsed:F2}秒，{afterFailure}");
             return;
         }
 
@@ -399,15 +399,15 @@ public sealed class RetryProxy
         {
             const string reason = "完整回复确认前本轮已取消，未计为成功";
             probe.Interrupt(reason);
-            logger.Info($"{prefix}，本轮已中断：{reason}，耗时 {elapsed:F2} 秒，{afterFailure}");
+            logger.Info($"{prefix}，本轮已中断：{reason}，总 {elapsed:F2}秒，{afterFailure}");
             return;
         }
 
         var context = completion.ContextTokens?.ToString(CultureInfo.InvariantCulture) ?? "未获取";
         var reset = completion.ResetReason is { } resetReason ? $"，{resetReason}" : string.Empty;
         // 模型、token 与首字已记在代理的请求行，这里只写本轮结论，避免一次请求看起来像两次；
-        // 准备转入保活由工作区的“准备完成”一行说明。例：[会话 80221d57] 第 1 轮 Codex CLI 完成，当前会话 10105/50000 token，耗时 52.57 秒，回答：知道了，空闲 480 秒后进行下一轮
-        logger.Info($"{prefix} 完成，当前会话 {context}/{completion.ContextLimit} token，耗时 {elapsed:F2} 秒，回答：{answerPreview}{reset}，{nextRound}");
+        // 准备转入保活由工作区的“准备完成”一行说明。例：[会话 80221d57] 第 1 轮 Codex CLI 完成，上下文 10105/50000 token，总 52.57秒，答：知道了，空闲 480秒后下轮
+        logger.Info($"{prefix} 完成，上下文 {context}/{completion.ContextLimit} token，总 {elapsed:F2}秒，答：{answerPreview}{reset}，{nextRound}");
     }
 
     // ---------------------------------------------------------------------
@@ -725,11 +725,11 @@ public sealed class RetryProxy
         {
             case ProxyErrorKind.Cancelled:
                 metrics.Failure(requestId);
-                requestLogger.Info($"[{requestId}] 通道或后台任务已取消，已停止当前请求，不再重试，耗时 {startedAt.ElapsedSeconds:F2} 秒");
+                requestLogger.Info($"[{requestId}] 通道或后台任务已取消，不重试，总 {startedAt.ElapsedSeconds:F2}秒");
                 break;
             case ProxyErrorKind.DeadlineExceeded:
                 metrics.Failure(requestId);
-                requestLogger.Warn($"[{requestId}] {method} {safePath} -> 请求总等待达到 {StreamLifecycle.Format(totalTimeoutSeconds)} 秒，已取消当前请求，不再重试，向客户端返回 HTTP 504，耗时 {startedAt.ElapsedSeconds:F2} 秒");
+                requestLogger.Warn($"[{requestId}] {method} {safePath} -> 请求总等待达到 {StreamLifecycle.Format(totalTimeoutSeconds)}秒，已取消，不重试，返回 HTTP 504，总 {startedAt.ElapsedSeconds:F2}秒");
                 break;
             case ProxyErrorKind.Body:
                 metrics.Failure(requestId);
@@ -1091,7 +1091,7 @@ public sealed class RetryProxy
                         reader.Dispose();
                         // 认证方式切换不受配置的重试次数限制；即使 max_retries=0，也必须给另一种格式一次机会。
                         alternate = true;
-                        ctx.Logger.Info($"[{requestId}] {LogText.UpstreamStatus(status)} 拒绝当前 Claude 鉴权，改用另一种认证格式重试一次");
+                        ctx.Logger.Info($"[{requestId}] {LogText.UpstreamStatus(status)} 拒绝 Claude 鉴权，换认证格式重试一次");
                         continue;
                     }
 
@@ -1141,8 +1141,8 @@ public sealed class RetryProxy
                             ctx.Metrics.Retry(requestId, attemptNumber);
                             ctx.Metrics.RequestPhase(requestId, RequestPhase.WaitingRetry);
                             var failureText = summary is not null && status is < 200 or >= 300 ? LogText.UpstreamStatus(status, summary) : $"{LogText.UpstreamStatus(status)}，{reason}";
-                            LogRetry(ctx, failureText, $"[{requestId}] {LogText.AttemptText(attemptNumber)} {method} {safePath} -> {failureText}，未交给客户端{stats.FailureLogFields()}，{LogText.RetryDelayText(delay)}");
-                            await WaitDelayAsync(delay, ctx, attempt.Token).ConfigureAwait(false);
+                            LogRetry(ctx, failureText, $"[{requestId}] {LogText.AttemptText(attemptNumber)} {method} {safePath} -> {failureText}，未转发{stats.FailureLogFields()}，{LogText.RetryDelayText(delay)}");
+                            await WaitDelayAsync(delay, ctx.Deadline, attempt.Token).ConfigureAwait(false);
                             retries++;
                             continue;
                         }
@@ -1186,7 +1186,7 @@ public sealed class RetryProxy
                                 LogRetry(ctx, failureText, $"[{requestId}] {LogText.AttemptText(attemptNumber)} {method} {safePath} -> {failureText}{stats.FailureLogFields()}，{LogText.RetryDelayText(delay)}");
                                 ctx.Metrics.Retry(requestId, attemptNumber);
                                 ctx.Metrics.RequestPhase(requestId, RequestPhase.WaitingRetry);
-                                await WaitDelayAsync(delay, ctx, attempt.Token).ConfigureAwait(false);
+                                await WaitDelayAsync(delay, ctx.Deadline, attempt.Token).ConfigureAwait(false);
                                 retries++;
                                 continue;
                             }
@@ -1196,13 +1196,13 @@ public sealed class RetryProxy
                                 upstream.Source));
                         }
 
-                        ctx.Logger.Warn($"[{requestId}] {LogText.UpstreamStatus(status)} 错误正文超过 {MaxRetryResponseBodyBytes} 字节暂存上限，改为完整流式转发，不再因本次状态码重试");
+                        ctx.Logger.Warn($"[{requestId}] {LogText.UpstreamStatus(status)} 错误正文超过 {MaxRetryResponseBodyBytes} 字节，改为完整流式转发，本次状态码不重试");
                     }
                     else if (retryable)
                     {
                         if (!_preparationProxy || !requestId.StartsWith(ProxyMetrics.KeepAlivePrefix, StringComparison.Ordinal))
                         {
-                            ctx.Logger.Warn($"[{requestId}] 重试耗尽，向客户端返回最后一次上游响应 HTTP {status}");
+                            ctx.Logger.Warn($"[{requestId}] 重试耗尽，返回最后响应 HTTP {status}");
                         }
                     }
 
@@ -1234,7 +1234,7 @@ public sealed class RetryProxy
                 lastResponse = null;
                 ctx.Retries.Reset();
                 var label = _channel.Current.Label;
-                ctx.Logger.Info($"[{requestId}] 已切换{(label.Length > 0 ? $"到 {label}" : " Key")}，本请求尚未向客户端输出，立即改用新 Key 重发（不计入重试次数）");
+                ctx.Logger.Info($"[{requestId}] 改投 {(label.Length > 0 ? label : "新 Key")}，未输出，立即重发（不计重试）");
             }
         }
     }
@@ -1271,7 +1271,7 @@ public sealed class RetryProxy
                     body = result.Body;
                     model = DiagnosticText.CleanModel(result.To);
                     modelIdentity = DiagnosticText.ModelIdentity(result.To);
-                    rewrite = $"，模型改写 {DiagnosticText.ComparisonDisplay(DiagnosticText.CleanModel(from) ?? string.Empty)} → {DiagnosticText.ComparisonDisplay(model ?? string.Empty)}";
+                    rewrite = $"，模型改写 {DiagnosticText.ComparisonDisplay(DiagnosticText.CleanModel(from) ?? string.Empty)} -> {DiagnosticText.ComparisonDisplay(model ?? string.Empty)}";
                 }
             }
         }
@@ -1503,7 +1503,7 @@ public sealed class RetryProxy
                     response.Source.Dispose();
                     _promptCache.Reject(request);
                     ctx.Metrics.CacheFallback(ctx.RequestId);
-                    ctx.Logger.Info($"[{ctx.RequestId}] 上游不接受代理补充的缓存标识，使用原请求兼容重发一次；当前通道对同一接口、模型及鉴权暂停补充");
+                    ctx.Logger.Info($"[{ctx.RequestId}] 上游不接受代理补充的缓存标识，原请求兼容重发一次；同接口、模型及鉴权暂停补充");
                     // reject 之后不再有补充版本，这条路径每个请求最多走一次；总等待与取消仍覆盖两次发送。
                     continue;
                 }
@@ -1679,13 +1679,13 @@ public sealed class RetryProxy
                 {
                     if (!generationGate.HasRateLimitError)
                     {
-                        ctx.Logger.Warn($"[{requestId}] 等待生成到期时存在未识别的消息，原样转发已收内容，不再重试");
+                        ctx.Logger.Warn($"[{requestId}] 等待生成到期，含未知消息，原样转发，不重试");
                     }
 
                     break;
                 }
 
-                throw new NoGenerationException($"等待生成达到 {StreamLifecycle.Format(generationTimeoutSeconds)} 秒，尚未向客户端转发响应", stats.FailureLogFields());
+                throw new NoGenerationException($"等待生成达到 {StreamLifecycle.Format(generationTimeoutSeconds)}秒，未转发", stats.FailureLogFields());
             }
 
             if (!readTask.IsCompleted)
@@ -1700,7 +1700,7 @@ public sealed class RetryProxy
                 if (generationGate is not null && !generationGate.Finish())
                 {
                     stats.Finish(ctx.StartedAt.ElapsedSeconds);
-                    throw new NoGenerationException("上游流在生成内容前结束，未收到完成事件，尚未向客户端转发响应", stats.FailureLogFields());
+                    throw new NoGenerationException("生成前流结束，无完成事件，未转发", stats.FailureLogFields());
                 }
 
                 break;
@@ -1717,7 +1717,7 @@ public sealed class RetryProxy
             {
                 if (chunk.Value.Length > MaxGenerationPrefixBytes - prefix.Length)
                 {
-                    ctx.Logger.Warn($"[{requestId}] 生成前消息超过 {MaxGenerationPrefixBytes} 字节暂存上限，改为完整流式转发，不再重试");
+                    ctx.Logger.Warn($"[{requestId}] 生成前消息超过 {MaxGenerationPrefixBytes} 字节，改为完整流式转发，不重试");
                 }
                 else if (!generationGate.Observe(chunk.Value.Span))
                 {
@@ -1735,7 +1735,7 @@ public sealed class RetryProxy
         if (canRetry && generationGate is { HasRateLimitError: true })
         {
             stats.Finish(ctx.StartedAt.ElapsedSeconds);
-            throw new NoGenerationException("上游请求超限，尚未向客户端转发响应", stats.FailureLogFields());
+            throw new NoGenerationException("上游请求超限，未转发", stats.FailureLogFields());
         }
 
         ctx.Metrics.RequestPhase(requestId, RequestPhase.ReceivingResponse);
@@ -1890,12 +1890,12 @@ public sealed class RetryProxy
             NoGenerationException generation => (generation.Reason, generation.Fields),
             _ => throw error,
         };
-        var statusText = status is { } value ? LogText.UpstreamStatus(value) : "上游状态码：无";
+        var statusText = status is { } value ? LogText.UpstreamStatus(value) : "HTTP 无";
         double? delay = canRetry ? RetryDelay(retries, null, null, attempt.Plan.Snapshot) : null;
         var isTemporaryKeepAlive = _preparationProxy && ctx.RequestId.StartsWith(ProxyMetrics.KeepAlivePrefix, StringComparison.Ordinal);
         var attemptText = isTemporaryKeepAlive ? "本轮" : LogText.AttemptText(attemptNumber);
         var failureText = $"{statusText}，{label}";
-        var message = $"[{ctx.RequestId}] {attemptText} {ctx.Method} {ctx.SafePath} -> {failureText}{fields}，耗时 {elapsed:F2} 秒";
+        var message = $"[{ctx.RequestId}] {attemptText} {ctx.Method} {ctx.SafePath} -> {failureText}{fields}，本次 {elapsed:F2}秒";
         if (delay is not { } wait)
         {
             var endText = !isTemporaryKeepAlive ? "已达到重试上限"
@@ -1908,7 +1908,7 @@ public sealed class RetryProxy
         LogRetry(ctx, failureText, $"{message}，{LogText.RetryDelayText(wait)}");
         ctx.Metrics.Retry(ctx.RequestId, attemptNumber);
         ctx.Metrics.RequestPhase(ctx.RequestId, RequestPhase.WaitingRetry);
-        await WaitDelayAsync(wait, ctx, attempt.Token).ConfigureAwait(false);
+        await WaitDelayAsync(wait, ctx.Deadline, attempt.Token).ConfigureAwait(false);
         return false;
     }
 
@@ -1927,16 +1927,24 @@ public sealed class RetryProxy
     }
 
     /// <summary>退避等待；切换 Key 时 <paramref name="token"/> 取消，等待立即结束。</summary>
-    private static async Task WaitDelayAsync(double delay, RequestContext ctx, CancellationToken token)
+    internal static async Task WaitDelayAsync(double delay, Deadline deadline, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
-        var seconds = Math.Min(Math.Max(delay, 0.0), ctx.TotalTimeoutSeconds);
-        if (double.IsNaN(seconds))
+        var seconds = double.IsNaN(delay) ? 0 : Math.Max(delay, 0.0);
+        if (seconds >= deadline.Remaining.TotalSeconds)
         {
-            seconds = 0;
+            // 例如退避 30 秒、总等待只剩 3 秒：到期必须结束请求，不能把截短等待当作重试就绪。
+            // 不依赖取消回调及时调度，避免两个计时器同时到期时多发一次请求。
+            await deadline.WaitAsync(token).ConfigureAwait(false);
+            throw new OperationCanceledException(token);
         }
 
         await Task.Delay(TimeSpan.FromSeconds(seconds), token).ConfigureAwait(false);
+        token.ThrowIfCancellationRequested();
+        if (deadline.HasPassed)
+        {
+            throw new OperationCanceledException(token);
+        }
     }
 
     /// <summary>第 <paramref name="attempt"/> 次重试（从 0 起）前的等待秒数，按当前快照的退避间隔计算。</summary>
@@ -1992,7 +2000,7 @@ public sealed class RetryProxy
     {
         if (lastResponse is { } response)
         {
-            ctx.Logger.Warn($"[{ctx.RequestId}] 重试耗尽，返回客户端最后一次完整上游响应 {LogText.HttpStatus(response.Status, response.Summary)}");
+            ctx.Logger.Warn($"[{ctx.RequestId}] 重试耗尽，返回最后完整响应 {LogText.HttpStatus(response.Status, response.Summary)}");
             return ProxyResponse.Buffered(response.Status, response.Headers, response.Body);
         }
 

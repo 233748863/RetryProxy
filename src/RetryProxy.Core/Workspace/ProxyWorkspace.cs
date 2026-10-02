@@ -482,10 +482,10 @@ public sealed partial class ProxyWorkspace
         LogSwitch(routeName, previous, next, resent);
     }
 
-    /// <summary>例：<c>[通道代理][Claude Code] 已切换：Any · 主号 → Any · 群号，2 个未输出的请求改用新 Key 重发</c>。</summary>
+    /// <summary>例：<c>[通道代理][Claude Code] 已切换：Any · 主号 -> Any · 群号，重发 2 个未输出请求</c>。</summary>
     private void LogSwitch(string routeName, string previous, string next, int? resent)
     {
-        Logger.Route(routeName).Info($"已切换：{previous} → {next}" + (resent is > 0 ? $"，{resent} 个未输出的请求改用新 Key 重发" : string.Empty));
+        Logger.Route(routeName).Info($"已切换：{previous} -> {next}" + (resent is > 0 ? $"，重发 {resent} 个未输出请求" : string.Empty));
     }
 
     /// <summary>保存最近一次获取的模型结果；保存成功后运行中的通道立即采用，失败保留旧列表并提示。</summary>
@@ -815,7 +815,7 @@ public sealed partial class ProxyWorkspace
         else if (running)
         {
             PushSnapshot(route.Id);
-            Logger.Route(route.Name).Info("通道参数已更新，之后的尝试立即使用新参数");
+            Logger.Route(route.Name).Info("通道参数已更新，下次尝试生效");
         }
 
         return null;
@@ -996,15 +996,15 @@ public sealed partial class ProxyWorkspace
             {
                 case PreparationResult.Ready:
                     notice = $"通道“{route.Name}”：准备完成";
-                    logger.Info(notice);
+                    logger.Info("准备完成");
                     break;
                 case PreparationResult.Failed failed:
                     notice = $"通道“{route.Name}”：准备未完成，{failed.Reason}";
-                    logger.Warn(notice);
+                    logger.Warn($"准备未完成，{failed.Reason}");
                     break;
                 default:
                     notice = $"通道“{route.Name}”：准备已终止";
-                    logger.Info(notice);
+                    logger.Info("准备已终止");
                     break;
             }
 

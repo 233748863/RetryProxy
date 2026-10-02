@@ -446,10 +446,10 @@ public sealed class PreparationWorkspaceTests
             Assert.True(LogLine.Matches(line, LogLevelFilter.All, string.Empty, null, LogSource.Preparation));
             Assert.False(LogLine.Matches(line, LogLevelFilter.All, string.Empty, null, LogSource.ChannelKeepAlive));
         });
-        Assert.Contains(lines, line => line.Contains("[准备][会话 ") && line.Contains("CLI 完成，当前会话 52/50000 token"));
-        Assert.Contains(lines, line => line.Contains("[独立保活][会话 ") && line.Contains("CLI 完成，当前会话 "));
+        Assert.Contains(lines, line => line.Contains("[准备][会话 ") && line.Contains("CLI 完成，上下文 52/50000 token"));
+        Assert.Contains(lines, line => line.Contains("[独立保活][会话 ") && line.Contains("CLI 完成，上下文 "));
         // 一次上游请求只在代理的请求行记用量；本轮结论不重复，转入保活也只由“准备完成”一行说明。
-        Assert.Contains("[准备][请求 ", Assert.Single(lines, line => line.Contains("输入 40 / 输出 12 token")));
+        Assert.Contains("[准备][请求 ", Assert.Single(lines, line => line.Contains("输入/输出 40/12 token")));
         Assert.Contains("准备完成，已开始独立保活", Assert.Single(lines, line => line.Contains("准备完成") || line.Contains("转为")));
         Assert.Contains(lines, line => line.Contains("[准备][请求 "));
         Assert.Contains(lines, line => line.Contains("[独立保活][请求 "));

@@ -323,7 +323,7 @@ public class TlsFingerprintTests
         Assert.All(hosts, host => Assert.Equal($"localhost:{upstream.Port}", host));
         Assert.Single(connections.Distinct());
         Assert.All(protocols, protocol => Assert.True(protocol is SslProtocols.Tls12 or SslProtocols.Tls13));
-        Assert.Contains("输入 1200 / 输出 42 token", await proxy.Logs());
+        Assert.Contains("输入/输出 1200/42 token", await proxy.Logs());
     }
 
     [Fact]
@@ -340,7 +340,7 @@ public class TlsFingerprintTests
         using var response = await TestClient.Send(http, HttpMethod.Post, $"{proxy.Address}/v1/messages", "{}", "application/json");
         Assert.False(response.IsSuccessStatusCode);
         Assert.Equal(0, reached);
-        Assert.Contains("连不上上游，上游证书不受信任，链路：直连", await proxy.Logs());
+        Assert.Contains("连接上游失败，上游证书不受信任，链路：直连", await proxy.Logs());
     }
 
     [Theory]
@@ -373,7 +373,7 @@ public class TlsFingerprintTests
         using var http = TestClient.Create(10);
         using var response = await TestClient.Send(http, HttpMethod.Post, $"{proxy.Address}/v1/messages", "{}", "application/json");
         Assert.False(response.IsSuccessStatusCode);
-        Assert.Contains("连不上上游，代理要求认证（HTTP 407），链路：系统代理", await proxy.Logs());
+        Assert.Contains("连接上游失败，代理要求认证（HTTP 407），链路：系统代理", await proxy.Logs());
     }
 
     [Fact]

@@ -83,7 +83,7 @@ internal sealed class RequestFinishGuard : IDisposable
         if (AwaitingResponse)
         {
             Metrics.Failure(RequestId);
-            Logger.Warn($"[{RequestId}] 客户端在响应转发前断开，已取消当前请求，不再重试，耗时 {StartedAt.ElapsedSeconds:F2} 秒");
+            Logger.Warn($"[{RequestId}] 客户端在响应转发前断开，已取消，不重试，总 {StartedAt.ElapsedSeconds:F2}秒");
         }
 
         KeepAlive.RequestFinished();

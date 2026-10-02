@@ -35,9 +35,21 @@ public sealed class ResponseComparisonTests
         stats.Observe(Encoding.UTF8.GetBytes($"{{\"model\":\"gpt-test\",\"reasoning\":{{\"effort\":{(reported is null ? "null" : $"\"{reported}\"")}}}}}"), 0.1);
         stats.Finish(0.2);
         var fields = stats.LogFields();
-        Assert.Contains($"思考等级 发出 {sent ?? "未指定"} → 返回 {reported ?? "未报告"}" + (mismatch ? "（不一致）" : ""), fields);
-        Assert.Equal(mismatch, fields.Contains("（不一致）"));
-        Assert.Contains("模型对照 发出 gpt-test → 返回 gpt-test", fields);
+        if (sent is null && reported is null)
+        {
+            Assert.DoesNotContain("，思考 ", fields);
+        }
+        else if (sent is not null && sent == reported)
+        {
+            Assert.Contains($"，思考 {sent}，", fields);
+        }
+        else
+        {
+            Assert.Contains($"思考 {sent ?? "未指定"} -> {reported ?? "未报告"}" + (mismatch ? " (不一致)" : ""), fields);
+        }
+        Assert.Equal(mismatch, fields.Contains(" (不一致)"));
+        Assert.Contains("，模型 gpt-test，", fields);
+        Assert.DoesNotContain("模型对照", fields);
     }
 
     [Theory]
@@ -53,8 +65,8 @@ public sealed class ResponseComparisonTests
             stats.Observe(new byte[] { b }, 0.1);
         }
         stats.Finish(0.2);
-        Assert.Contains("模型对照 发出 alias → 返回 actual（不一致）", stats.LogFields());
-        Assert.Contains("思考等级 发出 max → 返回 high（不一致）", stats.LogFields());
+        Assert.Contains("模型 alias -> actual (不一致)", stats.LogFields());
+        Assert.Contains("思考 max -> high (不一致)", stats.LogFields());
         Assert.Equal("actual", stats.CacheRequest("test-request")!.Model);
     }
 
@@ -64,9 +76,9 @@ public sealed class ResponseComparisonTests
         var stats = Create("application/json", "alias", "max");
         stats.Observe("{\"usage\":{\"output_tokens_details\":{\"reasoning_tokens\":500}}}"u8, 0.1);
         stats.Finish(0.2);
-        Assert.Contains("模型对照 发出 alias → 返回 未报告", stats.LogFields());
-        Assert.Contains("思考等级 发出 max → 返回 未报告", stats.LogFields());
-        Assert.DoesNotContain("（不一致）", stats.LogFields());
+        Assert.Contains("模型 alias -> 未报告", stats.LogFields());
+        Assert.Contains("思考 max -> 未报告", stats.LogFields());
+        Assert.DoesNotContain(" (不一致)", stats.LogFields());
         Assert.Equal("alias", stats.CacheRequest("test-request")!.Model);
     }
 
@@ -76,11 +88,11 @@ public sealed class ResponseComparisonTests
         var stats = Create("text/event-stream", "actual", "max");
         stats.Observe("data: {\"type\":\"response.created\",\"response\":{\"model\":\"alias\",\"reasoning\":{\"effort\":\"low\"}}}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"model\":\"actual\",\"reasoning\":{\"effort\":\"max\"}}}\n\n"u8, 0.1);
         stats.Finish(0.2);
-        Assert.DoesNotContain("（不一致）", stats.LogFields());
+        Assert.DoesNotContain(" (不一致)", stats.LogFields());
         var next = Create("application/json", "actual", "max");
         next.Observe("{}"u8, 0.1);
         next.Finish(0.2);
-        Assert.Contains("返回 未报告", next.LogFields());
+        Assert.Contains("-> 未报告", next.LogFields());
     }
 
     [Fact]
@@ -93,18 +105,20 @@ public sealed class ResponseComparisonTests
         var stats = new ResponseStats(headers, "/v1/responses", metadata.Model, modelIdentity: metadata.ModelIdentity);
         stats.Observe(Encoding.UTF8.GetBytes($"{{\"model\":\"{prefix}reported\"}}"), 0.1);
         stats.Finish(0.2);
-        Assert.Contains($"模型对照 发出 {prefix} → 返回 {prefix}（不一致）", stats.LogFields());
+        Assert.Contains($"模型 {prefix} -> {prefix} (不一致)", stats.LogFields());
     }
 
-    [Fact]
-    public void ModelCannotForgeAComparisonField()
+    [Theory]
+    [InlineData("x，思考 high -> low (不一致)")]
+    [InlineData("x -> y (不一致)")]
+    [InlineData("x，思考等级 发出 high → 返回 low（不一致）")]
+    public void ModelCannotForgeAComparisonField(string model)
     {
-        const string model = "x，思考等级 发出 high → 返回 low（不一致）";
         var stats = Create("application/json", model, null);
         stats.Observe(Encoding.UTF8.GetBytes(System.Text.Json.JsonSerializer.Serialize(new { model })), 0.1);
         stats.Finish(0.2);
         Assert.Empty(RetryProxy.Core.Workspace.LogLine.FindComparisonMismatchRanges(stats.LogFields()));
-        Assert.DoesNotContain("（不一致）", stats.LogFields());
+        Assert.DoesNotContain(" (不一致)", stats.LogFields());
     }
 
     private static ResponseStats Create(string contentType, string? model, string? effort)

@@ -210,7 +210,9 @@ internal static class LegacyLogRestore
             }
 
             var retryNotice = entry.Body.Contains("可重试，", StringComparison.Ordinal) && entry.Body.Contains("秒后再次请求", StringComparison.Ordinal);
-            var attemptRetry = entry.Body.Contains("将在 ", StringComparison.Ordinal) && entry.Body.Contains("秒后重试", StringComparison.Ordinal);
+            // 新格式把“将在”省略为“0.1秒后重试”；仍要求是请求行，避免把兼容重发或改投计成重试。
+            var attemptRetry = (call?.Attempt is not null || entry.Body.Contains("将在 ", StringComparison.Ordinal))
+                && entry.Body.Contains("秒后重试", StringComparison.Ordinal);
             if (retryNotice || attemptRetry)
             {
                 ulong? attempt = call?.Attempt;
@@ -260,7 +262,7 @@ internal static class LegacyLogRestore
                     ? new CacheRequest
                     {
                         RequestId = entry.Id,
-                        Model = Field(entry.Body, "模型") ?? "未获取",
+                        Model = ModelField(entry.Body) ?? "未获取",
                         CompletedAtUnixMs = timestamp,
                         InputTokens = TokenField(entry.Body, "输入"),
                         CachedTokens = TokenField(entry.Body, "缓存命中"),
@@ -317,19 +319,21 @@ internal static class LegacyLogRestore
             var numbers = numbered[..separator];
             call = numbered[(separator + 3)..];
             var slash = numbers.IndexOf('/');
-            if (slash < 0)
-            {
-                return null;
-            }
-
-            if (!ulong.TryParse(numbers[..slash], NumberStyles.None, CultureInfo.InvariantCulture, out var parsedAttempt)
-                || !ulong.TryParse(numbers[(slash + 1)..], NumberStyles.None, CultureInfo.InvariantCulture, out var parsedLimit))
+            var attemptText = slash < 0 ? numbers : numbers[..slash];
+            if (!ulong.TryParse(attemptText, NumberStyles.None, CultureInfo.InvariantCulture, out var parsedAttempt))
             {
                 return null;
             }
 
             attempt = parsedAttempt;
-            limit = parsedLimit;
+            if (slash >= 0)
+            {
+                if (!ulong.TryParse(numbers[(slash + 1)..], NumberStyles.None, CultureInfo.InvariantCulture, out var parsedLimit))
+                {
+                    return null;
+                }
+                limit = parsedLimit;
+            }
         }
 
         var arrow = call.IndexOf(" -> ", StringComparison.Ordinal);
@@ -354,9 +358,10 @@ internal static class LegacyLogRestore
         }
 
         int? status = null;
-        if (response.StartsWith("上游 HTTP ", StringComparison.Ordinal))
+        var statusPrefix = response.StartsWith("上游 HTTP ", StringComparison.Ordinal) ? "上游 HTTP " : "HTTP ";
+        if (response.StartsWith(statusPrefix, StringComparison.Ordinal))
         {
-            var value = response["上游 HTTP ".Length..];
+            var value = response[statusPrefix.Length..];
             // 状态码后面可能紧跟括号里的含义，例：上游 HTTP 500（当前需求量高，模型负载已达上限），…
             var end = value.IndexOfAny(new[] { '，', ' ', '（', '\r', '\n' });
             if (end >= 0)
@@ -387,22 +392,64 @@ internal static class LegacyLogRestore
         return end < 0 ? rest : rest[..end];
     }
 
+    private static string? ModelField(string body)
+    {
+        var model = Field(body, "模型");
+        var arrow = model?.IndexOf(" -> ", StringComparison.Ordinal) ?? -1;
+        if (model is null || arrow < 0)
+        {
+            return model;
+        }
+
+        // 新日志只写一个模型字段：优先返回模型，未报告时沿用请求模型，和实时缓存统计一致。
+        // 模型原值里的 ASCII 箭头已转义为 →，这里的分隔符只可能来自对照格式。
+        var reported = model[(arrow + 4)..];
+        const string mismatch = " (不一致)";
+        if (reported.EndsWith(mismatch, StringComparison.Ordinal))
+        {
+            reported = reported[..^mismatch.Length];
+        }
+        return reported == "未报告" ? model[..arrow] : reported;
+    }
+
     private static ulong? TokenField(string body, string label)
     {
         var value = Field(body, label);
-        if (value is null)
+        if (value is null && label == "输入")
         {
-            return null;
+            value = Field(body, "输入/输出")?.Split('/')[0];
         }
-
-        var token = value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
+        if (value is null && label is "缓存命中" or "缓存写入")
+        {
+            var cache = Field(body, "缓存");
+            if (cache is null)
+            {
+                const string marker = "，缓存（";
+                var start = body.IndexOf(marker, StringComparison.Ordinal);
+                if (start >= 0)
+                {
+                    cache = body[(start + marker.Length - 1)..].Split('，')[0];
+                }
+            }
+            var markerText = label == "缓存命中" ? "读 " : "写 ";
+            if (cache is not null && cache.IndexOf(markerText, StringComparison.Ordinal) is >= 0 and var index)
+            {
+                value = cache[(index + markerText.Length)..];
+            }
+        }
+        var token = value?.Split(new[] { '/', '）' })[0].Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
         return token is not null && ulong.TryParse(token, NumberStyles.None, CultureInfo.InvariantCulture, out var parsed) ? parsed : null;
     }
 
     private static CacheKeyState? KeyState(string body)
     {
-        const string marker = "，缓存标识：";
+        var marker = "，缓存标识：";
         var index = body.IndexOf(marker, StringComparison.Ordinal);
+        if (index < 0)
+        {
+            marker = "，缓存标识 ";
+            index = body.IndexOf(marker, StringComparison.Ordinal);
+        }
         if (index < 0)
         {
             return null;
@@ -417,7 +464,7 @@ internal static class LegacyLogRestore
 
         foreach (var state in new[] { CacheKeyState.Client, CacheKeyState.Added, CacheKeyState.MissingSession, CacheKeyState.Unsupported })
         {
-            if (state.Label() == value)
+            if (state.Label() == value || state.LogLabel() == value)
             {
                 return state;
             }

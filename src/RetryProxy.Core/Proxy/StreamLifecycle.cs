@@ -80,7 +80,7 @@ internal sealed class StreamLifecycle : IDisposable
 
     public bool Completed { get; private set; }
 
-    public string TimeoutReason() => $"请求总等待达到 {Format(_totalTimeoutSeconds)} 秒，已停止接收上游响应";
+    public string TimeoutReason() => $"请求总等待达到 {Format(_totalTimeoutSeconds)}秒，已停止接收";
 
     public void Observe(ReadOnlySpan<byte> chunk)
     {
@@ -183,9 +183,9 @@ internal sealed class StreamLifecycle : IDisposable
 
         // 能从上游错误码认出原因且状态码非 2xx 时，原因已写在状态后的括号里，不再重复。
         var summary = Stats.FailureSummary();
-        var reasonText = summary is not null && _status is < 200 or >= 300 ? string.Empty : $"，原因：{summary ?? reason}";
+        var reasonText = summary is not null && _status is < 200 or >= 300 ? string.Empty : $"：{summary ?? reason}";
         _logger.Warn(
-            $"[{_requestId}] {_method} {_safePath} -> {LogText.UpstreamStatus(_status, summary)}{LogText.RetriedNote(_attemptNumber, false)}{_routeFields}，响应未完成{reasonText}，不再重试（已进入响应转发阶段）{Stats.FailureLogFields()}，{LogText.TimingText(Stats.FirstContentSeconds(), elapsed)}");
+            $"[{_requestId}] {_method} {_safePath} -> {LogText.UpstreamStatus(_status, summary)}{LogText.RetriedNote(_attemptNumber, false)}{_routeFields}，响应未完成{reasonText}，已转发，不重试{Stats.FailureLogFields()}，{LogText.TimingText(Stats.FirstContentSeconds(), elapsed)}");
     }
 
     /// <summary>对应 Drop：正文流没走完就被丢弃。</summary>
@@ -216,7 +216,7 @@ internal sealed class StreamLifecycle : IDisposable
 
 /// <summary>
 /// 一次请求内的重试日志节流：同一原因连续重试只写第一次，之后每 <see cref="ProgressEvery"/> 次写一条进度；原因变了重新写一次完整行。
-/// 例：连续 47 次 HTTP 500 → 第 1 次写完整行，第 20、40 次写「已重试 20 次，仍是 …」，其余不写。
+/// 例：连续 47 次 HTTP 500 → 第 1 次写完整行，第 20、40 次写「已重试 20 次：…」，其余不写。
 /// </summary>
 internal sealed class RetryLog
 {
@@ -242,7 +242,7 @@ internal sealed class RetryLog
         return _sameReason % ProgressEvery == 0 ? RetryLogKind.Progress : RetryLogKind.None;
     }
 
-    public string ProgressText(string requestId, string reason) => $"[{requestId}] 已重试 {Retries} 次，仍是{reason}";
+    public string ProgressText(string requestId, string reason) => $"[{requestId}] 已重试 {Retries} 次：{reason}";
 
     /// <summary>切换 Key 改投后重新开始节流：换了 Key，下一次失败即使原因相同也写完整行。</summary>
     public void Reset()
@@ -265,13 +265,13 @@ internal static class LogText
     public static string TimingText(double? firstByteSeconds, double elapsed)
     {
         return firstByteSeconds is { } value
-            ? $"首字 {value:F2} 秒 / 耗时 {elapsed:F2} 秒"
-            : $"首字：无 / 耗时 {elapsed:F2} 秒";
+            ? $"首字 {value:F2}秒 / 总 {elapsed:F2}秒"
+            : $"首字 无 / 总 {elapsed:F2}秒";
     }
 
     /// <summary>
     /// 跟在上游状态后面的重试说明；第一次就结束时为空。
-    /// 例：第 48 次拿到 200 → <c>（重试 47 次后成功）</c>；第 4 次拿到 400 → <c>，已重试 3 次</c>。
+    /// 例：第 48 次拿到 200 → <c>（重试 47 次）</c>；第 4 次拿到 400 → <c>，已重试 3 次</c>。
     /// </summary>
     public static string RetriedNote(ulong attemptNumber, bool succeeded)
     {
@@ -281,13 +281,13 @@ internal static class LogText
         }
 
         var retries = attemptNumber - 1;
-        return succeeded ? $"（重试 {retries} 次后成功）" : $"，已重试 {retries} 次";
+        return succeeded ? $"（重试 {retries} 次）" : $"，已重试 {retries} 次";
     }
 
     /// <summary>重试失败行里的“第 N 次”，不写总次数（通常是 100001 这种没有意义的上限）。</summary>
     public static string AttemptText(ulong attemptNumber) => $"第 {attemptNumber} 次";
 
-    public static string RetryDelayText(double delay) => $"{delay:F1} 秒后重试";
+    public static string RetryDelayText(double delay) => $"{delay:F1}秒后重试";
 
     public static string FormatCompletedAttempt(
         string requestId,
@@ -304,11 +304,11 @@ internal static class LogText
 
     /// <summary>
     /// 日志里的上游状态：非 2xx 时在括号里写明含义，优先用上游错误码翻译出的具体原因，其次是状态码的通用含义；都不认识时只写状态码。
-    /// 例：<c>500</c> + 错误码 get_channel_failed → <c>上游 HTTP 500（当前需求量高，模型负载已达上限）</c>；<c>502</c> → <c>上游 HTTP 502（上游网关错误）</c>；<c>200</c> / <c>599</c> → <c>上游 HTTP 200</c> / <c>上游 HTTP 599</c>。
+    /// 例：<c>500</c> + 错误码 get_channel_failed → <c>HTTP 500（当前需求量高，模型负载已达上限）</c>；<c>502</c> → <c>HTTP 502（上游网关错误）</c>；<c>200</c> / <c>599</c> → <c>HTTP 200</c> / <c>HTTP 599</c>。
     /// </summary>
-    public static string UpstreamStatus(int status, string? summary = null) => "上游 " + HttpStatus(status, summary);
+    public static string UpstreamStatus(int status, string? summary = null) => HttpStatus(status, summary);
 
-    /// <summary>不带“上游”前缀的状态写法，例：重试耗尽，返回客户端最后一次完整上游响应 HTTP 500（上游服务内部错误）。</summary>
+    /// <summary>状态写法，例：重试耗尽，返回最后完整响应 HTTP 500（上游服务内部错误）。</summary>
     public static string HttpStatus(int status, string? summary = null)
     {
         var meaning = status is >= 200 and < 300 ? null : summary ?? StatusMeaning(status);

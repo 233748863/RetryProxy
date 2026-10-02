@@ -377,7 +377,7 @@ public sealed class PreparationWorkspace
                 service.SetUiNotifier(_uiNotifier);
                 if (!service.RequestStart(plan.Runtime)) throw new InvalidOperationException();
                 startedCount++;
-                logger.WithActivity(LogActivity.Preparation).Info($"已提交准备 · 模型 {task.Model} · 思考强度 {task.ReasoningEffort.Label()}");
+                logger.WithActivity(LogActivity.Preparation).Info($"已提交准备 · 模型 {task.Model} · 思考 {task.ReasoningEffort.Label()}");
             }
             catch (Exception)
             {
@@ -538,10 +538,10 @@ public sealed class PreparationWorkspace
                 continue;
             }
             task.EndTiming();
-            var message = result is PreparationResult.Ready
-                ? $"{task.Title}：准备完成，已开始独立保活"
-                : $"{task.Title}：准备已终止";
-            _logger.Preparation(task.Title).WithActivity(LogActivity.Preparation).Info(message);
+            // 来源标签已有任务名，短文案只用于日志，通知仍保留完整名称。
+            var text = result is PreparationResult.Ready ? "准备完成，已开始独立保活" : "准备已终止";
+            var message = $"{task.Title}：{text}";
+            _logger.Preparation(task.Title).WithActivity(LogActivity.Preparation).Info(text);
             NoticePosted?.Invoke(message);
         }
         PersistObservedChanges();
@@ -553,8 +553,9 @@ public sealed class PreparationWorkspace
         task.WasRunning = false;
         _needsSave = true;
         StopService(task);
-        var message = $"{task.Title}：{task.Failure}";
-        _logger.Preparation(task.Title).WithActivity(LogActivity.Service).Warn(message);
+        var text = task.Failure ?? string.Empty;
+        var message = $"{task.Title}：{text}";
+        _logger.Preparation(task.Title).WithActivity(LogActivity.Service).Warn(text);
         NoticePosted?.Invoke(message);
     }
 

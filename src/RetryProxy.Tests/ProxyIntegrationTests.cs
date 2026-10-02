@@ -219,8 +219,8 @@ public class ProxyIntegrationTests
         Assert.Equal(2, attempts);
         service.Stop(TimeSpan.FromSeconds(5));
         var logText = LogFiles.ReadAll(logDirectory);
-        Assert.True(logText.Contains("第 1 次 GET /hello -> 上游 HTTP 500（上游服务内部错误），0.0 秒后重试"), logText);
-        Assert.True(logText.Contains("GET /hello -> 上游 HTTP 200（重试 1 次后成功）"), logText);
+        Assert.True(logText.Contains("第 1 次 GET /hello -> HTTP 500（上游服务内部错误），0.0秒后重试"), logText);
+        Assert.True(logText.Contains("GET /hello -> HTTP 200（重试 1 次）"), logText);
         Assert.True(service.State is ServiceState.Stopped or ServiceState.Error);
     }
 
@@ -302,7 +302,7 @@ public class ProxyIntegrationTests
             Assert.Contains("有效答案", body);
             Assert.DoesNotContain("无效答案", body);
             Assert.Equal(2, attempts);
-            Assert.Contains("未交给客户端", LogFiles.ReadAll(logDirectory));
+            Assert.Contains("未转发", LogFiles.ReadAll(logDirectory));
         }
         finally
         {
@@ -497,7 +497,7 @@ public class ProxyIntegrationTests
         rebind.Stop();
 
         var logText = LogFiles.ReadAll(logDirectory);
-        Assert.True(logText.Contains("代理服务已停止，丢弃 1 个处理中的请求"), $"日志里没有丢弃提示：{logText}");
+        Assert.True(logText.Contains("代理已停止，丢弃 1 个处理中请求"), $"日志里没有丢弃提示：{logText}");
     }
 
     /// <summary>下游客户端不再读响应时，代理往它写数据会被 TCP 缓冲区堵住，这种连接只能靠硬停丢掉。</summary>

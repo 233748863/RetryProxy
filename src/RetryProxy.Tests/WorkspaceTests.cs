@@ -55,11 +55,11 @@ public class WorkspaceTests
     [Fact]
     public void LogLineSplitsIntoTimestampLevelTagsAndBody()
     {
-        var parts = LogLine.Split("2026-09-05 09:50:00 INFO [E2E][e1657c64] 第 1/2 次 GET /test -> 上游 HTTP 500");
+        var parts = LogLine.Split("2026-09-05 09:50:00 INFO [E2E][e1657c64] 第 1/2 次 GET /test -> HTTP 500");
         Assert.Equal("2026-09-05 09:50:00", parts.Timestamp);
         Assert.Equal(LogLevelFilter.Info, parts.Level);
         Assert.Equal(new[] { "E2E", "e1657c64" }, parts.Tags);
-        Assert.Equal("第 1/2 次 GET /test -> 上游 HTTP 500", parts.Body);
+        Assert.Equal("第 1/2 次 GET /test -> HTTP 500", parts.Body);
     }
 
     [Fact]
@@ -92,7 +92,7 @@ public class WorkspaceTests
     [Fact]
     public void StatusCodesInTheBodyAreLocatedAndColoredByClass()
     {
-        const string body = "GET /test -> 上游 HTTP 503，用时 0.02 秒";
+        const string body = "GET /test -> HTTP 503，用时 0.02 秒";
         var (status, start, end) = LogLine.FindStatusCode(body)!.Value;
         Assert.Equal(503, status);
         Assert.Equal("HTTP 503", body.Substring(start, end - start));
@@ -116,7 +116,7 @@ public class WorkspaceTests
     [Fact]
     public void LogMatchesCombinesLevelQueryAndRouteFilters()
     {
-        const string line = "2026-09-05 09:50:00 WARNING [E2E][abc123] 上游 HTTP 500 可重试";
+        const string line = "2026-09-05 09:50:00 WARNING [E2E][abc123] HTTP 500 可重试";
         Assert.True(LogLine.Matches(line, LogLevelFilter.All, string.Empty, null));
         Assert.True(LogLine.Matches(line, LogLevelFilter.Warning, string.Empty, null));
         Assert.False(LogLine.Matches(line, LogLevelFilter.Error, string.Empty, null));
@@ -692,8 +692,8 @@ public class WorkspaceTests
     {
         const string temporary = "2026-09-05 09:50:00 INFO [保活] 自动保活已开始";
         const string ordinary = "2026-09-05 09:50:00 WARNING [alpha-one][保活] 后台问答未完成";
-        const string preparing = "2026-09-05 09:50:00 INFO [准备][保活-ffffffff] 上游 HTTP 500";
-        const string independent = "2026-09-05 09:50:00 INFO [保活][准备 1][保活-ffffffff] 上游 HTTP 200";
+        const string preparing = "2026-09-05 09:50:00 INFO [准备][保活-ffffffff] HTTP 500";
+        const string independent = "2026-09-05 09:50:00 INFO [保活][准备 1][保活-ffffffff] HTTP 200";
         const string legacy = "2026-09-05 09:50:00 INFO [alpha-one][保活-ffffffff] 历史保活请求";
         const string request = "2026-09-05 09:50:00 INFO [alpha-one] 正常请求";
         Assert.True(LogLine.Matches(temporary, LogLevelFilter.All, string.Empty, null, LogSource.ChannelKeepAlive));
@@ -711,7 +711,7 @@ public class WorkspaceTests
     [Fact]
     public void SourceAndRouteFiltersUsePrefixFieldsInsteadOfWordsInTheBody()
     {
-        const string line = "2026-09-05 09:50:00 WARNING [一键准备][准备 2 · Claude Code][独立保活][请求 abcd1234] 上游 HTTP 500，正文含 [alpha] [通道保活]";
+        const string line = "2026-09-05 09:50:00 WARNING [一键准备][准备 2 · Claude Code][独立保活][请求 abcd1234] HTTP 500，正文含 [alpha] [通道保活]";
         var parts = LogLine.Split(line);
         Assert.Equal(LogSource.Preparation, parts.Source);
         Assert.Null(parts.RouteName);
@@ -725,7 +725,7 @@ public class WorkspaceTests
         const string channel = "INFO [通道保活][alpha][自动保活][请求 12345678] 正文含 [beta] [一键准备]";
         Assert.True(LogLine.Matches(channel, LogLevelFilter.All, string.Empty, "alpha", LogSource.ChannelKeepAlive));
         Assert.False(LogLine.Matches(channel, LogLevelFilter.All, string.Empty, "beta", LogSource.ChannelKeepAlive));
-        Assert.True(LogLine.Matches("INFO [通道代理][一键准备][请求 12345678] 上游 HTTP 200", LogLevelFilter.All, string.Empty, "一键准备", LogSource.ChannelProxy));
+        Assert.True(LogLine.Matches("INFO [通道代理][一键准备][请求 12345678] HTTP 200", LogLevelFilter.All, string.Empty, "一键准备", LogSource.ChannelProxy));
         Assert.True(LogLine.Matches("INFO [系统] 窗口已恢复 [alpha]", LogLevelFilter.All, string.Empty, null, LogSource.System));
         Assert.False(LogLine.Matches("INFO [系统] 窗口已恢复 [alpha]", LogLevelFilter.All, string.Empty, "alpha"));
     }
@@ -862,7 +862,7 @@ public class WorkspaceTests
         var editor = app.OpenProviderEditor(0);
         editor.Name = "alpha-renamed";
         editor.Url = "https://alpha-next.example";
-        // 运行中的通道不用停：保存后之后的尝试立即使用新设置（PRD-供应商管理 §5.3）。
+        // 运行中的通道不用停：保存后下次尝试生效（PRD-供应商管理 §5.3）。
         Assert.Null(app.CommitProvider(editor));
         Assert.Equal("alpha-renamed", app.Config.Providers[0].Name);
         Assert.Same(service, app.Services["alpha-one"]);
@@ -910,12 +910,12 @@ public class WorkspaceTests
 
         Assert.Equal(("alpha", "k2"), (app.Config.Routes[0].CurrentProviderId, app.Config.Routes[0].CurrentKeyId));
         Assert.Same(watchdog, app.RouteKeepAlives["alpha-one"]);
-        Assert.Contains(fixture.DrainLogs(), line => line.Contains("已切换：alpha · 主号 → alpha · 群号"));
+        Assert.Contains(fixture.DrainLogs(), line => line.Contains("已切换：alpha · 主号 -> alpha · 群号"));
 
         // Key ID 为空表示该供应商的第一个 Key；供应商还没有 Key 时日志只写供应商名。
         Assert.Null(app.SwitchKey("alpha-one", "beta", string.Empty));
         Assert.Equal(("beta", string.Empty), (app.Config.Routes[0].CurrentProviderId, app.Config.Routes[0].CurrentKeyId));
-        Assert.Contains(fixture.DrainLogs(), line => line.Contains("已切换：alpha · 群号 → beta"));
+        Assert.Contains(fixture.DrainLogs(), line => line.Contains("已切换：alpha · 群号 -> beta"));
     }
 
     [Fact]
@@ -957,8 +957,8 @@ public class WorkspaceTests
         Assert.Equal(new[] { "Bearer sk-one", "Bearer sk-two", "Bearer sk-one" }, seen);
         Assert.Same(service, app.Services["alpha-one"]);
         var logs = fixture.DrainLogs();
-        Assert.Contains(logs, line => line.Contains("已切换：alpha · 主号 → alpha · 群号"));
-        Assert.Contains(logs, line => line.Contains("已切换：alpha · 群号 → alpha · 主号"));
+        Assert.Contains(logs, line => line.Contains("已切换：alpha · 主号 -> alpha · 群号"));
+        Assert.Contains(logs, line => line.Contains("已切换：alpha · 群号 -> alpha · 主号"));
         Assert.DoesNotContain(logs, line => line.Contains("sk-one") || line.Contains("sk-two") || line.Contains("token-alpha-one"));
 
         // 「获取模型」的结果并入已知模型，运行中的通道立即采用。
@@ -988,6 +988,6 @@ public class WorkspaceTests
         Assert.Same(service, app.Services["alpha-one"]);
         Assert.Equal(ServiceState.Running, service.State);
         Assert.Equal((7L, 321.0), (service.CurrentSnapshot!.MaxRetries, service.CurrentSnapshot.TotalTimeoutSeconds));
-        Assert.Contains(fixture.DrainLogs(), line => line.Contains("通道参数已更新，之后的尝试立即使用新参数"));
+        Assert.Contains(fixture.DrainLogs(), line => line.Contains("通道参数已更新，下次尝试生效"));
     }
 }

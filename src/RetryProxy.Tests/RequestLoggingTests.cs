@@ -72,7 +72,7 @@ public class RequestLoggingTests
             Assert.NotNull(await TestClient.TryReadAll(response));
             var lines = await CompletedLogs(fixture);
             Assert.Contains(lines, line => line.Contains("WARNING [一键准备][准备 1 · Codex][准备][请求 ")
-                && line.Contains("POST /v1/responses -> 上游 HTTP 500") && line.Contains("未交给客户端"));
+                && line.Contains("POST /v1/responses -> HTTP 500") && line.Contains("未转发"));
             Assert.Contains(lines, line => line.Contains("HTTP 504"));
             if (streamError)
             {
@@ -223,11 +223,11 @@ public class RequestLoggingTests
         var logs = await CompletedLogs(fixture);
         Assert.True(logs.Count == 1, string.Join("\n", logs));
         var line = logs[0];
-        Assert.Contains("] POST /v1/responses -> 上游 HTTP 200", line);
-        Assert.Contains("模型对照 发出 request-alias → 返回 gpt-test（不一致）", line);
-        Assert.Contains("思考等级 发出 max → 返回 high（不一致）", line);
+        Assert.Contains("] POST /v1/responses -> HTTP 200", line);
+        Assert.Contains("模型 request-alias -> gpt-test (不一致)", line);
+        Assert.Contains("思考 max -> high (不一致)", line);
         Assert.DoesNotContain("第 1/", line);
-        foreach (var expected in new[] { "HTTP 200", "模型 gpt-test", "输入 4096", "输出 32", "命中 512", "推理 8", "首字", "耗时" })
+        foreach (var expected in new[] { "HTTP 200", "模型 request-alias -> gpt-test (不一致)", "输入/输出 4096/32", "读 512", "推理 8", "首字", "总 " })
         {
             Assert.True(line.Contains(expected), $"缺少 {expected}: {line}");
         }
@@ -266,8 +266,7 @@ public class RequestLoggingTests
         var logs = await CompletedLogs(fixture);
         Assert.True(logs.Count == 1, string.Join("\n", logs));
         Assert.Contains("HTTP 200", logs[0]);
-        Assert.Contains("输入 120", logs[0]);
-        Assert.Contains("输出 9", logs[0]);
+        Assert.Contains("输入/输出 120/9 token", logs[0]);
         Assert.DoesNotContain("第 1/", logs[0]);
         Assert.DoesNotContain("WARNING", logs[0]);
         Assert.Equal(1UL, fixture.Metrics.Snapshot().SuccessfulRequests);
@@ -302,9 +301,9 @@ public class RequestLoggingTests
         Assert.True(logs.Count == 1, string.Join("\n", logs));
         Assert.Contains("WARNING", logs[0]);
         Assert.Contains("客户端断开", logs[0]);
-        Assert.Contains("输入 44", logs[0]);
+        Assert.Contains("输入/输出 44/0 token", logs[0]);
         Assert.DoesNotContain("第 ", logs[0]);
-        Assert.Contains("不再重试（已进入响应转发阶段）", logs[0]);
+        Assert.Contains("已转发，不重试", logs[0]);
         Assert.Equal(0UL, fixture.Metrics.Snapshot().SuccessfulRequests);
         Assert.Equal(1UL, fixture.Metrics.Snapshot().FailedRequests);
         Assert.True(fixture.Proxy.KeepAlive.IdleFor() < TimeSpan.FromMilliseconds(200));
@@ -400,11 +399,11 @@ public class RequestLoggingTests
             Assert.True(logs.Count == 1, string.Join("\n", logs));
             var line = logs[0];
             Assert.Contains("WARNING", line);
-            Assert.Contains("原因：上游服务内部错误", line);
-            Assert.Contains("上游错误码 server_error", line);
-            Assert.Contains("错误参数 input[0].content", line);
-            Assert.Contains("上游请求 ID upstream-request-123", line);
-            Assert.DoesNotContain("输入 未获取", line);
+            Assert.Contains("响应未完成：上游服务内部错误", line);
+            Assert.Contains("错误码 server_error", line);
+            Assert.Contains("参数 input[0].content", line);
+            Assert.Contains("上游 ID upstream-request-123", line);
+            Assert.DoesNotContain("输入/输出 未获取", line);
             Assert.DoesNotContain("private-error", line);
             Assert.DoesNotContain("private-api-secret", line);
             Assert.Equal(0UL, fixture.Metrics.Snapshot().SuccessfulRequests);
@@ -434,15 +433,15 @@ public class RequestLoggingTests
         var line = logs[0];
         foreach (var expected in new[]
                  {
-                     "WARNING", "上游 HTTP 200", "原因：上游请求超限", "不再重试（已进入响应转发阶段）", "上游错误码 rate_limit_exceeded",
-                     "上游错误类型 too_many_requests", "上游请求 ID rate-limit-request-123", "生成内容：未读取到", "最后事件 error",
-                     "首字：无",
+                     "WARNING", "HTTP 200", "响应未完成：上游请求超限", "已转发，不重试", "错误码 rate_limit_exceeded",
+                     "错误类型 too_many_requests", "上游 ID rate-limit-request-123", "内容 未收到", "最后事件 error",
+                     "首字 无",
                  })
         {
             Assert.True(line.Contains(expected), $"缺少 {expected}: {line}");
         }
 
-        Assert.DoesNotContain("输入 未获取", line);
+        Assert.DoesNotContain("输入/输出 未获取", line);
         Assert.DoesNotContain("private", line);
         Assert.Equal(1, requests);
         var metrics = fixture.Metrics.Snapshot();
@@ -454,7 +453,7 @@ public class RequestLoggingTests
     [Fact]
     public async Task InterruptedStreamsKeepProgressAndRequestIdsWithoutClaimingRateLimits()
     {
-        foreach (var (breakConnection, expected) in new[] { (true, "上游回复到一半，连接就断了"), (false, "上游回复到一半就没了动静，已等到超时") })
+        foreach (var (breakConnection, expected) in new[] { (true, "读取上游响应时断连"), (false, "读取上游响应超时") })
         {
             await using var fixture = await LifecycleProxy.StartAsync(async context =>
             {
@@ -480,8 +479,8 @@ public class RequestLoggingTests
             var line = logs[0];
             foreach (var part in new[]
                      {
-                         expected, "链路：直连", "生成内容：已读取到", "最后事件 response.output_text.delta",
-                         "上游请求 ID broken-stream-request-123", "不再重试（已进入响应转发阶段）",
+                         expected, "链路：直连", "内容 已收到", "最后事件 response.output_text.delta",
+                         "上游 ID broken-stream-request-123", "已转发，不重试",
                      })
             {
                 Assert.True(line.Contains(part), $"缺少 {part}: {line}");
@@ -518,7 +517,7 @@ public class RequestLoggingTests
         var failures = logs.FindAll(line => line.Contains("Timeout"));
         Assert.True(failures.Count == 2, string.Join("\n", logs));
         Assert.Contains("第 1 次", failures[0]);
-        Assert.Contains("0.0 秒后重试", failures[0]);
+        Assert.Contains("0.0秒后重试", failures[0]);
         Assert.Contains("第 2 次", failures[1]);
         Assert.Contains("已达到重试上限", failures[1]);
         foreach (var line in logs)
@@ -528,10 +527,10 @@ public class RequestLoggingTests
 
         foreach (var line in failures)
         {
-            Assert.Contains("上游状态码：无", line);
-            Assert.Contains("上游一直没回复，已等到超时", line);
+            Assert.Contains("HTTP 无", line);
+            Assert.Contains("等待上游响应超时", line);
             Assert.Contains("链路：直连", line);
-            Assert.Contains("（技术细节：Timeout", line);
+            Assert.Contains("（诊断：Timeout", line);
         }
 
         Assert.Equal(1UL, fixture.Metrics.Snapshot().RetryCount);
@@ -575,21 +574,21 @@ public class RequestLoggingTests
         await response.Content.ReadAsStringAsync();
         var logs = await CompletedLogs(fixture);
 
-        // 暂存的错误正文按上游错误码写明原因，并带上与一键准备相同的诊断字段；错误原文不进日志。
+        // 暂存的错误正文按错误码写明原因，并带上与一键准备相同的诊断字段；错误原文不进日志。
         // 每次重试只写一行：状态、诊断字段和等待时间在同一行。
         var attempt = Assert.Single(logs, line => line.Contains("第 1 次 POST /v1/responses"));
         foreach (var expected in new[]
                  {
-                     "WARNING", "-> 上游 HTTP 500（当前需求量高，模型负载已达上限），上游错误码 get_channel_failed，上游错误类型 new_api_error",
-                     "上游请求 ID busy-request-123", "模型 gpt-6-astra", "秒后重试",
+                     "WARNING", "-> HTTP 500（当前需求量高，模型负载已达上限），错误码 get_channel_failed，错误类型 new_api_error",
+                     "上游 ID busy-request-123", "模型 gpt-6-astra", "秒后重试",
                  })
         {
             Assert.True(attempt.Contains(expected), $"缺少 {expected}: {attempt}");
         }
 
-        Assert.DoesNotContain("输入 未获取", attempt);
+        Assert.DoesNotContain("输入/输出 未获取", attempt);
         Assert.DoesNotContain("首字", attempt);
-        Assert.Contains(logs, line => line.Contains("INFO") && line.Contains("上游 HTTP 200（重试 1 次后成功）"));
+        Assert.Contains(logs, line => line.Contains("INFO") && line.Contains("HTTP 200（重试 1 次）"));
         Assert.Equal(2, logs.Count);
         Assert.DoesNotContain(logs, line => line.Contains("private"));
         Assert.Equal(2, requests);
@@ -611,11 +610,11 @@ public class RequestLoggingTests
 
         // 25 次同样的 500：第 1 次完整一行，第 20 次一条进度，最后一行成功并写明重试次数。
         Assert.True(logs.Count == 3, string.Join("\n", logs));
-        Assert.Contains("第 1 次 POST /v1/responses -> 上游 HTTP 500（上游服务内部错误）", logs[0]);
-        Assert.Contains("模型对照 发出 gpt-6-astra → 返回 未报告", logs[0]);
-        Assert.Contains("，0.0 秒后重试", logs[0]);
-        Assert.True(logs[1].Contains("已重试 20 次，仍是上游 HTTP 500（上游服务内部错误）"), logs[1]);
-        Assert.True(logs[2].Contains("POST /v1/responses -> 上游 HTTP 200（重试 25 次后成功）"), logs[2]);
+        Assert.Contains("第 1 次 POST /v1/responses -> HTTP 500（上游服务内部错误）", logs[0]);
+        Assert.Contains("模型 gpt-6-astra -> 未报告", logs[0]);
+        Assert.Contains("，0.0秒后重试", logs[0]);
+        Assert.True(logs[1].Contains("已重试 20 次：HTTP 500（上游服务内部错误）"), logs[1]);
+        Assert.True(logs[2].Contains("POST /v1/responses -> HTTP 200（重试 25 次）"), logs[2]);
         Assert.Equal(25UL, fixture.Metrics.Snapshot().RetryCount);
     }
 
@@ -630,7 +629,7 @@ public class RequestLoggingTests
                 return Upstream.Json(context, 500, ChannelBusyError);
             }
 
-            // 之后的尝试连不上上游，只能把第一次暂存的完整 500 交给客户端。
+            // 之后的尝试连接上游失败，只能把第一次暂存的完整 500 交给客户端。
             Upstream.Reset(context);
             return Task.CompletedTask;
         }, LoggingConfig(5.0, 1));
@@ -639,6 +638,6 @@ public class RequestLoggingTests
         Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
         Assert.Equal(ChannelBusyError, await response.Content.ReadAsStringAsync());
         var logs = await CompletedLogs(fixture);
-        Assert.Contains(logs, line => line.Contains("重试耗尽，返回客户端最后一次完整上游响应 HTTP 500（当前需求量高，模型负载已达上限）"));
+        Assert.Contains(logs, line => line.Contains("重试耗尽，返回最后完整响应 HTTP 500（当前需求量高，模型负载已达上限）"));
     }
 }

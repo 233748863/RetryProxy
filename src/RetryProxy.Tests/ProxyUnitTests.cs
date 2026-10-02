@@ -28,6 +28,34 @@ namespace RetryProxy.Tests;
 public class ProxyUnitTests
 {
     [Fact]
+    public async Task RetryDelayReachingDeadlineCancelsEvenWithoutTheCancellationCallback()
+    {
+        var deadline = Deadline.AfterSeconds(0.02);
+        var waiting = Pipeline.WaitDelayAsync(30, deadline, CancellationToken.None);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => waiting.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.True(deadline.HasPassed);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(30)]
+    public async Task ExpiredDeadlineNeverMakesRetryReady(double delay)
+    {
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            Pipeline.WaitDelayAsync(delay, Deadline.AfterSeconds(0), CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task RetryDelayStillCompletesBeforeDeadlineAndHonorsCancellation()
+    {
+        await Pipeline.WaitDelayAsync(0, Deadline.AfterSeconds(10), CancellationToken.None);
+        using var cancellation = new CancellationTokenSource();
+        var waiting = Pipeline.WaitDelayAsync(30, Deadline.AfterSeconds(10), cancellation.Token);
+        cancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => waiting);
+    }
+
+    [Fact]
     public void ClaudeToolChoiceKeepsDeclaredToolsButPreventsTheirUse()
     {
         const string body = "{\"model\":\"claude-opus-5-5\",\"tools\":[{\"name\":\"Read\"}],\"tool_choice\":{\"type\":\"auto\"}}";
@@ -83,10 +111,10 @@ public class ProxyUnitTests
     {
         foreach (var (code, expected) in new[]
                  {
-                     (SocketError.ConnectionRefused, "对方拒绝了连接"),
-                     (SocketError.ConnectionReset, "连接被对方强行掐断"),
-                     (SocketError.AccessDenied, "系统不允许本程序联网"),
-                     (SocketError.TimedOut, "网络长时间没有响应"),
+                     (SocketError.ConnectionRefused, "对端拒绝连接"),
+                     (SocketError.ConnectionReset, "对端重置连接"),
+                     (SocketError.AccessDenied, "系统拒绝联网"),
+                     (SocketError.TimedOut, "网络响应超时"),
                  })
         {
             var error = new InvalidOperationException("private-outer-error", new SocketException((int)code));
@@ -100,14 +128,14 @@ public class ProxyUnitTests
 
         var eof = new HttpRequestException("private-query Bearer private-key https://user:password@example.test", new HttpIOException(HttpRequestError.ResponseEnded, "private"));
         var eofFields = NetworkErrorLabel.CauseFields(eof);
-        Assert.Contains("，对方主动关闭了连接（技术细节：", eofFields);
+        Assert.Contains("，对端关闭连接（诊断：", eofFields);
         Assert.Contains("类别 ResponseEnded", eofFields);
         Assert.Contains("异常链 HttpRequestException > HttpIOException", eofFields);
         Assert.DoesNotContain("private", eofFields);
 
         var plain = NetworkErrorLabel.CauseFields(new InvalidOperationException("plain"));
-        Assert.Equal("，原因程序认不出来（技术细节：异常链 InvalidOperationException）", plain);
-        Assert.Equal("，没有更具体的原因", NetworkErrorLabel.CauseFields(UpstreamException.Timeout(false)));
+        Assert.Equal("，原因未识别（诊断：异常链 InvalidOperationException）", plain);
+        Assert.Equal("，无具体原因", NetworkErrorLabel.CauseFields(UpstreamException.Timeout(false)));
     }
 
     [Fact]
@@ -115,14 +143,14 @@ public class ProxyUnitTests
     {
         var tls = new HttpRequestException(HttpRequestError.SecureConnectionError, "private https://example.test", new AuthenticationException("private cert"));
         var tlsFields = NetworkErrorLabel.CauseFields(UpstreamException.From(tls));
-        Assert.Contains("，加密连接（HTTPS）没建立起来（技术细节：", tlsFields);
+        Assert.Contains("，HTTPS 连接建立失败（诊断：", tlsFields);
         Assert.Contains("类别 SecureConnectionError", tlsFields);
         Assert.Contains("异常链 HttpRequestException > AuthenticationException", tlsFields);
         Assert.DoesNotContain("private", tlsFields);
 
         var tunnel = new HttpRequestException(HttpRequestError.ProxyTunnelError, "private proxy");
         var tunnelFields = NetworkErrorLabel.CauseFields(UpstreamException.From(tunnel));
-        Assert.Contains("，系统代理没能帮忙连到上游（技术细节：", tunnelFields);
+        Assert.Contains("，系统代理隧道连接失败（诊断：", tunnelFields);
         Assert.Contains("类别 ProxyTunnelError", tunnelFields);
         Assert.True(UpstreamException.From(tunnel).IsConnect);
 
@@ -130,7 +158,7 @@ public class ProxyUnitTests
         Assert.Contains("错误码 -2146893018", NetworkErrorLabel.CauseFields(win32));
 
         var cancelled = NetworkErrorLabel.CauseFields(new UpstreamException("disposed", false, false, new OperationCanceledException("private")));
-        Assert.Equal("，这次操作被取消了（技术细节：异常链 OperationCanceledException）", cancelled);
+        Assert.Equal("，操作已取消（诊断：异常链 OperationCanceledException）", cancelled);
     }
 
     [Fact]
@@ -141,7 +169,7 @@ public class ProxyUnitTests
         Assert.False(upstream.IsConnect);
         Assert.False(upstream.IsTimeout);
         var label = NetworkErrorLabel.Describe(upstream, true, NetworkPhase.AwaitingResponse);
-        Assert.Contains("请求已发出，但没等到上游回复连接就断了，连接被对方强行掐断，链路：系统代理（技术细节：ClientError；", label);
+        Assert.Contains("上游响应前断连，对端重置连接，链路：系统代理（诊断：ClientError；", label);
         Assert.Contains("错误码 10054", label);
         Assert.Contains("异常链 HttpRequestException > IOException > SocketException", label);
         Assert.DoesNotContain("private", label);
@@ -231,8 +259,8 @@ public class ProxyUnitTests
             var detail = $"connections={connections}\n{label}\n{failure}";
             Assert.False(upstream.IsTimeout, detail);
             Assert.False(upstream.IsConnect, detail);
-            Assert.True(label.Contains("请求已发出，但没等到上游回复连接就断了，"), detail);
-            Assert.True(label.Contains(reset ? "连接被对方强行掐断，链路：直连（技术细节：ClientError；" : "对方主动关闭了连接，链路：直连（技术细节：ClientError；"), detail);
+            Assert.True(label.Contains("上游响应前断连，"), detail);
+            Assert.True(label.Contains(reset ? "对端重置连接，链路：直连（诊断：ClientError；" : "对端关闭连接，链路：直连（诊断：ClientError；"), detail);
             Assert.True(label.Contains(reset ? "错误码 10054" : "类别 ResponseEnded"), detail);
             Assert.True(label.Contains("异常链 HttpRequestException"), detail);
             Assert.False(label.Contains("private"), detail);
@@ -245,7 +273,7 @@ public class ProxyUnitTests
     public void NetworkDiagnosticsPreserveWindowsSocketErrorCodes()
     {
         var fields = NetworkErrorLabel.CauseFields(new SocketException(10061));
-        Assert.True(fields.Contains("对方拒绝了连接"), fields);
+        Assert.True(fields.Contains("对端拒绝连接"), fields);
         Assert.True(fields.Contains("错误码 10061"), fields);
     }
 
@@ -304,8 +332,8 @@ public class ProxyUnitTests
         var upstream = UpstreamException.From(failure);
         Assert.True(upstream.IsConnect, failure.ToString());
         var label = NetworkErrorLabel.Describe(upstream, true, NetworkPhase.AwaitingResponse);
-        Assert.True(label.Contains("连不上上游，"), label);
-        Assert.True(label.Contains("（技术细节：ConnectError；"), label);
+        Assert.True(label.Contains("连接上游失败，"), label);
+        Assert.True(label.Contains("（诊断：ConnectError；"), label);
         Assert.True(label.Contains("链路：系统代理"), label);
         Assert.False(label.Contains("private"), label);
         Assert.False(label.Contains("https://"), label);
@@ -316,19 +344,19 @@ public class ProxyUnitTests
     {
         foreach (var (attempt, status, expectedPrefix) in new (ulong, int, string)[]
                  {
-                     (1, 200, "[request-1] POST /v1/responses -> 上游 HTTP 200，"),
-                     (2, 200, "[request-1] POST /v1/responses -> 上游 HTTP 200（重试 1 次后成功），"),
-                     (48, 200, "[request-1] POST /v1/responses -> 上游 HTTP 200（重试 47 次后成功），"),
-                     (1, 503, "[request-1] POST /v1/responses -> 上游 HTTP 503（上游服务暂不可用），模型"),
-                     (4, 400, "[request-1] POST /v1/responses -> 上游 HTTP 400（请求参数有误），已重试 3 次，"),
+                     (1, 200, "[request-1] POST /v1/responses -> HTTP 200，"),
+                     (2, 200, "[request-1] POST /v1/responses -> HTTP 200（重试 1 次），"),
+                     (48, 200, "[request-1] POST /v1/responses -> HTTP 200（重试 47 次），"),
+                     (1, 503, "[request-1] POST /v1/responses -> HTTP 503（上游服务暂不可用），模型"),
+                     (4, 400, "[request-1] POST /v1/responses -> HTTP 400（请求参数有误），已重试 3 次，"),
                  })
         {
-            var line = LogText.FormatCompletedAttempt("request-1", attempt, "POST", "/v1/responses", status, 0.25, 1.5, "，模型 gpt-test，输入 8 / 输出 2 token");
+            var line = LogText.FormatCompletedAttempt("request-1", attempt, "POST", "/v1/responses", status, 0.25, 1.5, "，模型 gpt-test，输入/输出 8/2 token");
             Assert.True(line.StartsWith(expectedPrefix, StringComparison.Ordinal), line);
             Assert.DoesNotContain("第 ", line);
-            Assert.Contains("模型 gpt-test，输入 8 / 输出 2 token", line);
-            Assert.Contains("首字 0.25 秒", line);
-            Assert.Contains("耗时 1.50 秒", line);
+            Assert.Contains("模型 gpt-test，输入/输出 8/2 token", line);
+            Assert.Contains("首字 0.25秒", line);
+            Assert.Contains("总 1.50秒", line);
         }
     }
 
@@ -339,30 +367,30 @@ public class ProxyUnitTests
         var kinds = new List<RetryLogKind>();
         for (var index = 0; index < 45; index++)
         {
-            kinds.Add(log.Next("上游 HTTP 500（上游服务内部错误）"));
+            kinds.Add(log.Next("HTTP 500（上游服务内部错误）"));
         }
 
         Assert.Equal(RetryLogKind.Full, kinds[0]);
         Assert.Equal(RetryLogKind.Progress, kinds[19]);
         Assert.Equal(RetryLogKind.Progress, kinds[39]);
         Assert.Equal(42, kinds.Count(kind => kind == RetryLogKind.None));
-        Assert.Equal("[request-1] 已重试 45 次，仍是上游 HTTP 500（上游服务内部错误）", log.ProgressText("request-1", "上游 HTTP 500（上游服务内部错误）"));
+        Assert.Equal("[request-1] 已重试 45 次：HTTP 500（上游服务内部错误）", log.ProgressText("request-1", "HTTP 500（上游服务内部错误）"));
 
-        Assert.Equal(RetryLogKind.Full, log.Next("上游 HTTP 429（请求过于频繁）"));
-        Assert.Equal(RetryLogKind.None, log.Next("上游 HTTP 429（请求过于频繁）"));
-        Assert.Equal(RetryLogKind.Full, log.Next("上游 HTTP 500（上游服务内部错误）"));
+        Assert.Equal(RetryLogKind.Full, log.Next("HTTP 429（请求过于频繁）"));
+        Assert.Equal(RetryLogKind.None, log.Next("HTTP 429（请求过于频繁）"));
+        Assert.Equal(RetryLogKind.Full, log.Next("HTTP 500（上游服务内部错误）"));
         Assert.Equal(48UL, log.Retries);
     }
 
     [Fact]
     public void UpstreamStatusExplainsKnownErrorCodes()
     {
-        Assert.Equal("上游 HTTP 200", LogText.UpstreamStatus(200));
-        Assert.Equal("上游 HTTP 200", LogText.UpstreamStatus(200, "上游请求超限"));
-        Assert.Equal("上游 HTTP 429（请求过于频繁）", LogText.UpstreamStatus(429));
-        Assert.Equal("上游 HTTP 524（上游响应超时）", LogText.UpstreamStatus(524));
-        Assert.Equal("上游 HTTP 500（当前需求量高，模型负载已达上限）", LogText.UpstreamStatus(500, "当前需求量高，模型负载已达上限"));
-        Assert.Equal("上游 HTTP 599", LogText.UpstreamStatus(599));
+        Assert.Equal("HTTP 200", LogText.UpstreamStatus(200));
+        Assert.Equal("HTTP 200", LogText.UpstreamStatus(200, "上游请求超限"));
+        Assert.Equal("HTTP 429（请求过于频繁）", LogText.UpstreamStatus(429));
+        Assert.Equal("HTTP 524（上游响应超时）", LogText.UpstreamStatus(524));
+        Assert.Equal("HTTP 500（当前需求量高，模型负载已达上限）", LogText.UpstreamStatus(500, "当前需求量高，模型负载已达上限"));
+        Assert.Equal("HTTP 599", LogText.UpstreamStatus(599));
         Assert.Equal("HTTP 502（上游网关错误）", LogText.HttpStatus(502));
         Assert.Equal("HTTP 500（当前需求量高，模型负载已达上限）", LogText.HttpStatus(500, "当前需求量高，模型负载已达上限"));
         Assert.Equal("HTTP 200", LogText.HttpStatus(200));

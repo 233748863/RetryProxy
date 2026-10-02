@@ -91,8 +91,8 @@ public class ProxyLoggerTests : IDisposable
         var preparation = logger.Preparation("准备 1 · Codex");
         var preparing = preparation.ForRequest("保活-ffffffff", internalRequest: true, preparing: true);
         var keepingAlive = preparation.ForRequest("保活-eeeeeeee", internalRequest: true, preparing: false);
-        preparing.Warn("[保活-ffffffff] 上游 HTTP 500");
-        keepingAlive.Info("[保活-eeeeeeee] 上游 HTTP 200");
+        preparing.Warn("[保活-ffffffff] HTTP 500");
+        keepingAlive.Info("[保活-eeeeeeee] HTTP 200");
         route.Info("供应商保活只是正文里的描述");
 
         var reader = logger.UiLines!;

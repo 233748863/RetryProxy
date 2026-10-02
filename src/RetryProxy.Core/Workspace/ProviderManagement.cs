@@ -204,7 +204,7 @@ public sealed partial class ProxyWorkspace
                 if (RouteState(route.Id) is ServiceState.Starting or ServiceState.Running)
                 {
                     PushSnapshot(route.Id);
-                    Logger.Route(route.Name).Info($"服务商“{provider.Name}”已更新，之后的尝试立即使用新设置");
+                    Logger.Route(route.Name).Info($"服务商“{provider.Name}”已更新，下次尝试生效");
                 }
             }
         }

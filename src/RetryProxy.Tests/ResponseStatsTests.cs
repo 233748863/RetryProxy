@@ -278,7 +278,7 @@ public class ResponseStatsTests
         Assert.Equal((ulong?)120, request.InputTokens);
         Assert.Equal((ulong?)20, request.CachedTokens);
         var fields = stats.LogFields();
-        Assert.Contains("输入 120 / 输出 9 token", fields);
+        Assert.Contains("输入/输出 120/9 token", fields);
         Assert.Contains("推理 3 token", fields);
         Assert.Equal((ulong?)129, stats.ContextTokens(false));
         AssertComplete(stats);
@@ -314,7 +314,7 @@ public class ResponseStatsTests
         Assert.Equal((ulong?)80, final.InputTokens);
         Assert.Equal((ulong?)1200, final.CachedTokens);
         Assert.Equal((ulong?)0, final.CacheCreationTokens);
-        Assert.Contains("输入 80 / 输出 11 token", stats.LogFields());
+        Assert.Contains("输入/输出 80/11 token", stats.LogFields());
         Assert.Equal((ulong?)91, stats.ContextTokens(false));
         Assert.Equal((double?)0.8, stats.FirstContentSeconds());
         AssertComplete(stats);
@@ -339,8 +339,8 @@ public class ResponseStatsTests
         Assert.Equal((ulong?)6, request.CachedTokens);
         Assert.Equal((ulong?)4, request.CacheCreationTokens);
         var fields = stats.LogFields();
-        Assert.Contains("输入 20 / 输出 5 token", fields);
-        Assert.Contains("缓存 30.0%（命中 6 / 写入 4）", fields);
+        Assert.Contains("输入/输出 20/5 token", fields);
+        Assert.Contains("缓存 30.0%（读 6 / 写 4）", fields);
         Assert.Contains("推理 2 token", fields);
         Assert.Equal((ulong?)25, stats.ContextTokens(false));
         Assert.Equal((double?)0.6, stats.FirstContentSeconds());
@@ -352,14 +352,14 @@ public class ResponseStatsTests
     {
         var missing = EventStats("/v1/responses");
         Event(missing, """{"type":"response.completed","response":{}}""", 0.3);
-        Assert.Contains("输入 未获取 / 输出 未获取", missing.LogFields());
+        Assert.Contains("输入/输出 未获取/未获取", missing.LogFields());
         var zero = EventStats("/v1/responses");
         Event(
             zero,
             """{"type":"response.completed","response":{"usage":{"input_tokens":0,"output_tokens":0,"input_tokens_details":{"cached_tokens":42}}}}""",
             0.3);
-        Assert.Contains("输入 0 / 输出 0", zero.LogFields());
-        Assert.Contains("缓存（命中 42）", zero.LogFields());
+        Assert.Contains("输入/输出 0/0", zero.LogFields());
+        Assert.Contains("缓存（读 42）", zero.LogFields());
     }
 
     [Fact]
@@ -393,19 +393,19 @@ public class ResponseStatsTests
         {
             (
                 """{"type":"error","code":"server_error","param":"input[0].content","message":"private-server-message","usage":{"input_tokens":12,"output_tokens":0}}""",
-                new[] { "上游错误码 server_error", "错误参数 input[0].content", "输入 12 / 输出 0" }
+                new[] { "错误码 server_error", "参数 input[0].content", "输入/输出 12/0" }
             ),
             (
                 """{"type":"response.failed","response":{"error":{"code":"invalid_encrypted_content","type":"invalid_request_error","message":"private-server-message"}}}""",
-                new[] { "上游错误码 invalid_encrypted_content", "上游错误类型 invalid_request_error" }
+                new[] { "错误码 invalid_encrypted_content", "错误类型 invalid_request_error" }
             ),
             (
                 """{"type":"response.incomplete","response":{"incomplete_details":{"reason":"max_output_tokens"}}}""",
-                new[] { "未完成原因 max_output_tokens" }
+                new[] { "未完成 max_output_tokens" }
             ),
             (
                 """{"type":"error","error":{"code":502,"type":"upstream_error","message":"private-server-message"}}""",
-                new[] { "上游错误码 502", "上游错误类型 upstream_error" }
+                new[] { "错误码 502", "错误类型 upstream_error" }
             ),
         };
         foreach (var (payload, expected) in cases)
@@ -444,11 +444,11 @@ public class ResponseStatsTests
         Assert.Null(stats.ContextTokens(false));
         Assert.Equal("上游请求超限", stats.FailureSummary());
         var fields = stats.LogFields();
-        Assert.Contains("上游错误码 rate_limit_exceeded", fields);
-        Assert.Contains("上游错误类型 too_many_requests", fields);
-        Assert.DoesNotContain("输入 未获取", fields);
+        Assert.Contains("错误码 rate_limit_exceeded", fields);
+        Assert.Contains("错误类型 too_many_requests", fields);
+        Assert.DoesNotContain("输入/输出 未获取", fields);
         Assert.DoesNotContain("用量统计", fields);
-        Assert.Contains("生成内容：未读取到", fields);
+        Assert.Contains("内容 未收到", fields);
         Assert.Contains("最后事件 error", fields);
         Assert.DoesNotContain("eastus2", fields);
     }
@@ -509,13 +509,13 @@ public class ResponseStatsTests
         Event(stats, """{"type":"response.created","response":{"usage":{"input_tokens":42}}}""", 0.1);
         Event(stats, """{"type":"response.output_text.delta","delta":"private-answer"}""", 0.2);
         var fields = stats.FailureLogFields();
-        Assert.Contains("上游请求 ID transport-request-123", fields);
-        Assert.Contains("生成内容：已读取到", fields);
+        Assert.Contains("上游 ID transport-request-123", fields);
+        Assert.Contains("内容 已收到", fields);
         Assert.Contains("最后事件 response.output_text.delta", fields);
-        Assert.Contains("输入 42 / 输出 未获取 token（用量统计不完整）", fields);
+        Assert.Contains("输入/输出 42/未获取 token（用量不全）", fields);
         Assert.DoesNotContain("private-answer", fields);
         Assert.Null(stats.Outcome);
-        Assert.DoesNotContain("上游请求 ID", stats.LogFields());
+        Assert.DoesNotContain("上游 ID", stats.LogFields());
     }
 
     [Fact]
@@ -541,9 +541,9 @@ public class ResponseStatsTests
             """{"type":"response.failed","response":{"usage":{"input_tokens":0,"output_tokens":0},"error":{"code":"server_error"}}}""",
             0.2);
         var fields = stats.FailureLogFields();
-        Assert.Contains("输入 0 / 输出 0 token", fields);
+        Assert.Contains("输入/输出 0/0 token", fields);
         Assert.DoesNotContain("未读取到用量统计", fields);
-        Assert.DoesNotContain("用量统计不完整", fields);
+        Assert.DoesNotContain("用量不全", fields);
     }
 
     [Fact]
@@ -566,9 +566,9 @@ public class ResponseStatsTests
             });
             Event(stats, payload, 0.2);
             var fields = stats.LogFields();
-            Assert.DoesNotContain("上游错误码", fields);
-            Assert.DoesNotContain("上游错误类型", fields);
-            Assert.DoesNotContain("错误参数", fields);
+            Assert.DoesNotContain("错误码", fields);
+            Assert.DoesNotContain("错误类型", fields);
+            Assert.DoesNotContain("参数", fields);
             Assert.DoesNotContain("private", fields);
         }
     }
@@ -583,7 +583,7 @@ public class ResponseStatsTests
         {
             var stats = new ResponseStats(headers, "/v1/responses", null);
             Event(stats, "{\"type\":\"" + eventType + "\"}", 0.2);
-            Assert.Equal(failed, stats.LogFields().Contains("上游请求 ID upstream-request-123", StringComparison.Ordinal));
+            Assert.Equal(failed, stats.LogFields().Contains("上游 ID upstream-request-123", StringComparison.Ordinal));
         }
 
         headers.Set("x-oneapi-request-id", "sk-private-api-secret");
@@ -629,8 +629,8 @@ public class ResponseStatsTests
         Assert.Equal("claude-流", request.Model);
         Assert.Equal((ulong?)25, request.InputTokens);
         var fields = stats.LogFields();
-        Assert.Contains("模型 claude-流", fields);
-        Assert.Contains("输入 25 / 输出 4 token", fields);
+        Assert.Contains("模型 request-alias -> claude-流 (不一致)", fields);
+        Assert.Contains("输入/输出 25/4 token", fields);
         AssertComplete(stats);
     }
 
@@ -651,7 +651,7 @@ public class ResponseStatsTests
             Assert.Equal((ulong?)5000000000UL, request.InputTokens);
             Assert.Equal((ulong?)40, request.CachedTokens);
             Assert.Equal((ulong?)2, request.CacheCreationTokens);
-            Assert.Contains("输入 5000000000 / 输出 15 token", stats.LogFields());
+            Assert.Contains("输入/输出 5000000000/15 token", stats.LogFields());
             Assert.Equal((ulong?)5000000015UL, stats.ContextTokens(false));
             Assert.Equal((double?)0.2, stats.FirstContentSeconds());
         }
@@ -680,7 +680,7 @@ public class ResponseStatsTests
         Event(stats, """{"type":"response.completed","response":{"usage":{"input_tokens":12,"output_tokens":8}}}""", 0.4);
         var request = stats.CacheRequest("req")!;
         Assert.Equal((ulong?)12, request.InputTokens);
-        Assert.Contains("输入 12 / 输出 8 token", stats.LogFields());
+        Assert.Contains("输入/输出 12/8 token", stats.LogFields());
         Assert.Equal((ulong?)20, stats.ContextTokens(false));
         AssertComplete(stats);
     }

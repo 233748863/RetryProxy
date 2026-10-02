@@ -1,4 +1,5 @@
 using System;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using RetryProxy.Core.Internal;
@@ -8,11 +9,17 @@ namespace RetryProxy.Core.Stats;
 /// <summary>请求正文里与转发有关的元数据。</summary>
 internal readonly struct RequestMetadata
 {
-    public RequestMetadata(string? model, bool stream)
+    public RequestMetadata(string? model, bool stream, string? reasoningEffort = null, string? modelIdentity = null)
     {
         Model = model;
         Stream = stream;
+        ReasoningEffort = reasoningEffort;
+        ModelIdentity = modelIdentity;
     }
+
+    public string? ModelIdentity { get; }
+
+    public string? ReasoningEffort { get; }
 
     public string? Model { get; }
 
@@ -29,7 +36,16 @@ internal readonly struct RequestMetadata
         var root = document.RootElement;
         var model = DiagnosticText.CleanModel(root.Get("model").AsString());
         var stream = root.Get("stream") is { ValueKind: JsonValueKind.True };
-        return new RequestMetadata(model, stream);
+        return new RequestMetadata(model, stream, ReadReasoningEffort(root), DiagnosticText.ModelIdentity(root.Get("model").AsString()));
+    }
+
+    // 显式等级才可对照；thinking 的模式、预算和推理 token 数不能换算成等级。
+    public static string? ReadReasoningEffort(JsonElement value)
+    {
+        var effort = value.Pointer("/output_config/effort")
+            ?? value.Pointer("/reasoning/effort")
+            ?? value.Get("reasoning_effort");
+        return DiagnosticText.CleanDiagnosticIdentifier(effort.AsString());
     }
 }
 
@@ -37,6 +53,12 @@ internal readonly struct RequestMetadata
 internal static class DiagnosticText
 {
     public const int MaxDiagnosticIdentifierBytes = 128;
+
+    // 比较完整原值的摘要，日志仍只展示有界文本；不把长模型名截断后误判为一致。
+    public static string? ModelIdentity(string? value) => value is null ? null
+        : Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value)));
+
+    public static string ComparisonDisplay(string value) => value.Replace('，', ',').Replace('（', '(').Replace('）', ')');
 
     public static string? CleanModel(string? model)
     {

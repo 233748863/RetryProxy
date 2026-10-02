@@ -165,6 +165,85 @@ public class ResponseStatsTests
         }
     }
 
+    [Theory]
+    [InlineData("code", "rate_limit_exceeded")]
+    [InlineData("code", "rate_limit_error")]
+    [InlineData("code", "too_many_requests")]
+    [InlineData("type", "rate_limit_exceeded")]
+    [InlineData("type", "rate_limit_error")]
+    [InlineData("type", "too_many_requests")]
+    public void GenerationGateRecognizesRateLimitsAcrossByteBoundaries(string field, string identifier)
+    {
+        var gate = new GenerationGate();
+        Assert.False(gate.Observe("data: {\"type\":\"response.created\",\"response\":{\"output\":[]}}\n\n"u8));
+        var bytes = Encoding.UTF8.GetBytes($"event: error\ndata: {{\"type\":\"error\",\"error\":{{\"{field}\":\"{identifier}\"}}}}\n\n");
+        for (var index = 0; index < bytes.Length - 1; index++)
+        {
+            Assert.False(gate.Observe(bytes.AsSpan(index, 1)));
+            Assert.False(gate.HasRateLimitError);
+        }
+
+        Assert.True(gate.Observe(bytes.AsSpan(bytes.Length - 1)));
+        Assert.True(gate.HasRateLimitError);
+    }
+
+    [Theory]
+    [InlineData("event: error\ndata: {\"code\":\"rate_limit_exceeded\"}", true)]
+    [InlineData("data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"rate_limit_exceeded\"}}}", true)]
+    [InlineData("data: {\"error\":{\"type\":\"too_many_requests\"}}", true)]
+    [InlineData("data: {\"type\":\"error\",\"error\":{\"code\":\"insufficient_quota\"}}", false)]
+    [InlineData("data: {\"type\":\"error\",\"error\":{\"code\":\"insufficient_quota\",\"type\":\"rate_limit_error\"}}", false)]
+    [InlineData("data: {\"type\":\"error\",\"error\":{\"code\":\"invalid_api_key\",\"type\":\"too_many_requests\"}}", false)]
+    [InlineData("data: {\"type\":\"error\",\"error\":{\"message\":\"rate_limit_exceeded\"}}", false)]
+    [InlineData("data: {\"type\":\"unknown\",\"error\":{\"code\":\"rate_limit_exceeded\"}}", false)]
+    [InlineData("event: response.output_text.delta\ndata: {\"type\":\"error\",\"code\":\"rate_limit_exceeded\"}", false)]
+    [InlineData("data: {\"type\":\"response.failed\",\"response\":{\"output\":[{\"type\":\"function_call\"}],\"error\":{\"code\":\"rate_limit_exceeded\"}}}", false)]
+    [InlineData("data: {\"type\":\"error\",\"error\":\"invalid\",\"code\":\"rate_limit_exceeded\"}", false)]
+    public void GenerationGateOnlyRetriesExplicitRateLimitErrors(string payload, bool retryable)
+    {
+        var gate = new GenerationGate();
+        Assert.True(gate.Observe(Encoding.UTF8.GetBytes(payload + "\n\n")));
+        Assert.Equal(retryable, gate.HasRateLimitError);
+    }
+
+    [Fact]
+    public void GenerationGateUsesFirstNonWaitingEventEvenWhenErrorSharesTheChunk()
+    {
+        const string error = "data: {\"type\":\"error\",\"error\":{\"code\":\"rate_limit_exceeded\"}}\n\n";
+        foreach (var prefix in new[]
+                 {
+                     "data: {\"type\":\"response.output_text.delta\",\"delta\":\"answer\"}\n\n",
+                     "data: {\"type\":\"response.output_item.added\",\"item\":{\"type\":\"function_call\",\"name\":\"run\"}}\n\n",
+                     "data: {\"type\":\"response.reasoning_text.delta\",\"delta\":\"thinking\"}\n\n",
+                     "data: {\"type\":\"unknown.event\"}\n\n",
+                     "data: [DONE]\n\n",
+                     "unknown: opaque\n\n",
+                 })
+        {
+            foreach (var sameChunk in new[] { false, true })
+            {
+                var gate = new GenerationGate();
+                Assert.True(gate.Observe(Encoding.UTF8.GetBytes(prefix + (sameChunk ? error : string.Empty))), prefix);
+                if (!sameChunk)
+                {
+                    Assert.True(gate.Observe(Encoding.UTF8.GetBytes(error)));
+                }
+
+                Assert.False(gate.HasRateLimitError, prefix);
+            }
+        }
+    }
+
+    [Fact]
+    public void GenerationGateRecognizesUnterminatedRateLimitOnFinish()
+    {
+        var gate = new GenerationGate();
+        Assert.False(gate.Observe("data: {\"type\":\"error\",\"code\":\"rate_limit_exceeded\"}"u8));
+        Assert.False(gate.HasRateLimitError);
+        Assert.True(gate.Finish());
+        Assert.True(gate.HasRateLimitError);
+    }
+
     [Fact]
     public void ToolCallStartsCountAsGeneratedContent()
     {

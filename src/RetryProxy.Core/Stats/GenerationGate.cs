@@ -20,6 +20,9 @@ internal sealed class GenerationGate
         _decoder = decoder;
     }
 
+    /// <summary>首个非等待事件是明确的限流错误；调用方只能在尚未转发且仍有重试次数时重试。</summary>
+    public bool HasRateLimitError { get; private set; }
+
     /// <summary>观察一块上游原始数据；返回 true 表示已可以开始向客户端转发。</summary>
     public bool Observe(ReadOnlySpan<byte> chunk)
     {
@@ -47,16 +50,20 @@ internal sealed class GenerationGate
         if (!_ready)
         {
             var any = false;
-            foreach (var decoded in _events.Push(chunk))
+            var events = _events.Push(chunk);
+            var supported = !_events.Unsupported && _events.PendingLineIsSupported();
+            foreach (var decoded in events)
             {
                 if (!IsWaitingEvent(decoded))
                 {
+                    // 只判断首个非等待事件：同一块先有工具调用、后有限流时，仍须原样转发。
+                    HasRateLimitError = supported && IsRateLimitEvent(decoded);
                     any = true;
                     break;
                 }
             }
 
-            _ready = any || _events.Unsupported || !_events.PendingLineIsSupported();
+            _ready = any || !supported;
             if (_ready)
             {
                 _decoder?.Dispose();
@@ -64,6 +71,33 @@ internal sealed class GenerationGate
         }
 
         return _ready;
+    }
+
+    private static bool IsRateLimitEvent(DecodedEvent decoded)
+    {
+        using var document = JsonText.TryParse(TrimAscii(decoded.Data));
+        if (document is null)
+        {
+            return false;
+        }
+
+        var value = document.RootElement;
+        var eventType = value.Get("type").AsString() ?? decoded.Name;
+        if (eventType is not ("error" or "response.failed" or "" or "message")
+            || (decoded.Name.Length > 0 && decoded.Name != "message" && decoded.Name != eventType)
+            || ContentRules.HasGeneratedContent(value, eventType))
+        {
+            return false;
+        }
+
+        // 兼容 Responses 的 response.error、独立 error 事件及 Chat Completions 的顶层 error。
+        var envelope = eventType == "response.failed" ? value.Get("response") : value;
+        var nestedError = envelope.Get("error");
+        var error = nestedError.IsObject() ? nestedError
+            : eventType == "error" && nestedError.IsNullOrMissing() ? envelope : null;
+        // 明确错误码优先于通用类型；例如 insufficient_quota + rate_limit_error 仍属于额度不足。
+        var identifier = error.Get("code").AsString() ?? error.Get("type").AsString();
+        return ResponseStats.IsRateLimitIdentifier(identifier);
     }
 
     private static bool EmptyText(JsonElement? value)

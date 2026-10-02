@@ -113,6 +113,8 @@ public class ChannelSwitchTests
         Assert.All(seen, injected => Assert.Equal(("Bearer sk-real-a", string.Empty, injectedBody), injected));
         var logs = await fixture.CompletedLogs();
         Assert.Contains("，Any · 主号，模型改写 gpt-4o → gpt-5.2", logs);
+        Assert.Contains("模型对照 发出 gpt-5.2 → 返回 未报告", logs);
+        Assert.DoesNotContain("模型对照 发出 gpt-4o", logs);
         Assert.DoesNotContain("客户端凭据", logs);
         var health = await client.GetStringAsync($"{fixture.Address}/_retry/health");
         foreach (var secret in new[] { "sk-real-a", LocalToken, "sk-client", "sk-old-api-key", "sk-legacy-key" })

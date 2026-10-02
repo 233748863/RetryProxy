@@ -1,3 +1,4 @@
+using System;
 using RetryProxy.Core.Workspace;
 using RetryProxy.Core.Logging;
 using System.Windows;
@@ -8,7 +9,7 @@ namespace RetryProxy.View.Controls;
 
 /// <summary>
 /// 单行日志：时间戳最弱，级别标签按严重度着色，标签组用强调色，
-/// 正文里的 HTTP 状态码单独着色，其余正文按级别决定深浅。颜色全部走主题资源。
+/// 正文里的 HTTP 状态码与对照不一致字段单独着色，其余正文按级别决定深浅。颜色全部走主题资源。
 /// </summary>
 public class LogLineTextBlock : TextBlock
 {
@@ -68,6 +69,7 @@ public class LogLineTextBlock : TextBlock
         }
 
         var bodyKey = BodyBrushKey(parts.Level);
+        var mismatches = LogLine.FindComparisonMismatchRanges(parts.Body);
         var status = LogLine.FindStatusCode(parts.Body);
         if (status is { } found && LogLine.StatusColor(found.Status) is { } klass)
         {
@@ -77,13 +79,34 @@ public class LogLineTextBlock : TextBlock
                 StatusColorClass.Danger => "SystemFillColorCriticalBrush",
                 _ => LevelBrushKey(parts.Level),
             };
-            Append(parts.Body.Substring(0, found.Start), bodyKey);
-            Append(parts.Body.Substring(found.Start, found.End - found.Start), statusKey);
-            Append(parts.Body.Substring(found.End), bodyKey);
+            AppendBodySegment(0, found.Start, bodyKey);
+            AppendBodySegment(found.Start, found.End, statusKey);
+            AppendBodySegment(found.End, parts.Body.Length, bodyKey);
         }
         else
         {
-            Append(parts.Body, bodyKey);
+            AppendBodySegment(0, parts.Body.Length, bodyKey);
+        }
+
+        void AppendBodySegment(int start, int end, string brushKey)
+        {
+            var cursor = start;
+            foreach (var mismatch in mismatches)
+            {
+                var highlightStart = Math.Max(cursor, mismatch.Start);
+                var highlightEnd = Math.Min(end, mismatch.End);
+                if (highlightStart >= highlightEnd)
+                {
+                    continue;
+                }
+
+                Append(parts.Body.Substring(cursor, highlightStart - cursor), brushKey);
+                Append(parts.Body.Substring(highlightStart, highlightEnd - highlightStart),
+                    "SystemFillColorCautionBrush", emphasis: true);
+                cursor = highlightEnd;
+            }
+
+            Append(parts.Body.Substring(cursor, end - cursor), brushKey);
         }
     }
 

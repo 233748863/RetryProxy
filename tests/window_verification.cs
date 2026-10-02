@@ -177,7 +177,18 @@ public static class RetryProxyTrayVerification {
             ClosePrivateDesktop();
             throw new Win32Exception(error);
         }
-        try { return Process.GetProcessById((int)information.ProcessId); }
+        try {
+            var process = Process.GetProcessById((int)information.ProcessId);
+            try {
+                // 在释放创建句柄前固定托管句柄，后续 Kill/WaitForExit 始终对应本次启动的进程。
+                // 例如验收连续重启时，不能只依赖可能被系统复用的进程编号。
+                var handle = process.Handle;
+                return process;
+            } catch {
+                process.Dispose();
+                throw;
+            }
+        }
         finally {
             CloseHandle(information.Thread);
             CloseHandle(information.Process);

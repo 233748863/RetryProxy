@@ -231,6 +231,40 @@ public static class LogLine
         }
     }
 
+    /// <summary>定位中文逗号分隔的模型/思考等级不一致字段；End 为不包含的结束字符位置。</summary>
+    public static IReadOnlyList<(int Start, int End)> FindComparisonMismatchRanges(string body)
+    {
+        var ranges = new List<(int Start, int End)>();
+        var start = 0;
+        while (start < body.Length)
+        {
+            var separator = body.IndexOf('，', start);
+            var end = separator < 0 ? body.Length : separator;
+            var fieldStart = start;
+            var fieldEnd = end;
+            while (fieldStart < fieldEnd && char.IsWhiteSpace(body[fieldStart]))
+            {
+                fieldStart++;
+            }
+            while (fieldEnd > fieldStart && char.IsWhiteSpace(body[fieldEnd - 1]))
+            {
+                fieldEnd--;
+            }
+
+            var field = body.AsSpan(fieldStart, fieldEnd - fieldStart);
+            if ((field.StartsWith("模型对照 ", StringComparison.Ordinal)
+                    || field.StartsWith("思考等级 ", StringComparison.Ordinal))
+                && field.EndsWith("（不一致）", StringComparison.Ordinal))
+            {
+                ranges.Add((fieldStart, fieldEnd));
+            }
+
+            start = end + 1;
+        }
+
+        return ranges;
+    }
+
     public static StatusColorClass? StatusColor(int status) => status switch
     {
         >= 200 and <= 399 => StatusColorClass.Level,

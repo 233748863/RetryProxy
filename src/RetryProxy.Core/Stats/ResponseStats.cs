@@ -51,6 +51,12 @@ internal sealed class ResponseStats
 
     private BodyFormat _format;
     private string? _model;
+    private readonly string? _requestModel;
+    private readonly string? _requestModelIdentity;
+    private string? _responseModelIdentity;
+    private readonly string? _requestEffort;
+    private string? _responseModel;
+    private string? _responseEffort;
     private readonly TokenUsage _usage = new();
     private bool _isApiResponse;
     private readonly CacheInputAccounting? _cacheInputAccounting;
@@ -72,7 +78,7 @@ internal sealed class ResponseStats
     private readonly ContentDecoder? _decoder;
     private readonly string? _contentEncoding;
 
-    public ResponseStats(HeaderList headers, string path, string? model)
+    public ResponseStats(HeaderList headers, string path, string? model, string? reasoningEffort = null, string? modelIdentity = null)
     {
         var contentType = (headers.Get("content-type") ?? string.Empty).Split(';')[0].Trim().ToLowerInvariant();
         var encoding = headers.Get("content-encoding");
@@ -88,7 +94,10 @@ internal sealed class ResponseStats
             || trimmedPath.EndsWith("/messages", StringComparison.Ordinal)
             || trimmedPath.EndsWith("/responses", StringComparison.Ordinal)
             || trimmedPath.EndsWith("/chat/completions", StringComparison.Ordinal);
-        _model = model;
+        _model = DiagnosticText.CleanModel(model);
+        _requestModel = _model;
+        _requestModelIdentity = modelIdentity ?? DiagnosticText.ModelIdentity(model);
+        _requestEffort = DiagnosticText.CleanDiagnosticIdentifier(reasoningEffort);
         _cacheInputAccounting = CacheInputAccountingRules.ForPath(path);
         foreach (var name in new[] { "x-request-id", "request-id", "x-oneapi-request-id" })
         {
@@ -419,6 +428,9 @@ internal sealed class ResponseStats
 
     public string FailureLogFields() => FormatLogFields(true);
 
+    internal static bool IsRateLimitIdentifier(string? value) =>
+        value is "rate_limit_exceeded" or "rate_limit_error" or "too_many_requests";
+
     public string? FailureSummary()
     {
         foreach (var (label, value) in _errorFields)
@@ -429,9 +441,7 @@ internal sealed class ResponseStats
                 case "上游错误类型":
                     switch (value)
                     {
-                        case "rate_limit_exceeded":
-                        case "rate_limit_error":
-                        case "too_many_requests":
+                        case var identifier when IsRateLimitIdentifier(identifier):
                             return "上游请求超限";
                         case "insufficient_quota":
                             return "上游可用额度不足";
@@ -523,7 +533,13 @@ internal sealed class ResponseStats
 
         if (_model is not null)
         {
-            fields.Append("，模型 ").Append(_model);
+            fields.Append("，模型 ").Append(DiagnosticText.ComparisonDisplay(_model));
+        }
+
+        if (_isApiResponse)
+        {
+            AppendComparison(fields, "模型对照", _requestModel, _responseModel, _requestModelIdentity != _responseModelIdentity);
+            AppendComparison(fields, "思考等级", _requestEffort, _responseEffort);
         }
 
         // 失败时两项用量都没读到就整段不写，只读到一项才提示不完整。
@@ -561,6 +577,17 @@ internal sealed class ResponseStats
         }
 
         return fields.ToString();
+    }
+
+    private static void AppendComparison(StringBuilder fields, string label, string? sent, string? reported, bool? mismatch = null)
+    {
+        // 避免字段分隔符和差异标记被模型名伪造；比较仍使用原值。
+        fields.Append('，').Append(label).Append(" 发出 ").Append(DiagnosticText.ComparisonDisplay(sent ?? "未指定"))
+            .Append(" → 返回 ").Append(DiagnosticText.ComparisonDisplay(reported ?? "未报告"));
+        if (sent is not null && reported is not null && (mismatch ?? !string.Equals(sent, reported, StringComparison.Ordinal)))
+        {
+            fields.Append("（不一致）");
+        }
     }
 
     private static string Count(ulong? value) => value?.ToString(CultureInfo.InvariantCulture) ?? "未获取";
@@ -638,7 +665,14 @@ internal sealed class ResponseStats
         if (DiagnosticText.CleanModel(envelope.Get("model").AsString()) is { } model)
         {
             _model = model;
+            _responseModel = model;
+            _responseModelIdentity = DiagnosticText.ModelIdentity(envelope.Get("model").AsString());
             _isApiResponse = true;
+        }
+
+        if (RequestMetadata.ReadReasoningEffort(envelope) is { } effort)
+        {
+            _responseEffort = effort;
         }
 
         var usage = envelope.Get("usage");

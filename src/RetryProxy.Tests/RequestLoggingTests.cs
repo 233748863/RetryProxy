@@ -191,8 +191,8 @@ public class RequestLoggingTests
     [Fact]
     public async Task NonStreamingCompletionLogsUsageWithoutChangingTraffic()
     {
-        const string responseBody = "{\"model\":\"gpt-test\",\"output\":[{\"content\":[{\"text\":\"private-output\"}]}],\"usage\":{\"input_tokens\":4096,\"output_tokens\":32,\"input_tokens_details\":{\"cached_tokens\":512},\"output_tokens_details\":{\"reasoning_tokens\":8}}}";
-        const string requestBody = "{\"model\":\"request-alias\",\"input\":\"private-prompt\",\"stream\":false}";
+        const string responseBody = "{\"model\":\"gpt-test\",\"reasoning\":{\"effort\":\"high\"},\"output\":[{\"content\":[{\"text\":\"private-output\"}]}],\"usage\":{\"input_tokens\":4096,\"output_tokens\":32,\"input_tokens_details\":{\"cached_tokens\":512},\"output_tokens_details\":{\"reasoning_tokens\":8}}}";
+        const string requestBody = "{\"model\":\"request-alias\",\"reasoning\":{\"effort\":\"max\"},\"input\":\"private-prompt\",\"stream\":false}";
         string? seenTarget = null;
         string? seenAuthorization = null;
         string? seenEncoding = null;
@@ -224,6 +224,8 @@ public class RequestLoggingTests
         Assert.True(logs.Count == 1, string.Join("\n", logs));
         var line = logs[0];
         Assert.Contains("] POST /v1/responses -> 上游 HTTP 200", line);
+        Assert.Contains("模型对照 发出 request-alias → 返回 gpt-test（不一致）", line);
+        Assert.Contains("思考等级 发出 max → 返回 high（不一致）", line);
         Assert.DoesNotContain("第 1/", line);
         foreach (var expected in new[] { "HTTP 200", "模型 gpt-test", "输入 4096", "输出 32", "命中 512", "推理 8", "首字", "耗时" })
         {
@@ -411,7 +413,7 @@ public class RequestLoggingTests
     }
 
     [Fact]
-    public async Task RateLimitAfterHttp200IsExplainedWithoutRetryingOrChangingTheBody()
+    public async Task RateLimitAfterHttp200WithoutRetryBudgetPreservesTheBodyAndDiagnostics()
     {
         const string payload =
             "data: {\"type\":\"response.created\",\"response\":{\"model\":\"gpt-6-astra\",\"usage\":null}}\n\n"
@@ -421,7 +423,7 @@ public class RequestLoggingTests
         {
             Interlocked.Increment(ref requests);
             return Upstream.Bytes(context, 200, Encoding.UTF8.GetBytes(payload), "text/event-stream", new Dictionary<string, string> { ["x-oneapi-request-id"] = "rate-limit-request-123" });
-        }, LoggingConfig(5.0, 2));
+        }, LoggingConfig(5.0, 0));
         using var client = TestClient.Create();
         var response = await TestClient.Send(client, HttpMethod.Post, $"{fixture.Address}/v1/responses?key=private-query", "{\"model\":\"gpt-6-astra\",\"stream\":true,\"input\":\"private-prompt\"}");
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
@@ -609,7 +611,9 @@ public class RequestLoggingTests
 
         // 25 次同样的 500：第 1 次完整一行，第 20 次一条进度，最后一行成功并写明重试次数。
         Assert.True(logs.Count == 3, string.Join("\n", logs));
-        Assert.True(logs[0].Contains("第 1 次 POST /v1/responses -> 上游 HTTP 500（上游服务内部错误），模型 gpt-6-astra，0.0 秒后重试"), logs[0]);
+        Assert.Contains("第 1 次 POST /v1/responses -> 上游 HTTP 500（上游服务内部错误）", logs[0]);
+        Assert.Contains("模型对照 发出 gpt-6-astra → 返回 未报告", logs[0]);
+        Assert.Contains("，0.0 秒后重试", logs[0]);
         Assert.True(logs[1].Contains("已重试 20 次，仍是上游 HTTP 500（上游服务内部错误）"), logs[1]);
         Assert.True(logs[2].Contains("POST /v1/responses -> 上游 HTTP 200（重试 25 次后成功）"), logs[2]);
         Assert.Equal(25UL, fixture.Metrics.Snapshot().RetryCount);

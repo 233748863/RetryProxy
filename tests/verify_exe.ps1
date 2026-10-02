@@ -113,13 +113,18 @@ $process = $null
 $client = $null
 $streamResponse = $null
 $mainWindow = [IntPtr]::Zero
+$verificationPassed = $false
+$processChecks = @()
 New-Item -ItemType Directory -Path $runtimeDir | Out-Null
 
 function Start-App {
     if ($VerifyTray -and -not $UseCurrentDesktop) {
-        return [RetryProxyTrayVerification]::StartPrivateProcess($runtimeExe, $runtimeDir)
+        $started = [RetryProxyTrayVerification]::StartPrivateProcess($runtimeExe, $runtimeDir)
+    } else {
+        $started = Start-Process -FilePath $runtimeExe -WorkingDirectory $runtimeDir -PassThru
     }
-    return Start-Process -FilePath $runtimeExe -WorkingDirectory $runtimeDir -PassThru
+    $null = $started.Handle
+    return $started
 }
 
 try {
@@ -455,8 +460,18 @@ try {
         $dailyBeforeRestart = Invoke-RestMethod "http://127.0.0.1:$proxyPort/_retry/health" -TimeoutSec 2
     }
     foreach ($dailyRestart in 1..2) {
-        if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force }
-        if (-not $process.WaitForExit(5000)) { throw 'Test application did not stop for restart verification' }
+        # 保留强制终止后的统计恢复语义；停止与等待使用同一个已固定句柄的对象。
+        $check = [ordered]@{ restart=$dailyRestart; pid=$process.Id; startedAt=$process.StartTime.ToString('o'); forced=(-not $process.HasExited); exited=$false; exitCode=$null }
+        $processChecks += $check
+        try {
+            if ($check.forced) { $process.Kill() }
+            $check.exited = $process.WaitForExit(5000)
+            if ($check.exited) { $check.exitCode = $process.ExitCode }
+        } finally {
+            $processChecks | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $runtimeDir 'restart-process-checks.json') -Encoding UTF8
+            Write-Host ($check | ConvertTo-Json -Compress)
+        }
+        if (-not $check.exited) { throw 'Test application did not stop for restart verification' }
         $process.Dispose()
         $process = $null
         $mainWindow = [IntPtr]::Zero
@@ -498,9 +513,11 @@ try {
     Write-Host 'Restart and daily statistics checks passed.'
     if (Test-Path (Join-Path $runtimeDir "config.json")) { throw "EXE created config.json" }
     if (Test-Path (Join-Path $runtimeDir "User\config.json")) { throw "EXE created User\config.json while the configuration was injected" }
+    $verificationPassed = $true
     [pscustomobject]@{ Result = $result.result; Retries = $final.metrics.retry_count; GenerationVerified = $true; ConfigFile = $false; TrayVerified = $VerifyTray.IsPresent; NaturalTrayEvents = $UseCurrentDesktop.IsPresent; WindowRecoveryVerified = $VerifyTray.IsPresent; CachePageVerified = $VerifyTray.IsPresent; DailyStatisticsVerified = $true; RestartCount = 2 }
 }
 catch {
+    Write-Host "Verification failed; evidence retained at $runtimeDir"
     $logPath = Join-Path $runtimeDir 'logs\retry-proxy.log'
     if (Test-Path -LiteralPath $logPath) { Get-Content -LiteralPath $logPath -Encoding UTF8 -Tail 30 | Write-Host }
     throw
@@ -514,8 +531,15 @@ finally {
     else { Remove-Item Env:CLAUDE_CONFIG_DIR -ErrorAction SilentlyContinue }
     if ($null -ne $oldCodexHome) { $env:CODEX_HOME = $oldCodexHome }
     else { Remove-Item Env:CODEX_HOME -ErrorAction SilentlyContinue }
-    if ($null -ne $process -and -not $process.HasExited) { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue }
-    if ($null -ne $process) { $process.WaitForExit(5000) | Out-Null; $process.Dispose() }
+    if ($null -ne $process) {
+        try {
+            if (-not $process.HasExited) { $process.Kill() }
+            if (-not $process.WaitForExit(5000)) {
+                $verificationPassed = $false
+                throw "Test process $($process.Id) did not exit during cleanup; evidence retained at $runtimeDir"
+            }
+        } finally { $process.Dispose() }
+    }
     if ($VerifyTray) { [RetryProxyTrayVerification]::ClosePrivateDesktop() }
     if ($null -ne $job) { Stop-Job $job -ErrorAction SilentlyContinue; Remove-Job $job -Force -ErrorAction SilentlyContinue }
     $resolvedRuntime = (Resolve-Path -LiteralPath $runtimeDir).ProviderPath.TrimEnd('\')
@@ -524,5 +548,5 @@ finally {
         ((Get-Item -LiteralPath $resolvedRuntime).Attributes -band [IO.FileAttributes]::ReparsePoint)) {
         throw "Runtime cleanup path escaped the temporary directory"
     }
-    Remove-Item -LiteralPath $resolvedRuntime -Recurse -Force -ErrorAction SilentlyContinue
+    if ($verificationPassed) { Remove-Item -LiteralPath $resolvedRuntime -Recurse -Force -ErrorAction SilentlyContinue }
 }

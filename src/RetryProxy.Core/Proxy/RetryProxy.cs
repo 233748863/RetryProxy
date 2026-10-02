@@ -500,6 +500,10 @@ public sealed class RetryProxy
         /// <summary>发往上游的模型（改写后），统计与日志用。</summary>
         public string? Model { get; init; }
 
+        public string? ReasoningEffort { get; init; }
+
+        public string? ModelIdentity { get; init; }
+
         /// <summary>请求行附加的"供应商 · Key"与模型改写，例：<c>，Any · 主号，模型改写 claude-opus-5 → glm-5</c>；旧用法与测试为空。</summary>
         public string LogFields { get; init; } = string.Empty;
     }
@@ -1037,7 +1041,7 @@ public sealed class RetryProxy
                 }
 
                 var first = plan is null;
-                plan = BuildAttempt(ctx, current, version, baseHeaders, body, metadata.Model, streaming, rawQuery);
+                plan = BuildAttempt(ctx, current, version, baseHeaders, body, metadata.Model, metadata.ModelIdentity, metadata.ReasoningEffort, streaming, rawQuery);
                 if (first)
                 {
                     ctx.Metrics.CacheKey(requestId, plan.CacheRequest.State);
@@ -1112,7 +1116,7 @@ public sealed class RetryProxy
                             continue;
                         }
 
-                        var stats = new ResponseStats(responseHeaders, safePath, plan.Model).WithAnswerCapture();
+                        var stats = new ResponseStats(responseHeaders, safePath, plan.Model, plan.ReasoningEffort, plan.ModelIdentity).WithAnswerCapture();
                         if (!buffered.TooLarge)
                         {
                             stats.Observe(buffered.Body.Span, ctx.StartedAt.ElapsedSeconds);
@@ -1171,7 +1175,7 @@ public sealed class RetryProxy
                                 reader.Dispose();
                                 // 与一键准备一样解析暂存的错误正文：状态后写上游错误码对应的具体原因，并附上错误码、上游请求 ID 等诊断字段。
                                 // 例：上游 HTTP 500（当前需求量高，模型负载已达上限），上游错误码 get_channel_failed，…
-                                var stats = new ResponseStats(responseHeaders, safePath, plan.Model);
+                                var stats = new ResponseStats(responseHeaders, safePath, plan.Model, plan.ReasoningEffort, plan.ModelIdentity);
                                 stats.Observe(buffered.Body.Span, ctx.StartedAt.ElapsedSeconds);
                                 stats.Finish(ctx.StartedAt.ElapsedSeconds);
                                 var summary = stats.FailureSummary();
@@ -1205,7 +1209,7 @@ public sealed class RetryProxy
                     try
                     {
                         return await PrepareStreamResponseAsync(
-                            ctx, attempt, reader, expectedBodyBytes, responseHeaders, attemptNumber, status, keepAliveTemplate, true).ConfigureAwait(false);
+                            ctx, attempt, reader, expectedBodyBytes, responseHeaders, attemptNumber, status, keepAliveTemplate, logCompletion: true, canRetry: canRetry).ConfigureAwait(false);
                     }
                     catch (Exception failure) when (failure is UpstreamException or NoGenerationException)
                     {
@@ -1240,7 +1244,7 @@ public sealed class RetryProxy
     /// 客户端自带的认证头全部替换；目标地址按客户端的地址规则拼接。
     /// </summary>
     private AttemptPlan BuildAttempt(RequestContext ctx, ChannelSnapshot snapshot, long version, HeaderList baseHeaders, ReadOnlyMemory<byte> body,
-        string? requestModel, bool streaming, string rawQuery)
+        string? requestModel, string? modelIdentity, string? reasoningEffort, bool streaming, string rawQuery)
     {
         // 普通通道始终有占位口令；是否匹配入站凭据不影响注入。仅未关联管理配置的基础转发实例保留原始凭据。
         var inject = snapshot.LocalToken.Length > 0 || snapshot.HasKey;
@@ -1266,7 +1270,8 @@ public sealed class RetryProxy
                 {
                     body = result.Body;
                     model = DiagnosticText.CleanModel(result.To);
-                    rewrite = $"，模型改写 {DiagnosticText.CleanModel(from)} → {model}";
+                    modelIdentity = DiagnosticText.ModelIdentity(result.To);
+                    rewrite = $"，模型改写 {DiagnosticText.ComparisonDisplay(DiagnosticText.CleanModel(from) ?? string.Empty)} → {DiagnosticText.ComparisonDisplay(model ?? string.Empty)}";
                 }
             }
         }
@@ -1316,6 +1321,8 @@ public sealed class RetryProxy
             TargetUrl = targetUrl,
             UsingSystemProxy = ProxyResolver.Resolve(parsedTarget) is not null,
             Model = model,
+            ReasoningEffort = reasoningEffort,
+            ModelIdentity = modelIdentity,
             LogFields = (label.Length > 0 ? $"，{label}" : string.Empty) + rewrite,
         };
     }
@@ -1632,13 +1639,14 @@ public sealed class RetryProxy
         ulong attemptNumber,
         int status,
         KeepAliveTemplate? keepAliveTemplate,
-        bool logCompletion)
+        bool logCompletion,
+        bool canRetry)
     {
         var requestId = ctx.RequestId;
         var plan = attempt.Plan;
         var usingSystemProxy = plan.UsingSystemProxy;
         var generationTimeoutSeconds = plan.Snapshot.GenerationTimeoutSeconds;
-        var stats = new ResponseStats(responseHeaders, ctx.SafePath, plan.Model).WithCacheKeyState(plan.CacheRequest.State);
+        var stats = new ResponseStats(responseHeaders, ctx.SafePath, plan.Model, plan.ReasoningEffort, plan.ModelIdentity).WithCacheKeyState(plan.CacheRequest.State);
         var generationGate = status is >= 200 and < 300 && stats.IsApiEventStream
             ? new GenerationGate(ContentDecoder.Create(responseHeaders.Get("content-encoding")))
             : null;
@@ -1669,7 +1677,11 @@ public sealed class RetryProxy
             {
                 if (generationGate.Finish())
                 {
-                    ctx.Logger.Warn($"[{requestId}] 等待生成到期时存在未识别的消息，原样转发已收内容，不再重试");
+                    if (!generationGate.HasRateLimitError)
+                    {
+                        ctx.Logger.Warn($"[{requestId}] 等待生成到期时存在未识别的消息，原样转发已收内容，不再重试");
+                    }
+
                     break;
                 }
 
@@ -1716,6 +1728,14 @@ public sealed class RetryProxy
 
             firstChunk = chunk;
             break;
+        }
+
+        // 此处尚未创建下游响应；例如 response.created 后立即限流，可丢弃本次前缀并按原策略重试。
+        // 最后一次仍原样交付错误；开闸后的正文只走 ForwardBody，不能重新进入重试循环。
+        if (canRetry && generationGate is { HasRateLimitError: true })
+        {
+            stats.Finish(ctx.StartedAt.ElapsedSeconds);
+            throw new NoGenerationException("上游请求超限，尚未向客户端转发响应", stats.FailureLogFields());
         }
 
         ctx.Metrics.RequestPhase(requestId, RequestPhase.ReceivingResponse);

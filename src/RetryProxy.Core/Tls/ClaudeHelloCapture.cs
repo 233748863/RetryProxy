@@ -40,6 +40,7 @@ public static class ClaudeHelloCapture
         using var timer = new CancellationTokenSource(timeout);
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timer.Token);
         var listeners = StartListeners();
+        var pending = new List<Task>();
         Process? child = null;
         ProcessJob? job = null;
         string? directory = null;
@@ -62,10 +63,13 @@ public static class ClaudeHelloCapture
             }
 
             var exited = child.WaitForExitAsync(linked.Token);
+            pending.Add(exited);
             var accepts = new List<Task<byte[]>>();
             foreach (var listener in listeners)
             {
-                accepts.Add(ReadHelloAsync(listener, linked.Token));
+                var accept = ReadHelloAsync(listener, linked.Token);
+                accepts.Add(accept);
+                pending.Add(accept);
             }
 
             var hello = await Task.WhenAny(Task.WhenAny(accepts), exited).ConfigureAwait(false);
@@ -90,10 +94,7 @@ public static class ClaudeHelloCapture
         }
         finally
         {
-            foreach (var listener in listeners)
-            {
-                listener.Stop();
-            }
+            await StopCaptureAsync(listeners, linked, pending).ConfigureAwait(false);
 
             // 与 CliSession.Dispose 一致：先终止整组并等 5 秒，再兜底结束进程树。
             if (child is not null)
@@ -108,6 +109,28 @@ public static class ClaudeHelloCapture
             {
                 CliSession.TryDeleteDirectory(directory);
             }
+        }
+    }
+
+    /// <summary>
+    /// 先取消抓取，再关闭监听并等待全部任务结束，包括未胜出的读取和进程退出等待。
+    /// 例：IPv4 已读到首包，IPv6 仍在等连接；只关端口会让后者重试已停止的监听器。
+    /// </summary>
+    internal static async Task StopCaptureAsync(IReadOnlyList<TcpListener> listeners, CancellationTokenSource cancellation, IReadOnlyList<Task> pending)
+    {
+        cancellation.Cancel();
+        foreach (var listener in listeners)
+        {
+            listener.Stop();
+        }
+
+        try
+        {
+            await Task.WhenAll(pending).ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            // 主流程已决定首包或失败原因；这里只观察所有收尾异常，避免覆盖原结果或遗留未观察异常。
         }
     }
 
@@ -243,10 +266,11 @@ public static class ClaudeHelloCapture
     /// 接受连接并读取第一个 TLS 记录；不是握手记录（首字节不是 0x16）或中途断开的连接直接丢弃，继续等下一个。
     /// 例：先来一个 <c>GET / HTTP/1.1</c> 明文连接 → 丢弃；再来 <c>16 03 01 05 d3 …</c> → 读满 5+0x05d3 字节返回。
     /// </summary>
-    private static async Task<byte[]> ReadHelloAsync(TcpListener listener, CancellationToken cancellationToken)
+    internal static async Task<byte[]> ReadHelloAsync(TcpListener listener, CancellationToken cancellationToken, Action<int>? bytesReadForTest = null)
     {
         while (true)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             TcpClient client;
             try
             {
@@ -263,6 +287,8 @@ public static class ClaudeHelloCapture
                 var header = new byte[5];
                 try
                 {
+                    // 测试按已读取字节数确认阶段：0 表示已接入连接，5 表示记录头读完。
+                    bytesReadForTest?.Invoke(0);
                     await stream.ReadExactlyAsync(header, cancellationToken).ConfigureAwait(false);
                     var length = (header[3] << 8) | header[4];
                     if (header[0] != 0x16 || 5 + length > MaxRecordBytes)
@@ -272,6 +298,7 @@ public static class ClaudeHelloCapture
 
                     var record = new byte[5 + length];
                     header.CopyTo(record, 0);
+                    bytesReadForTest?.Invoke(header.Length);
                     await stream.ReadExactlyAsync(record.AsMemory(5), cancellationToken).ConfigureAwait(false);
                     return record;
                 }

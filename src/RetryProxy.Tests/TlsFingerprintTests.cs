@@ -226,6 +226,17 @@ public class TlsFingerprintTests
         Assert.Equal("无法启动 Claude Code CLI：NotFound", notFound.Message);
     }
 
+    [Fact]
+    public async Task CapturePreservesCallerCancellation()
+    {
+        var sleeps = new CliCommand("powershell.exe");
+        sleeps.Arguments.AddRange(new[] { "-NoProfile", "-Command", "Start-Sleep -Seconds 30; #" });
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            ClaudeHelloCapture.CaptureAsync(sleeps, TimeSpan.FromSeconds(20), cancellation.Token));
+    }
+
     // ------------------------------------------------------------------ 端到端
 
     [Fact]

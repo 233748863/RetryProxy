@@ -296,8 +296,8 @@ try {
     if ($WithChannels) {
         $longProvider = 'fixture-' + ('供应商长名称校验' * 8)
         $config.providers = @(
-            @{ id = 'provider-codex'; client_type = 'codex'; name = 'fixture'; base_url = "http://127.0.0.1:$upstreamPort"; balance_query = @{ mode = 'none' }; keys = @(@{ id = 'key-codex'; name = '主号'; api_key = 'sk-prepare-fixture' }) },
-            @{ id = 'provider-claude'; client_type = 'claude'; name = $longProvider; base_url = "http://127.0.0.1:$upstreamPort"; balance_query = @{ mode = 'none' }; keys = @(@{ id = 'key-claude'; name = '主号'; api_key = 'sk-prepare-fixture' }) }
+            @{ id = 'provider-codex'; client_type = 'codex'; name = 'fixture'; base_url = "http://127.0.0.1:$upstreamPort"; keys = @(@{ id = 'key-codex'; name = '主号'; api_key = 'sk-prepare-fixture' }) },
+            @{ id = 'provider-claude'; client_type = 'claude'; name = $longProvider; base_url = "http://127.0.0.1:$upstreamPort"; keys = @(@{ id = 'key-claude'; name = '主号'; api_key = 'sk-prepare-fixture' }) }
         )
         $config.routes[0].current_provider_id = 'provider-codex'
         $config.routes[0].current_key_id = 'key-codex'

@@ -276,11 +276,11 @@ try {
     $proxy = @{
         schema_version = 7; selected_route_id = 'fixture-codex'
         providers = @(
-            @{ id = 'a'; name = '准备供应商 A'; client_type = 'codex'; base_url = "http://127.0.0.1:$upstreamPort"; models = @{ model = 'preparation-test-model' }; balance_query = @{ mode = 'none' }; keys = @(
+            @{ id = 'a'; name = '准备供应商 A'; client_type = 'codex'; base_url = "http://127.0.0.1:$upstreamPort"; models = @{ model = 'preparation-test-model' }; keys = @(
                 @{ id = 'a1'; name = 'PLUS'; api_key = $secrets.a1 },
                 @{ id = 'a2'; name = 'PRO'; api_key = $secrets.a2 },
                 @{ id = 'a3'; name = 'PRO+'; api_key = $secrets.a3 }) },
-            @{ id = 'b'; name = '当前供应商 B'; client_type = 'codex'; base_url = "http://127.0.0.1:$upstreamPort"; models = @{ model = 'preparation-test-model' }; balance_query = @{ mode = 'none' }; keys = @(
+            @{ id = 'b'; name = '当前供应商 B'; client_type = 'codex'; base_url = "http://127.0.0.1:$upstreamPort"; models = @{ model = 'preparation-test-model' }; keys = @(
                 @{ id = 'b1'; name = '当前 Key'; api_key = $secrets.b1 }) }
         )
         routes = @(

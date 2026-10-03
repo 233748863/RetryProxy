@@ -566,7 +566,6 @@ public class ProxyConfigTests
             Assert.Equal(("Any", "https://anyrouter.top"), (provider.Name, provider.BaseUrl));
             Assert.Empty(provider.Keys);
             Assert.Equal(ClaudeAuthMode.Bearer, provider.AuthMode);
-            Assert.Equal(BalanceQueryMode.Auto, provider.BalanceQuery.Mode);
         });
         Assert.NotEqual(config.Providers[0].Id, config.Providers[1].Id);
         foreach (var route in config.Routes)
@@ -643,7 +642,6 @@ public class ProxyConfigTests
             Haiku = new RoleModel { Model = "claude-haiku-4-5", Context1M = false },
             Fable = new RoleModel { Model = "claude-fable-5", Context1M = true },
         };
-        claude.BalanceQuery = new BalanceQuery { Mode = BalanceQueryMode.Auto, Detected = BalanceQueryMode.OpenAiBilling };
         claude.Keys.Add(new ProviderKey { Id = "k1", Name = "主号", ApiKey = "sk-main-fixture" });
         claude.Keys.Add(new ProviderKey
         {
@@ -652,7 +650,6 @@ public class ProxyConfigTests
         });
         var codex = config.Providers.Single(provider => provider.ClientType == ClientType.Codex);
         codex.Models = new ProviderModels { Model = "gpt-5.5", ContextWindow = 400000, AutoCompactTokenLimit = 350000 };
-        codex.BalanceQuery = new BalanceQuery { Mode = BalanceQueryMode.None };
         config.RouteFor(ClientType.Claude)!.CurrentKeyId = "k2";
         config.ClientTakeover[ClientType.Claude] = new ClientTakeoverState
         {
@@ -674,7 +671,6 @@ public class ProxyConfigTests
         var claudeModels = providers[1].GetProperty("models").EnumerateObject().Select(property => property.Name);
         Assert.Equal(new[] { "model", "context_1m", "opus", "sonnet", "haiku", "fable" }, claudeModels);
         Assert.Equal("x_api_key", providers[1].GetProperty("auth_mode").GetString());
-        Assert.Equal("openai_billing", providers[1].GetProperty("balance_query").GetProperty("detected").GetString());
         Assert.Equal(JsonValueKind.Null, providers[1].GetProperty("keys")[0].GetProperty("model_override").ValueKind);
         Assert.True(saved.GetProperty("client_takeover").GetProperty("claude").GetProperty("enabled").GetBoolean());
     }
@@ -706,7 +702,6 @@ public class ProxyConfigTests
                  {
                      ("""{"client_type":"codex","name":"a","base_url":"https://a.example"}""", "缺少 id"),
                      ("""{"id":"p","client_type":"codex","name":"a","base_url":"https://a.example","auth_mode":"basic"}""", "auth_mode"),
-                     ("""{"id":"p","client_type":"codex","name":"a","base_url":"https://a.example","balance_query":{"mode":"magic"}}""", "balance_query.mode"),
                      ("""{"id":"p","client_type":"codex","name":"a","base_url":"https://a.example","keys":[{"id":"k","name":"n"}]}""", "api_key"),
                      ("""{"id":"p","client_type":"codex","name":"a","base_url":"https://a.example","models":{"context_window":-1}}""", "context_window"),
                  })
@@ -715,12 +710,12 @@ public class ProxyConfigTests
             Assert.Contains(message, Assert.Throws<ConfigException>(() => Parse(json)).Message);
         }
 
-        // 记住的余额接口认不出来时当作尚未识别，不报错。
+        // 旧配置里的余额字段已随功能移除；读取时忽略，不报错。
         var (config, _) = Parse($$$"""
             {"schema_version":{{{ConfigDefaults.CurrentSchemaVersion}}},"providers":[
               {"id":"p","client_type":"codex","name":"a","base_url":"https://a.example","balance_query":{"mode":"auto","detected":"future"}}]}
             """);
-        Assert.Null(config.Providers[0].BalanceQuery.Detected);
+        Assert.Equal("a", config.Providers[0].Name);
     }
 
     [Fact]
@@ -734,7 +729,7 @@ public class ProxyConfigTests
         Assert.Equal(
             new[]
             {
-                "id", "client_type", "name", "base_url", "auth_mode", "models", "website_url", "notes", "balance_query", "sort_index", "keys", "fetched_models",
+                "id", "client_type", "name", "base_url", "auth_mode", "models", "website_url", "notes", "sort_index", "keys", "fetched_models",
             },
             providerKeys);
         var routeKeys = document.RootElement.GetProperty("routes")[0].EnumerateObject().Select(property => property.Name).ToArray();

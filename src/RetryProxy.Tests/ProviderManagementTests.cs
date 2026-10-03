@@ -164,7 +164,6 @@ public class ProviderManagementTests
         draft.Models.ContextWindow = 123456;
         draft.Models.AutoCompactTokenLimit = 100000;
         draft.FetchedModels.Add(" other-model ");
-        draft.BalanceQuery.Mode = BalanceQueryMode.None;
         draft.Keys[0].ModelOverride = new KeyModelOverride { Model = " override ", Context1M = true };
         Assert.Null(app.MoveProvider("b", "a"));
         Assert.Null(app.SaveProvider(draft, false));
@@ -174,7 +173,6 @@ public class ProviderManagementTests
         Assert.Equal(123456, saved.Models.ContextWindow);
         Assert.Equal(100000, saved.Models.AutoCompactTokenLimit);
         Assert.Equal("https://new.example", saved.WebsiteUrl);
-        Assert.Equal(BalanceQueryMode.None, saved.BalanceQuery.Mode);
         Assert.Equal("override", saved.Keys[0].ModelOverride!.Model);
         Assert.True(saved.Keys[0].ModelOverride!.Context1M);
         Assert.Equal(new[] { "other-model" }, saved.FetchedModels);

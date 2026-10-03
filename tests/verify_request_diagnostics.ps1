@@ -266,7 +266,7 @@ public static class RequestDiagnosticWindow {
     foreach ($kind in @('codex','claude')) {
         foreach ($suffix in $(if($kind -eq 'codex'){@('a','b')}else{@('a')})) {
             $name=if($kind -eq 'codex'){"诊断 Codex $($suffix.ToUpperInvariant())"}else{'诊断 Claude'}
-            $providers+=@{id="diag-$kind-$suffix";client_type=$kind;name=$name;base_url="http://127.0.0.1:$upstreamPort";balance_query=@{mode='none'};keys=@(@{id="diag-$kind-$suffix-key";name='测试 Key';api_key=$privateKey})}
+            $providers+=@{id="diag-$kind-$suffix";client_type=$kind;name=$name;base_url="http://127.0.0.1:$upstreamPort";keys=@(@{id="diag-$kind-$suffix-key";name='测试 Key';api_key=$privateKey})}
         }
         $routes+=@{id="diag-$kind";name=$(if($kind -eq 'codex'){'Codex'}else{'Claude Code'});client_type=$kind;listen_port=$ports[$kind];current_provider_id="diag-$kind-a";current_key_id="diag-$kind-a-key";local_token=[guid]::NewGuid().ToString('N');desired_running=$true;keepalive_enabled=$false;max_retries=2;timeout_seconds=90;generation_timeout_seconds=90;total_timeout_seconds=120;base_delay_seconds=0.5;max_delay_seconds=0.5}
     }

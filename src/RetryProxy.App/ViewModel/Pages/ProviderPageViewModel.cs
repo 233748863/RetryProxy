@@ -1,6 +1,5 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
-using RetryProxy.Core.Balance;
 using RetryProxy.Core.Config;
 using RetryProxy.Core.Client;
 using RetryProxy.Core.Metrics;
@@ -34,9 +33,7 @@ public partial class ProviderPageViewModel : ViewModel
     private ClientType? _displayedClient;
     private long _languageRevision = -1;
     private bool _syncing;
-    private bool _isActive;
     internal ProxyWorkspace Workspace => _service.Workspace;
-    internal BalanceWorkspace Balances => _service.Balances;
     internal PreparationWorkspace Preparations => _service.Preparations;
     public ObservableCollection<ProviderCardViewModel> Providers { get; } = [];
     [ObservableProperty] private string _query = string.Empty;
@@ -68,15 +65,12 @@ public partial class ProviderPageViewModel : ViewModel
 
     public override void OnNavigatedTo()
     {
-        _isActive = true;
         _service.SetHintTimerWanted(this, true);
-        _service.RefreshClientBalances(Workspace.SelectedClient);
         Refresh();
     }
 
     public override void OnNavigatedFrom()
     {
-        _isActive = false;
         _service.SetHintTimerWanted(this, false);
     }
 
@@ -123,11 +117,9 @@ public partial class ProviderPageViewModel : ViewModel
             _displayedConfig = Workspace.Config;
             _displayedClient = Workspace.SelectedClient;
             _languageRevision = I18nService.Instance.Revision;
-            if (_isActive) _service.RefreshClientBalances(Workspace.SelectedClient);
             RefreshCards();
         }
         RefreshPreparationStates();
-        foreach (var card in Providers) card.RefreshBalances();
     }
 
     private void RefreshCards()
@@ -203,12 +195,6 @@ public partial class ProviderPageViewModel : ViewModel
                 () => Workspace.DeleteKey(providerId, keyId)));
     }
 
-    internal void RefreshBalance(string providerId)
-    {
-        _service.RefreshProviderBalance(providerId);
-        _service.Flush();
-    }
-
     internal void PrepareAll(string providerId)
     {
         if (Workspace.Config.ProviderById(providerId) is not { } provider) return;
@@ -264,11 +250,7 @@ public partial class ProviderCardViewModel : ObservableObject
     [ObservableProperty] private bool _expanded;
     [ObservableProperty] private bool _canFold;
     [ObservableProperty] private string _foldText = string.Empty;
-    [ObservableProperty, NotifyCanExecuteChangedFor(nameof(RefreshBalanceCommand))] private bool _balanceEnabled;
-    [ObservableProperty, NotifyCanExecuteChangedFor(nameof(RefreshBalanceCommand))] private bool _isRefreshingBalance;
-    public string RefreshBalanceId => "RefreshBalance_" + Id;
     public string MenuId => "ProviderMenu_" + Id;
-    public bool CanRefreshBalance => BalanceEnabled && !IsRefreshingBalance;
     public ObservableCollection<ProviderKeyRowViewModel> Keys { get; } = [];
     public ProviderCardViewModel(ProviderPageViewModel owner, string id) { _owner = owner; Id = id; }
     public void Refresh(ProviderEndpoint provider)
@@ -280,9 +262,7 @@ public partial class ProviderCardViewModel : ObservableObject
         Model = provider.Models.Model;
         HasWebsite = Uri.TryCreate(provider.WebsiteUrl, UriKind.Absolute, out var site) && site.Scheme is "https" or "http";
         IsCurrent = _owner.Workspace.SelectedRouteRef()?.CurrentProviderId == Id;
-        BalanceEnabled = provider.BalanceQuery.Mode != BalanceQueryMode.None;
         RefreshKeys();
-        RefreshBalances();
     }
     partial void OnExpandedChanged(bool value) => RefreshKeys();
     private void RefreshKeys()
@@ -308,12 +288,6 @@ public partial class ProviderCardViewModel : ObservableObject
     {
         foreach (var key in Keys) key.RefreshPreparation();
     }
-    public void RefreshBalances()
-    {
-        IsRefreshingBalance = _owner.Balances.IsRefreshing(Id);
-        foreach (var key in Keys) key.RefreshBalance();
-    }
-    [RelayCommand(CanExecute = nameof(CanRefreshBalance))] private void RefreshBalance() => _owner.RefreshBalance(Id);
     public string PrepareAllId => "PrepareAll_" + Id;
     [RelayCommand] private void PrepareAll() => _owner.PrepareAll(Id);
     [RelayCommand] private void Fold() => Expanded = !Expanded;
@@ -336,11 +310,6 @@ public partial class ProviderKeyRowViewModel : ObservableObject
     [ObservableProperty] private string _preparationHint = string.Empty;
     [ObservableProperty] private string _preparationAction = string.Empty;
     [ObservableProperty] private bool _preparationFailed;
-    [ObservableProperty] private string _balance = string.Empty;
-    [ObservableProperty] private string _balanceHint = string.Empty;
-    [ObservableProperty] private bool _balanceCritical;
-    [ObservableProperty] private bool _balanceEnabled;
-    public string BalanceStatusId => "BalanceStatus_" + Id;
     private bool _canPrepare = true;
     public string Marker => IsCurrent ? "●" : "○";
     public string SwitchText => ProviderPageViewModel.T(IsCurrent ? "使用中" : "切换");
@@ -373,16 +342,6 @@ public partial class ProviderKeyRowViewModel : ObservableObject
         OnPropertyChanged(nameof(SwitchText));
         SwitchCommand.NotifyCanExecuteChanged();
         RefreshPreparation();
-        RefreshBalance();
-    }
-
-    public void RefreshBalance()
-    {
-        var snapshot = _owner.Balances.Get(ProviderId, Id);
-        BalanceEnabled = snapshot.IsEnabled;
-        Balance = BalanceText.Display(snapshot, ProviderPageViewModel.T);
-        BalanceHint = BalanceText.Hint(snapshot, ProviderPageViewModel.T);
-        BalanceCritical = BalanceText.IsCritical(snapshot);
     }
 
     public void RefreshPreparation()

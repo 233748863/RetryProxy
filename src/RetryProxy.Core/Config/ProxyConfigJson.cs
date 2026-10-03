@@ -185,18 +185,6 @@ public static class ProxyConfigJson
         writer.WriteEndObject();
         writer.WriteString("website_url", provider.WebsiteUrl);
         writer.WriteString("notes", provider.Notes);
-        writer.WriteStartObject("balance_query");
-        writer.WriteString("mode", provider.BalanceQuery.Mode.AsStr());
-        if (provider.BalanceQuery.Detected is { } detected)
-        {
-            writer.WriteString("detected", detected.AsStr());
-        }
-        else
-        {
-            writer.WriteNull("detected");
-        }
-
-        writer.WriteEndObject();
         writer.WriteNumber("sort_index", sortIndex);
         writer.WriteStartArray("keys");
         foreach (var key in provider.Keys)
@@ -356,7 +344,6 @@ public static class ProxyConfigJson
             Models = ParseModels(value, label),
             WebsiteUrl = OptionalString(value, "website_url", string.Empty),
             Notes = OptionalString(value, "notes", string.Empty),
-            BalanceQuery = ParseBalanceQuery(value, label),
             Keys = ParseArray(value, "keys", (element, keyIndex) => ParseKey(element, $"{label} keys 第 {keyIndex} 项")),
             FetchedModels = ParseArray(value, "fetched_models", (element, modelIndex) => element.ValueKind == JsonValueKind.String
                 ? element.GetString()!
@@ -410,32 +397,6 @@ public static class ProxyConfigJson
             Model = OptionalString(element, "model", string.Empty),
             Context1M = Boolean(element, "context_1m", false, $"{label} models.{name}.context_1m"),
         };
-    }
-
-    private static BalanceQuery ParseBalanceQuery(JsonElement value, string label)
-    {
-        if (!value.TryGetProperty("balance_query", out var element) || element.ValueKind == JsonValueKind.Null)
-        {
-            return new BalanceQuery();
-        }
-
-        if (element.ValueKind != JsonValueKind.Object)
-        {
-            throw new ConfigException($"{label} balance_query 必须是对象");
-        }
-
-        var mode = ProviderOptionExtensions.ParseBalanceMode(OptionalString(element, "mode", "auto"))
-            ?? throw new ConfigException($"{label} balance_query.mode 无法识别");
-        BalanceQueryMode? detected = null;
-        if (element.TryGetProperty("detected", out var detectedElement) && detectedElement.ValueKind != JsonValueKind.Null)
-        {
-            // 记住的接口认不出来时当作尚未识别，下次查询重新识别。
-            detected = detectedElement.ValueKind == JsonValueKind.String
-                ? ProviderOptionExtensions.ParseBalanceMode(detectedElement.GetString())
-                : null;
-        }
-
-        return new BalanceQuery { Mode = mode, Detected = detected };
     }
 
     private static ProviderKey ParseKey(JsonElement value, string label)

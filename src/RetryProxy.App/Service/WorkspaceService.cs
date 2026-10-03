@@ -1,5 +1,4 @@
 using Microsoft.Extensions.Logging;
-using RetryProxy.Core.Balance;
 using RetryProxy.Core.Config;
 using RetryProxy.Core.Diagnostics;
 using RetryProxy.Core.Client;
@@ -36,10 +35,6 @@ public sealed class WorkspaceService
     private readonly ProxyLogger _proxyLogger;
     private readonly DispatcherTimer _refreshTimer;
     private readonly DispatcherTimer _hintTimer;
-    private readonly DispatcherTimer _balanceTimer;
-    private readonly BalanceFetcher _balanceFetcher;
-    private ProxyConfig? _balanceConfig;
-    private DateTimeOffset? _nextBalanceRefreshAt;
     private readonly HashSet<object> _hintSubscribers = new();
     private int _refreshQueued;
     private bool _started;
@@ -92,13 +87,6 @@ public sealed class WorkspaceService
         _refreshTimer.Tick += (_, _) => Flush();
         _hintTimer = new DispatcherTimer(DispatcherPriority.Background) { Interval = TimeSpan.FromSeconds(1) };
         _hintTimer.Tick += (_, _) => Tick?.Invoke();
-        _balanceFetcher = new BalanceFetcher(Global.Version);
-        Balances = new BalanceWorkspace((request, cancellation) => _balanceFetcher.FetchAsync(
-            request.BaseUrl, request.ApiKey, request.Query, cancellation), Workspace.RememberBalanceDetection);
-        Balances.SetUiNotifier(RequestRefresh);
-        SynchronizeBalances();
-        _balanceTimer = new DispatcherTimer(DispatcherPriority.Background) { Interval = BalanceWorkspace.BackgroundRefreshAge };
-        _balanceTimer.Tick += (_, _) => RefreshBackgroundBalances();
         Workspace.SetUiNotifier(RequestRefresh);
         Preparations.SetUiNotifier(RequestRefresh);
         Workspace.RefreshServices();
@@ -115,47 +103,7 @@ public sealed class WorkspaceService
 
     public PreparationWorkspace Preparations { get; }
     public PreparationCatalog PreparationManagement { get; }
-    public BalanceWorkspace Balances { get; }
     public IDiagnosticRepository Diagnostics { get; }
-
-    private void SynchronizeBalances()
-    {
-        if (ReferenceEquals(_balanceConfig, Workspace.Config)) return;
-        _balanceConfig = Workspace.Config;
-        Balances.Synchronize(_balanceConfig);
-    }
-
-    public void RefreshClientBalances(ClientType client)
-    {
-        SynchronizeBalances();
-        Balances.RefreshClient(client);
-    }
-
-    public void RefreshProviderBalance(string providerId)
-    {
-        SynchronizeBalances();
-        Balances.RefreshProvider(providerId);
-    }
-
-    private void RefreshBackgroundBalances()
-    {
-        if (!_started) return;
-        SynchronizeBalances();
-        var current = Workspace.Config.Routes.Select(route => new BalanceKey(route.CurrentProviderId, route.CurrentKeyId));
-        var ready = Preparations.Tasks.Where(task => task.IsReady && task.Mode != PrepareMode.CustomProvider)
-            .Select(task => new BalanceKey(task.ProviderId, task.KeyId));
-        var keys = current.Concat(ready).Distinct().ToArray();
-        Balances.RefreshBackground(keys);
-        // 按最早到期项唤醒，不做固定轮询。例如第 25 分钟手动刷新后，下次在第 55 分钟查询。
-        var next = Balances.NextBackgroundRefreshAt(keys);
-        if (next == _nextBalanceRefreshAt && _balanceTimer.IsEnabled) return;
-        _balanceTimer.Stop();
-        _nextBalanceRefreshAt = next;
-        if (next is null) return;
-        var delay = next.Value - DateTimeOffset.UtcNow;
-        _balanceTimer.Interval = delay > TimeSpan.Zero ? delay : TimeSpan.FromMilliseconds(1);
-        _balanceTimer.Start();
-    }
 
     private void SaveProxyConfig(ProxyConfig config) => PreparationManagement.SaveProxy(config);
 
@@ -202,9 +150,6 @@ public sealed class WorkspaceService
     public void Shutdown()
     {
         _started = false;
-        _balanceTimer.Stop();
-        Balances.Dispose();
-        _balanceFetcher.Dispose();
         Clients.Shutdown();
         PreparationManagement.Shutdown(Workspace);
         Diagnostics.Dispose();
@@ -274,11 +219,6 @@ public sealed class WorkspaceService
             Workspace.PollServiceErrors();
             Clients.Refresh();
             Preparations.Poll();
-            // 先撤销旧地址/密钥的查询，再接纳结果；识别回写配置后同步下一轮请求快照。
-            SynchronizeBalances();
-            Balances.Poll();
-            SynchronizeBalances();
-            RefreshBackgroundBalances();
             while (Workspace.PollPreparationEvents())
             {
             }

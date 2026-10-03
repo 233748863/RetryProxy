@@ -205,8 +205,8 @@ try {
  foreach($letter in @('A','B','C','D','E')){$keys+=@{id="key-$letter";name="Key $letter";api_key="sk-fake-fixture-$letter"}}
  $config=@{
   schema_version=7;selected_route_id='codex-route';providers=@(
-   @{id='codex-provider';client_type='codex';name='Codex Fixture';base_url='http://127.0.0.1:28999';balance_query=@{mode='none'};models=@{model='test-model'};keys=$keys},
-   @{id='claude-provider';client_type='claude';name='Claude Fixture';base_url='http://127.0.0.1:28999';balance_query=@{mode='none'};keys=@(@{id='claude-key';name='Default';api_key='sk-claude-fixture'})}
+   @{id='codex-provider';client_type='codex';name='Codex Fixture';base_url='http://127.0.0.1:28999';models=@{model='test-model'};keys=$keys},
+   @{id='claude-provider';client_type='claude';name='Claude Fixture';base_url='http://127.0.0.1:28999';keys=@(@{id='claude-key';name='Default';api_key='sk-claude-fixture'})}
   );routes=@(
    @{id='codex-route';name='Codex';client_type='codex';listen_port=28080;current_provider_id='codex-provider';current_key_id='key-E';local_token='0123456789abcdef0123456789abcdef'},
    @{id='claude-route';name='Claude Code';client_type='claude';listen_port=28081;current_provider_id='claude-provider';current_key_id='claude-key';local_token='abcdef0123456789abcdef0123456789'}

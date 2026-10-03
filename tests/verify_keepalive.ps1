@@ -342,8 +342,8 @@ while ($null -ne $line) {
     $config = @{
         schema_version = 7; selected_route_id = 'client-test'
         providers = @(
-            @{ id = 'codex-provider'; client_type = 'codex'; name = '客户端格式验证'; base_url = "http://127.0.0.1:$upstreamPort"; balance_query = @{ mode = 'none' }; keys = @(@{ id = 'codex-key'; name = '测试'; api_key = 'local-validation-token' }) },
-            @{ id = 'claude-provider'; client_type = 'claude'; name = 'Claude 设置验证'; base_url = "http://127.0.0.1:$upstreamPort"; balance_query = @{ mode = 'none' }; keys = @(@{ id = 'claude-key'; name = '测试'; api_key = 'fixture-claude-key' }) }
+            @{ id = 'codex-provider'; client_type = 'codex'; name = '客户端格式验证'; base_url = "http://127.0.0.1:$upstreamPort"; keys = @(@{ id = 'codex-key'; name = '测试'; api_key = 'local-validation-token' }) },
+            @{ id = 'claude-provider'; client_type = 'claude'; name = 'Claude 设置验证'; base_url = "http://127.0.0.1:$upstreamPort"; keys = @(@{ id = 'claude-key'; name = '测试'; api_key = 'fixture-claude-key' }) }
         )
         routes = @(
             @{ id = 'client-test'; name = 'Codex'; current_provider_id = 'codex-provider'; current_key_id = 'codex-key'; local_token = '00112233445566778899aabbccddeeff'; client_type = 'codex'; listen_port = $proxyPort; max_retries = 0; timeout_seconds = 10.0; base_delay_seconds = 0.0; max_delay_seconds = 0.0; desired_running = $true; keepalive_enabled = $false; keepalive_idle_minutes = 0.5 },

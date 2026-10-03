@@ -166,7 +166,7 @@ try {
     }
     $providers = @(); $routes = @()
     foreach ($kind in @('codex','claude')) {
-        $providers += @{ id="fixture-$kind"; client_type=$kind; name="fixture-$kind"; base_url="http://127.0.0.1:$upstreamPort"; balance_query=@{mode='none'}; keys=@(@{id="key-$kind";name='fixture';api_key='sk-log-fixture-only'}) }
+        $providers += @{ id="fixture-$kind"; client_type=$kind; name="fixture-$kind"; base_url="http://127.0.0.1:$upstreamPort"; keys=@(@{id="key-$kind";name='fixture';api_key='sk-log-fixture-only'}) }
         $routes += @{ id="fixture-$kind"; name=$(if ($kind -eq 'codex') {'Codex'} else {'Claude Code'}); client_type=$kind; listen_port=$ports[$kind]; current_provider_id="fixture-$kind"; current_key_id="key-$kind"; local_token=[guid]::NewGuid().ToString('N'); desired_running=$true; keepalive_enabled=$false; max_retries=0; timeout_seconds=10; generation_timeout_seconds=10; total_timeout_seconds=20; base_delay_seconds=0; max_delay_seconds=0 }
     }
     @{ proxy=@{schema_version=7;selected_route_id='fixture-codex';providers=$providers;routes=$routes}; commonConfig=@{clientSetupCompleted=$true;isFirstRun=$false;exitToTray=$false;startMinimized=$false;currentThemeType=0}; otherConfig=@{uiCultureInfoName='zh-Hans'} } |

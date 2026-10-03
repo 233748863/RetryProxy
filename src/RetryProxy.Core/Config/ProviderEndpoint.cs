@@ -32,8 +32,6 @@ public sealed class ProviderEndpoint : IEquatable<ProviderEndpoint>
 
     public string Notes { get; set; } = string.Empty;
 
-    public BalanceQuery BalanceQuery { get; set; } = new();
-
     public List<ProviderKey> Keys { get; set; } = new();
 
     public ProviderEndpoint()
@@ -86,11 +84,6 @@ public sealed class ProviderEndpoint : IEquatable<ProviderEndpoint>
         if (!Enum.IsDefined(AuthMode))
         {
             throw new ConfigException("请选择有效的认证方式");
-        }
-
-        if (!Enum.IsDefined(BalanceQuery.Mode) || (BalanceQuery.Detected is { } detected && !Enum.IsDefined(detected)))
-        {
-            throw new ConfigException("请选择有效的余额查询方式");
         }
 
         if (Models.ContextWindow is <= 0 || Models.AutoCompactTokenLimit is <= 0)
@@ -150,7 +143,6 @@ public sealed class ProviderEndpoint : IEquatable<ProviderEndpoint>
         FetchedModels = FetchedModels.ToList(),
         WebsiteUrl = WebsiteUrl,
         Notes = Notes,
-        BalanceQuery = BalanceQuery.Clone(),
         Keys = Keys.Select(key => key.Clone()).ToList(),
     };
 
@@ -166,7 +158,6 @@ public sealed class ProviderEndpoint : IEquatable<ProviderEndpoint>
             && FetchedModels.SequenceEqual(other.FetchedModels)
             && WebsiteUrl == other.WebsiteUrl
             && Notes == other.Notes
-            && BalanceQuery.Equals(other.BalanceQuery)
             && Keys.SequenceEqual(other.Keys);
     }
 

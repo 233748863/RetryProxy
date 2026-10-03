@@ -1,7 +1,9 @@
 ﻿param(
     [string]$ExePath = (Join-Path $PSScriptRoot '../src/RetryProxy.App/bin/x64/Debug/net9.0-windows10.0.22621.0/RetryProxy.exe'),
-    [switch]$UseCurrentDesktop
+    [switch]$UseCurrentDesktop,
+    [switch]$VerifyTrayPointer
 )
+if ($VerifyTrayPointer -and -not $UseCurrentDesktop) { throw 'Tray pointer checks require -UseCurrentDesktop.' }
 # M3 供应商界面验收。默认私有桌面；所有配置和凭据仅为测试数据，不读写真实客户端配置。
 # 显式选择当前桌面时才截图，避免 PrintWindow 在私有桌面返回白图而误认为视觉验收成功。
 $ErrorActionPreference = 'Stop'
@@ -22,6 +24,11 @@ using System.Runtime.InteropServices;
 public static class M3Capture {
  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hwnd);
  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+ [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
+ [DllImport("user32.dll")] public static extern bool GetCursorPos(out POINT point);
+ [DllImport("user32.dll")] public static extern void mouse_event(uint flags, uint x, uint y, uint data, UIntPtr extra);
+ [DllImport("user32.dll")] public static extern void keybd_event(byte key, byte scan, uint flags, UIntPtr extra);
+ public struct POINT { public int X; public int Y; }
 }
 '@
 function Wait-For([scriptblock]$Condition,[string]$Message) {
@@ -67,6 +74,73 @@ function Find-Menu([string]$Name) {
  }
  return $null
 }
+function Check-TrayPointer {
+ # 用真实鼠标沿父条目中心横移；UIA 的 Expand/Invoke 会绕过原缺陷，不能代替此检查。
+ $tray=[RetryProxyTrayVerification]::FindWindowByTitlePrefix($app.Id,'wpfui_th_')
+ $original=[M3Capture+POINT]::new()
+ $null=[M3Capture]::GetCursorPos([ref]$original)
+ Add-Type -AssemblyName System.Windows.Forms
+ $area=[Windows.Forms.Screen]::PrimaryScreen.WorkingArea
+ $positions=@(
+  @(($area.Right-4),($area.Bottom-4)), @(($area.Left+4),($area.Bottom-4)),
+  @(($area.Left+4),($area.Top+4)), @(($area.Right-4),($area.Top+4))
+ )
+ $results=@()
+ try {
+  foreach($position in $positions) {
+   $null=[M3Capture]::SetCursorPos($position[0],$position[1])
+   $null=[RetryProxyTrayVerification]::PostMessage($tray,2048,[UIntPtr]1,[IntPtr]0x0204)
+   $null=[RetryProxyTrayVerification]::PostMessage($tray,2048,[UIntPtr]1,[IntPtr]0x0205)
+   Wait-For { $null -ne (Find-Menu 'Codex：Codex Fixture · Key E') } 'Pointer: tray menu missing'
+   foreach($clientName in @('Codex：Codex Fixture · Key E','Claude Code：Claude Fixture · Default')) {
+    $client=Find-Menu $clientName
+    $parent=$client.Current.BoundingRectangle
+    $x=[int]($parent.Left+$parent.Width/2);$y=[int]($parent.Top+$parent.Height/2)
+    $null=[M3Capture]::SetCursorPos($x,$y)
+    $keyName=if($clientName.StartsWith('Codex')){'Codex Fixture · Key A'}else{'Claude Fixture · Default'}
+    Wait-For { $null -ne (Find-Menu $keyName) } "Pointer: hover did not open $clientName"
+    Start-Sleep -Milliseconds 500
+    $key=Find-Menu $keyName
+    $first=$key.Current.BoundingRectangle
+    $last=if($clientName.StartsWith('Codex')){(Find-Menu 'Codex Fixture · Key E').Current.BoundingRectangle}else{$first}
+    Write-Host "Pointer geometry: $clientName at $($position -join ','); parent=$parent; first=$first; last=$last"
+    if($y -lt $first.Top -or $y -gt $last.Bottom) { throw "Pointer: submenu is detached vertically from $clientName at $($position -join ',')" }
+    $targetX=[int]($first.Left+$first.Width/2)
+    $step=if($targetX -lt $x){-4}else{4}
+    while([Math]::Abs($targetX-$x) -gt 4) {
+     $x+=$step;$null=[M3Capture]::SetCursorPos($x,$y);Start-Sleep -Milliseconds 10
+    }
+    $null=[M3Capture]::SetCursorPos($targetX,$y)
+    Start-Sleep -Milliseconds 800
+    if($null -eq (Find-Menu $keyName)) { throw "Pointer: submenu disappeared during horizontal movement: $clientName" }
+    $null=[M3Capture]::SetCursorPos($targetX,[int]($first.Top+$first.Height/2))
+    Start-Sleep -Milliseconds 500
+    if($null -eq (Find-Menu $keyName)) { throw "Pointer: submenu disappeared while choosing a Key: $clientName" }
+    $results+=@{client=$clientName;corner=$position;parent=$parent.ToString();firstKey=$first.ToString();passed=$true}
+    if($position[0] -eq $positions[0][0] -and $position[1] -eq $positions[0][1] -and $clientName.StartsWith('Codex')) {
+     $left=[int][Math]::Min($parent.Left,$first.Left)-8
+     $top=[int][Math]::Min($parent.Top,$first.Top)-8
+     $right=[int][Math]::Max($parent.Right,$first.Right)+8
+     $bottom=[int][Math]::Max($parent.Bottom,$last.Bottom)+8
+     $bmp=[Drawing.Bitmap]::new($right-$left,$bottom-$top)
+     $graphics=[Drawing.Graphics]::FromImage($bmp)
+     try {$graphics.CopyFromScreen($left,$top,0,0,$bmp.Size);$bmp.Save((Join-Path $root '.tmp\tray-pointer-bottom-right.png'))}
+     finally {$graphics.Dispose();$bmp.Dispose()}
+    }
+    # 先回到所属父行，再移动到另一个客户端，验证正常的悬停切换仍可用。
+    $null=[M3Capture]::SetCursorPos([int]($parent.Left+$parent.Width/2),$y)
+   }
+   [M3Capture]::keybd_event(0x1B,0,0,[UIntPtr]::Zero)
+   [M3Capture]::keybd_event(0x1B,0,2,[UIntPtr]::Zero)
+   [M3Capture]::keybd_event(0x1B,0,0,[UIntPtr]::Zero)
+   [M3Capture]::keybd_event(0x1B,0,2,[UIntPtr]::Zero)
+   Start-Sleep -Milliseconds 300
+  }
+  $results|ConvertTo-Json -Depth 5|Set-Content (Join-Path $root '.tmp\tray-pointer-results.json') -Encoding utf8
+  Write-Host 'PASS: 8 real-pointer submenu traversals across both clients and all four screen corners.'
+ }
+ finally {$null=[M3Capture]::SetCursorPos($original.X,$original.Y)}
+}
 function Check-TraySwitch {
  $tray=[RetryProxyTrayVerification]::FindWindowByTitlePrefix($app.Id,'wpfui_th_')
  if($tray -eq [IntPtr]::Zero){throw 'Tray window missing'}
@@ -80,7 +154,13 @@ function Check-TraySwitch {
  $client.GetCurrentPattern([Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
  Wait-For { $null -ne (Find-Menu 'Codex Fixture · Key B') } 'Tray key menu missing'
  $key=Find-Menu 'Codex Fixture · Key B'
- $key.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern).Invoke()
+ if($VerifyTrayPointer) {
+  Start-Sleep -Milliseconds 500
+  $bounds=$key.Current.BoundingRectangle
+  $null=[M3Capture]::SetCursorPos([int]($bounds.Left+$bounds.Width/2),[int]($bounds.Top+$bounds.Height/2))
+  [M3Capture]::mouse_event(0x0002,0,0,0,[UIntPtr]::Zero)
+  [M3Capture]::mouse_event(0x0004,0,0,0,[UIntPtr]::Zero)
+ } else {$key.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern).Invoke()}
  Start-Sleep -Milliseconds 400
  $null=[RetryProxyTrayVerification]::PostMessage($tray,2048,[UIntPtr]1,[IntPtr]0x0203)
  Wait-For { [RetryProxyTrayVerification]::IsWindowVisible($window) } 'Tray did not restore window'
@@ -145,6 +225,7 @@ try {
  Wait-For { (Find-Control 'CurrentProviderKey').Current.Name -like '*Key B*' } 'Switch did not update page'
  Invoke-Control '撤销' -Name
  Wait-For { (Find-Control 'CurrentProviderKey').Current.Name -like '*Key E*' } 'Undo did not restore key'
+ if($VerifyTrayPointer){Check-TrayPointer}
  Check-TraySwitch
  Invoke-Control 'SelectClaude'
  Wait-For { (Find-Control 'CurrentProviderKey').Current.Name -like '*Claude Fixture*' } 'Client selection failed'

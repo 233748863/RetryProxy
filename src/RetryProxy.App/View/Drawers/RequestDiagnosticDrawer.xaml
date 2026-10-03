@@ -1,0 +1,42 @@
+<local:DrawerPage x:Class="RetryProxy.View.Drawers.RequestDiagnosticDrawer"
+                  xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                  xmlns:local="clr-namespace:RetryProxy.View.Drawers"
+                  xmlns:i18n="clr-namespace:RetryProxy.Service.I18n"
+                  xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml">
+    <StackPanel>
+        <WrapPanel Margin="0,0,0,12">
+            <ui:Button Margin="0,0,8,4" Content="{i18n:T 复制请求编号}" Click="CopyIdClicked" AutomationProperties.AutomationId="DiagnosticCopyId" />
+            <ui:Button x:Name="CopySummaryButton" Margin="0,0,0,4" Content="{i18n:T 复制安全摘要}" Click="CopySummaryClicked" AutomationProperties.AutomationId="DiagnosticCopySummary" />
+        </WrapPanel>
+        <TextBlock x:Name="CopyNotice" Margin="0,0,0,8" TextWrapping="Wrap" Visibility="Collapsed" />
+        <TextBlock x:Name="WarningText" Margin="0,0,0,10" TextWrapping="Wrap" Visibility="Collapsed"
+                   Foreground="{DynamicResource SystemFillColorCautionBrush}" AutomationProperties.AutomationId="DiagnosticDetailWarning" />
+        <TextBlock FontSize="16" FontWeight="SemiBold" Text="{i18n:T 概况}" Margin="0,0,0,8" />
+        <TextBlock x:Name="OverviewText" TextWrapping="Wrap" LineHeight="23" AutomationProperties.AutomationId="DiagnosticOverview" />
+        <TextBlock Margin="0,8,0,12" TextWrapping="Wrap" Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                   Text="{i18n:T 实际发送次数包含兼容重发和手动改投；原重试次数沿用请求处理规则。}" />
+        <Separator Margin="0,0,0,12" />
+        <TextBlock FontSize="16" FontWeight="SemiBold" Text="{i18n:T 按序事件}" Margin="0,0,0,8" />
+        <TextBlock x:Name="LoadingText" Text="{i18n:T 正在读取…}" Margin="0,0,0,8" Visibility="Collapsed" />
+        <ItemsControl x:Name="EventsList" AutomationProperties.AutomationId="DiagnosticEvents">
+            <ItemsControl.ItemTemplate>
+                <DataTemplate>
+                    <Border Margin="0,0,0,8" Padding="10" CornerRadius="6" BorderThickness="1"
+                            BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}">
+                        <StackPanel>
+                            <TextBlock FontWeight="SemiBold" Text="{Binding Heading}" TextWrapping="Wrap" />
+                            <TextBlock Margin="0,6,0,0" Text="{Binding Body}" TextWrapping="Wrap" LineHeight="21" />
+                        </StackPanel>
+                    </Border>
+                </DataTemplate>
+            </ItemsControl.ItemTemplate>
+        </ItemsControl>
+        <TextBlock x:Name="EmptyText" Text="{i18n:T 本页没有已记录的事件}" Margin="0,0,0,8" Visibility="Collapsed" />
+        <WrapPanel Margin="0,8,0,4">
+            <ui:Button x:Name="PreviousButton" Margin="0,0,8,4" Content="{i18n:T 上一页}" Click="PreviousClicked" AutomationProperties.AutomationId="DiagnosticEventsPrevious" />
+            <ui:Button x:Name="NextButton" Margin="0,0,0,4" Content="{i18n:T 下一页}" Click="NextClicked" AutomationProperties.AutomationId="DiagnosticEventsNext" />
+        </WrapPanel>
+        <TextBlock x:Name="PageText" TextWrapping="Wrap" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+    </StackPanel>
+</local:DrawerPage>

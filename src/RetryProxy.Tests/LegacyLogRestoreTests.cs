@@ -37,6 +37,21 @@ public class LegacyLogRestoreTests : IDisposable
         File.WriteAllText(Path.Combine(_directory, name), string.Concat(lines.Select(line => line + "\n")), new UTF8Encoding(false));
     }
 
+    [Fact]
+    public void ModelQueriesAndTheirPathlessFollowupLinesAreExcludedFromRestoredUsage()
+    {
+        WriteLog("retry-proxy.log",
+            "2026-09-19 01:00:00 INFO [通道代理][通道][请求 11111111] GET /v1/models -> HTTP 200",
+            "2026-09-19 01:00:01 WARNING [通道代理][通道][请求 22222222] 第 1 次 GET /models/?client_version=test -> HTTP 500，0.1秒后重试",
+            "2026-09-19 01:00:02 INFO [通道代理][通道][请求 22222222] 改投 Any · 群号，未输出，立即重发（不计重试）",
+            "2026-09-19 01:00:03 INFO [通道代理][通道][请求 22222222] 通道或后台任务已取消，不重试，总 1.00秒",
+            "2026-09-19 01:00:04 INFO [通道代理][通道][请求 33333333] GET /api/anthropic/v1/models -> HTTP 200",
+            "2026-09-19 01:00:05 INFO [通道代理][通道][请求 44444444] POST /v1/responses -> HTTP 200",
+            "2026-09-19 01:00:06 INFO [通道代理][通道][请求 55555555] POST /v1/models -> HTTP 200",
+            "2026-09-19 01:00:07 INFO [通道代理][通道][请求 66666666] GET /v1/models/custom -> HTTP 200");
+        Assert.Equal(new[] { "44444444", "55555555", "66666666" }, LegacyLogRestore.Restore(_directory, "通道", Date).Keys);
+    }
+
     [Theory]
     [InlineData("模型 actual", "actual")]
     [InlineData("模型 requested -> actual (不一致)", "actual")]

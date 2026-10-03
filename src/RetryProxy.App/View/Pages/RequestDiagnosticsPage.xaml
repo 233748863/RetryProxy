@@ -1,0 +1,129 @@
+<Page x:Class="RetryProxy.View.Pages.RequestDiagnosticsPage"
+      xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+      xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+      xmlns:controls="clr-namespace:RetryProxy.View.Controls"
+      xmlns:i18n="clr-namespace:RetryProxy.Service.I18n"
+      xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+      Title="RequestDiagnosticsPage"
+      FontFamily="{StaticResource TextThemeFontFamily}"
+      Foreground="{DynamicResource TextFillColorPrimaryBrush}">
+    <Page.Resources>
+        <Style x:Key="DiagnosticFilter" TargetType="StackPanel">
+            <Setter Property="Margin" Value="0,0,8,8" />
+            <Setter Property="Width" Value="150" />
+        </Style>
+        <Style x:Key="DiagnosticCell" TargetType="TextBlock">
+            <Setter Property="Margin" Value="0,0,8,0" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+            <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+        </Style>
+        <Style x:Key="DiagnosticRow" TargetType="ListBoxItem">
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+            <Setter Property="Focusable" Value="False" />
+        </Style>
+    </Page.Resources>
+    <Grid Margin="24,16,24,16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+        <StackPanel>
+            <controls:ClientSelector Margin="0,0,0,12" />
+            <TextBlock FontSize="18" FontWeight="SemiBold" Text="{i18n:T 请求诊断}" />
+            <TextBlock Margin="0,4,0,12" Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                       Text="{i18n:T 最近 7 天的日常请求；后台准备和模型列表查询请查看运行日志。}" TextWrapping="Wrap" />
+            <WrapPanel>
+                <StackPanel Style="{StaticResource DiagnosticFilter}" Width="176">
+                    <TextBlock Margin="0,0,0,4" Text="{i18n:T 日期}" />
+                    <ComboBox ItemsSource="{Binding Dates}" DisplayMemberPath="Label" SelectedValuePath="Date"
+                              SelectedValue="{Binding SelectedDate, Mode=TwoWay}" AutomationProperties.AutomationId="DiagnosticDate" />
+                </StackPanel>
+                <StackPanel Style="{StaticResource DiagnosticFilter}">
+                    <TextBlock Margin="0,0,0,4" Text="{i18n:T 结果}" />
+                    <ComboBox ItemsSource="{Binding Outcomes}" DisplayMemberPath="Label" SelectedItem="{Binding SelectedOutcome, Mode=TwoWay}"
+                              AutomationProperties.AutomationId="DiagnosticOutcome" />
+                </StackPanel>
+                <StackPanel Style="{StaticResource DiagnosticFilter}">
+                    <TextBlock Margin="0,0,0,4" Text="{i18n:T 供应商}" />
+                    <ComboBox ItemsSource="{Binding Providers}" DisplayMemberPath="Label" SelectedItem="{Binding SelectedProvider, Mode=TwoWay}"
+                              AutomationProperties.AutomationId="DiagnosticProvider" />
+                </StackPanel>
+                <StackPanel Style="{StaticResource DiagnosticFilter}">
+                    <TextBlock Margin="0,0,0,4" Text="{i18n:T Key}" />
+                    <ComboBox ItemsSource="{Binding Keys}" DisplayMemberPath="Label" SelectedItem="{Binding SelectedKey, Mode=TwoWay}"
+                              AutomationProperties.AutomationId="DiagnosticKey" />
+                </StackPanel>
+                <StackPanel Style="{StaticResource DiagnosticFilter}">
+                    <TextBlock Margin="0,0,0,4" Text="{i18n:T 出站模型}" />
+                    <ComboBox ItemsSource="{Binding Models}" DisplayMemberPath="Label" SelectedItem="{Binding SelectedModel, Mode=TwoWay}"
+                              AutomationProperties.AutomationId="DiagnosticModel" />
+                </StackPanel>
+                <StackPanel Style="{StaticResource DiagnosticFilter}" Width="220">
+                    <TextBlock Margin="0,0,0,4" Text="{i18n:T 请求编号}" />
+                    <ui:TextBox PlaceholderText="{i18n:T 搜索请求编号}" MaxLength="128" Icon="{ui:SymbolIcon Search24}"
+                                Text="{Binding RequestIdSearch, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged, Delay=200}"
+                                AutomationProperties.AutomationId="DiagnosticSearch" />
+                </StackPanel>
+            </WrapPanel>
+            <TextBlock Margin="0,0,0,8" Text="{Binding Warning}" TextWrapping="Wrap"
+                       Foreground="{DynamicResource SystemFillColorCautionBrush}"
+                       Visibility="{Binding HasWarning, Converter={StaticResource BooleanToVisibilityConverter}}"
+                       AutomationProperties.AutomationId="DiagnosticWarning" />
+            <Grid Margin="12,4,12,8">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="76" /><ColumnDefinition Width="*" /><ColumnDefinition Width="1.2*" />
+                    <ColumnDefinition Width="136" /><ColumnDefinition Width="66" />
+                </Grid.ColumnDefinitions>
+                <TextBlock Style="{StaticResource DiagnosticCell}" Text="{i18n:T 时间}" />
+                <TextBlock Grid.Column="1" Style="{StaticResource DiagnosticCell}" Text="{i18n:T 模型}" />
+                <TextBlock Grid.Column="2" Style="{StaticResource DiagnosticCell}" Text="{i18n:T 供应商 / Key}" />
+                <TextBlock Grid.Column="3" Style="{StaticResource DiagnosticCell}" Text="{i18n:T 结果}" />
+                <TextBlock Grid.Column="4" Style="{StaticResource DiagnosticCell}" Text="{i18n:T 总耗时}" />
+            </Grid>
+        </StackPanel>
+        <Grid Grid.Row="1">
+            <ListBox x:Name="RequestList" ItemsSource="{Binding Rows}" ItemContainerStyle="{StaticResource DiagnosticRow}"
+                     BorderThickness="0" Background="Transparent" ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                     ScrollViewer.VerticalScrollBarVisibility="Auto" ScrollViewer.CanContentScroll="True" Tag="NoSmoothScroll"
+                     VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling"
+                     AutomationProperties.AutomationId="DiagnosticList">
+                <ListBox.ItemTemplate>
+                    <DataTemplate>
+                        <ui:Button Padding="10,10" Margin="0,0,0,4" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch"
+                                   Appearance="Transparent" Command="{Binding DataContext.OpenDetailCommand, RelativeSource={RelativeSource AncestorType=Page}}"
+                                   CommandParameter="{Binding}" AutomationProperties.AutomationId="{Binding RequestId}" ToolTip="{Binding RequestId}">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="76" /><ColumnDefinition Width="*" /><ColumnDefinition Width="1.2*" />
+                                    <ColumnDefinition Width="136" /><ColumnDefinition Width="66" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Style="{StaticResource DiagnosticCell}" Text="{Binding Time}" />
+                                <TextBlock Grid.Column="1" Style="{StaticResource DiagnosticCell}" Text="{Binding Model}" ToolTip="{Binding Model}" />
+                                <TextBlock Grid.Column="2" Style="{StaticResource DiagnosticCell}" Text="{Binding Target}" ToolTip="{Binding Target}" />
+                                <StackPanel Grid.Column="3" Margin="0,0,8,0" VerticalAlignment="Center">
+                                    <TextBlock Text="{Binding Result}" TextWrapping="Wrap" />
+                                    <TextBlock Margin="0,3,0,0" Text="{i18n:T 记录不完整}" FontSize="11" ToolTip="{Binding Completeness}"
+                                               Foreground="{DynamicResource SystemFillColorCautionBrush}"
+                                               Visibility="{Binding IsIncomplete, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                                </StackPanel>
+                                <TextBlock Grid.Column="4" Style="{StaticResource DiagnosticCell}" Text="{Binding Duration}" ToolTip="{Binding Duration}" />
+                            </Grid>
+                        </ui:Button>
+                    </DataTemplate>
+                </ListBox.ItemTemplate>
+            </ListBox>
+            <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center" TextWrapping="Wrap"
+                       Text="{i18n:T 当前筛选没有日常请求记录。诊断从新版本开始记录。}"
+                       Visibility="{Binding IsEmpty, Converter={StaticResource BooleanToVisibilityConverter}}" />
+        </Grid>
+        <WrapPanel Grid.Row="2" Margin="0,10,0,0" VerticalAlignment="Center">
+            <ui:Button Margin="0,0,8,4" Content="{i18n:T 上一页}" Command="{Binding PreviousPageCommand}" AutomationProperties.AutomationId="DiagnosticPreviousPage" />
+            <ui:Button Margin="0,0,12,4" Content="{i18n:T 下一页}" Command="{Binding NextPageCommand}" AutomationProperties.AutomationId="DiagnosticNextPage" />
+            <TextBlock Margin="0,0,12,4" VerticalAlignment="Center" Text="{Binding PageText}" />
+            <TextBlock Margin="0,0,0,4" VerticalAlignment="Center" Text="{i18n:T 正在读取…}"
+                       Visibility="{Binding IsBusy, Converter={StaticResource BooleanToVisibilityConverter}}" />
+        </WrapPanel>
+    </Grid>
+</Page>

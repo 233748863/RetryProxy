@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging;
 using RetryProxy.Core.Balance;
 using RetryProxy.Core.Config;
+using RetryProxy.Core.Diagnostics;
 using RetryProxy.Core.Client;
 using RetryProxy.Core.Cli;
 using RetryProxy.Core.Logging;
@@ -9,6 +10,7 @@ using RetryProxy.Helpers.Win32;
 using RetryProxy.Service.Interface;
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -49,7 +51,8 @@ public sealed class WorkspaceService
         _proxyLogger = proxyLogger;
         _snackbar = snackbar;
         var all = configService.Get();
-        Workspace = new ProxyWorkspace(proxyLogger, all.Proxy ?? ProxyConfig.Builtin(), SaveProxyConfig);
+        Diagnostics = new DiagnosticStore(Path.Combine(proxyLogger.DirectoryPath, "request-diagnostics"));
+        Workspace = new ProxyWorkspace(proxyLogger, all.Proxy ?? ProxyConfig.Builtin(), SaveProxyConfig, Diagnostics);
         Workspace.BeforeDestructiveChange = configService.BackupBeforeDeletion;
         Workspace.NoticePosted += OnNoticePosted;
         I18n.I18nService.Instance.PropertyChanged += (_, _) => RequestRefresh();
@@ -113,6 +116,7 @@ public sealed class WorkspaceService
     public PreparationWorkspace Preparations { get; }
     public PreparationCatalog PreparationManagement { get; }
     public BalanceWorkspace Balances { get; }
+    public IDiagnosticRepository Diagnostics { get; }
 
     private void SynchronizeBalances()
     {
@@ -203,6 +207,7 @@ public sealed class WorkspaceService
         _balanceFetcher.Dispose();
         Clients.Shutdown();
         PreparationManagement.Shutdown(Workspace);
+        Diagnostics.Dispose();
         _refreshTimer.Stop();
         _hintTimer.Stop();
     }

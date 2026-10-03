@@ -5,6 +5,7 @@ using System.Net;
 using System.Net.Sockets;
 using RetryProxy.Core.Cli;
 using RetryProxy.Core.Config;
+using RetryProxy.Core.Diagnostics;
 using RetryProxy.Core.KeepAlive;
 using RetryProxy.Core.Logging;
 using RetryProxy.Core.Service;
@@ -19,15 +20,17 @@ namespace RetryProxy.Core.Workspace;
 public sealed partial class ProxyWorkspace
 {
     private readonly Action<ProxyConfig>? _save;
+    private readonly IRequestDiagnostics? _diagnostics;
     private readonly HashSet<string> _reportedServiceErrors = new();
     /// <summary>仅本次运行有效：用户手动停止的通道不被自动启动流程再次拉起。</summary>
     private readonly HashSet<string> _manuallyStoppedRoutes = new();
     private bool _startupRequested;
     private Action? _uiNotifier;
 
-    public ProxyWorkspace(ProxyLogger logger, ProxyConfig config, Action<ProxyConfig>? save)
+    public ProxyWorkspace(ProxyLogger logger, ProxyConfig config, Action<ProxyConfig>? save, IRequestDiagnostics? diagnostics = null)
     {
         Logger = logger;
+        _diagnostics = diagnostics;
         Config = config.Clone().Normalize();
         _save = save;
         SelectedRoute = Config.SelectedRoute?.Id ?? string.Empty;
@@ -196,13 +199,13 @@ public sealed partial class ProxyWorkspace
                     continue;
                 }
 
-                var service = ProxyService.WithMetrics(Logger, route.Name, existing.Metrics).WithKeepAliveWatchdog(watchdog);
+                var service = ProxyService.WithMetrics(Logger, route.Name, existing.Metrics).WithKeepAliveWatchdog(watchdog).WithDiagnostics(_diagnostics);
                 service.SetUiNotifier(_uiNotifier);
                 Services[route.Id] = service;
             }
             else
             {
-                var service = ProxyService.WithDailyStatistics(Logger, route.Id, route.Name).WithKeepAliveWatchdog(watchdog);
+                var service = ProxyService.WithDailyStatistics(Logger, route.Id, route.Name).WithKeepAliveWatchdog(watchdog).WithDiagnostics(_diagnostics);
                 service.SetUiNotifier(_uiNotifier);
                 Services[route.Id] = service;
             }

@@ -1,4 +1,5 @@
 using RetryProxy.Core.Config;
+using RetryProxy.Core.Diagnostics;
 using RetryProxy.Core.Service;
 using RetryProxy.Core.Workspace;
 using RetryProxy.View.Controls;
@@ -54,6 +55,14 @@ public sealed class DrawerService
             host.Dispatcher.VerifyAccess();
             return host;
         }
+    }
+
+    public async Task ShowRequestDiagnosticAsync(DiagnosticSummary summary)
+    {
+        var host = Host;
+        if (_editing || host.IsOpen) return;
+        using var drawer = new RequestDiagnosticDrawer(_workspaceService.Diagnostics, summary);
+        await host.ShowAsync(drawer);
     }
 
     public async Task EditProviderAsync(ProviderEndpoint? provider, ClientType client)

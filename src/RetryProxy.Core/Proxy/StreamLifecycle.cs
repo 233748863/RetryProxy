@@ -33,6 +33,7 @@ internal sealed class StreamLifecycle : IDisposable
     private readonly double _totalTimeoutSeconds;
     private readonly CancellationToken _cancel;
     private readonly string _routeFields;
+    private readonly RequestDiagnosticTrace? _diagnostics;
 
     public StreamLifecycle(
         RouteLogger logger,
@@ -53,7 +54,8 @@ internal sealed class StreamLifecycle : IDisposable
         Deadline deadline,
         double totalTimeoutSeconds,
         CancellationToken cancel,
-        string routeFields = "")
+        string routeFields = "",
+        RequestDiagnosticTrace? diagnostics = null)
     {
         _logger = logger;
         _metrics = metrics;
@@ -74,6 +76,7 @@ internal sealed class StreamLifecycle : IDisposable
         _totalTimeoutSeconds = totalTimeoutSeconds;
         _cancel = cancel;
         _routeFields = routeFields;
+        _diagnostics = diagnostics;
     }
 
     public ResponseStats Stats { get; }
@@ -154,6 +157,7 @@ internal sealed class StreamLifecycle : IDisposable
         if (_status == 200)
         {
             _metrics.Success(_requestId, Stats.CacheRequest(_requestId));
+            _diagnostics?.Outcome(true, stats: Stats, status: _status);
             if (_keepAliveTemplate is { } template)
             {
                 _keepAliveTemplate = null;
@@ -163,6 +167,7 @@ internal sealed class StreamLifecycle : IDisposable
         else
         {
             _metrics.Failure(_requestId);
+            _diagnostics?.Outcome(false, stats: Stats, status: _status);
         }
     }
 
@@ -176,6 +181,7 @@ internal sealed class StreamLifecycle : IDisposable
         Completed = true;
         var elapsed = _startedAt.ElapsedSeconds;
         _metrics.Failure(_requestId);
+        _diagnostics?.Outcome(false, reason, Stats, _status);
         if (!_logCompletion)
         {
             return;

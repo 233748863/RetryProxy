@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using RetryProxy.Core.Cache;
+using RetryProxy.Core.Internal;
 using RetryProxy.Core.Logging;
 
 namespace RetryProxy.Core.Metrics;
@@ -40,6 +41,7 @@ internal static class LegacyLogRestore
     {
         public ulong? Attempt;
         public ulong? Limit;
+        public string Method = string.Empty;
         public string Path = string.Empty;
         public int? Status;
     }
@@ -172,9 +174,19 @@ internal static class LegacyLogRestore
         var attempts = new Dictionary<string, ulong>(StringComparer.Ordinal);
         var unknownRetries = new HashSet<(string Id, DateTime Timestamp, string Body)>();
         var forcedForward = new HashSet<string>(StringComparer.Ordinal);
+        var modelQueries = new HashSet<string>(StringComparer.Ordinal);
         for (var index = 0; index < ordered.Count; index++)
         {
             var entry = ordered[index];
+            if (modelQueries.Contains(entry.Id)) continue;
+            var call = ParseCall(entry.Body);
+            if (call is not null && RequestClassification.IsModelList(call.Method, call.Path))
+            {
+                // 同一请求的取消、切换、重试摘要可能不带路径；连同较早的这些行一并排除。
+                modelQueries.Add(entry.Id);
+                records.Remove(entry.Id);
+                continue;
+            }
             if (!TryLocalUnixMs(entry.Timestamp, out var timestamp))
             {
                 continue;
@@ -188,7 +200,6 @@ internal static class LegacyLogRestore
 
             record.UpdatedAtUnixMs = timestamp;
             record.Sequence = (ulong)index + 1;
-            var call = ParseCall(entry.Body);
             if (call?.Attempt is { } numbered)
             {
                 attempts[entry.Id] = numbered;
@@ -375,7 +386,7 @@ internal static class LegacyLogRestore
             }
         }
 
-        return new Call { Attempt = attempt, Limit = limit, Path = path, Status = status };
+        return new Call { Attempt = attempt, Limit = limit, Method = method, Path = path, Status = status };
     }
 
     private static string? Field(string body, string label)

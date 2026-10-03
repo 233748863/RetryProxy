@@ -54,6 +54,8 @@ internal sealed class RequestFinishGuard : IDisposable
 
     public bool AwaitingResponse { get; set; }
 
+    public RequestDiagnosticTrace? Diagnostics { get; set; }
+
     public void Start()
     {
         if (_registered || KeepAlive is null)
@@ -83,6 +85,7 @@ internal sealed class RequestFinishGuard : IDisposable
         if (AwaitingResponse)
         {
             Metrics.Failure(RequestId);
+            Diagnostics?.Outcome(false, "客户端断开");
             Logger.Warn($"[{RequestId}] 客户端在响应转发前断开，已取消，不重试，总 {StartedAt.ElapsedSeconds:F2}秒");
         }
 

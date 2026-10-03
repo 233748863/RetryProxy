@@ -2,6 +2,7 @@ using System;
 using System.Threading;
 using System.Threading.Tasks;
 using RetryProxy.Core.Config;
+using RetryProxy.Core.Diagnostics;
 using RetryProxy.Core.Cli;
 using RetryProxy.Core.KeepAlive;
 using RetryProxy.Core.Logging;
@@ -42,6 +43,7 @@ public sealed class ProxyService
     private ChannelSnapshot? _snapshot;
     private RetryProxyPipeline? _proxy;
     private RouteLogger? _routeLogger;
+    private IRequestDiagnostics? _diagnostics;
 
     public ProxyService(ProxyLogger logger, string routeName)
         : this(logger, routeName, new ProxyMetrics())
@@ -86,6 +88,16 @@ public sealed class ProxyService
     public ProxyMetrics Metrics { get; }
 
     public KeepAliveWatchdog KeepAlive { get; private set; }
+
+    public ProxyService WithDiagnostics(IRequestDiagnostics? diagnostics)
+    {
+        lock (_lock)
+        {
+            _diagnostics = diagnostics;
+            _proxy?.WithDiagnostics(diagnostics);
+        }
+        return this;
+    }
 
     public ProxyService WithRouteLogger(RouteLogger logger)
     {
@@ -351,7 +363,8 @@ public sealed class ProxyService
         {
             proxy = new RetryProxyPipeline(config, _logger, Metrics, cancel.Token)
                 .WithRouteLogger(logger)
-                .WithKeepAliveWatchdog(KeepAlive);
+                .WithKeepAliveWatchdog(KeepAlive)
+                .WithDiagnostics(_diagnostics);
             if (_preparationProxy is { } preparation)
             {
                 proxy.AsPreparationProxy(preparation.ApiKey, preparation.AccessKey, preparation.AuthMode);

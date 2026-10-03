@@ -18,6 +18,7 @@ using Microsoft.AspNetCore.Http.Features;
 using RetryProxy.Core.Cache;
 using RetryProxy.Core.Cli;
 using RetryProxy.Core.Config;
+using RetryProxy.Core.Diagnostics;
 using RetryProxy.Core.Internal;
 using RetryProxy.Core.KeepAlive;
 using RetryProxy.Core.Logging;
@@ -68,6 +69,7 @@ public sealed class RetryProxy
     private TlsFingerprintStore? _tlsFingerprints;
     /// <summary>一键准备的后台临时代理：只接受带访问密钥的请求，不按通道参数重试（见 <see cref="AsPreparationProxy"/>）。</summary>
     private bool _preparationProxy;
+    private IRequestDiagnostics? _diagnostics;
     private long _lastRejectionLogMs;
     private int _suppressedRejections;
     private Func<double> _randomValue = () => Random.Shared.NextDouble();
@@ -280,6 +282,12 @@ public sealed class RetryProxy
         return this;
     }
 
+    public RetryProxy WithDiagnostics(IRequestDiagnostics? diagnostics)
+    {
+        _diagnostics = diagnostics;
+        return this;
+    }
+
     /// <summary>到点就发一轮保活探测（对应 send_due_keepalive_probe）。</summary>
     public async Task SendDueKeepAliveProbeAsync()
     {
@@ -435,7 +443,7 @@ public sealed class RetryProxy
             FollowsSwitch = followsSwitch;
         }
 
-        /// <summary>本次请求的统计对象；内部请求换成一次性的空对象。</summary>
+        /// <summary>本次请求的统计对象；内部请求、模型清单查询换成一次性的空对象。</summary>
         public ProxyMetrics Metrics { get; }
 
         public RouteLogger Logger { get; }
@@ -458,6 +466,8 @@ public sealed class RetryProxy
 
         public RetryLog Retries { get; } = new();
 
+        public RequestDiagnosticTrace? Diagnostics { get; init; }
+
         public Task Cancelled => _cancelled ??= Task.Delay(Timeout.Infinite, Token);
 
         /// <summary>客户端请求头的原顺序（含 Host、Content-Length），指纹连接按它重排上游请求头。</summary>
@@ -466,7 +476,7 @@ public sealed class RetryProxy
         /// <summary>请求开始时的总等待上限（秒）；之后改参数不影响已开始的请求。</summary>
         public double TotalTimeoutSeconds { get; }
 
-        /// <summary>真实请求：输出前跟随切换，切换 Key 时改用新 Key 重发。保活、准备等内部请求不跟随。</summary>
+        /// <summary>客户端请求（含模型清单查询）在输出前跟随 Key 切换；保活、准备等内部请求不跟随。</summary>
         public bool FollowsSwitch { get; }
     }
 
@@ -634,6 +644,7 @@ public sealed class RetryProxy
         var totalTimeoutSeconds = _channel.Current.TotalTimeoutSeconds;
         var deadline = Deadline.AfterSeconds(totalTimeoutSeconds);
         var startedAt = MonotonicInstant.Now;
+        var diagnosticStartedAt = _diagnostics is null ? default : DateTimeOffset.Now;
         // 当日统计日志跨进程存活，保留完整 UUID，重启后不同请求不会被旧的 32 位显示 ID 合并。
         var requestId = Guid.NewGuid().ToString("N");
         var method = context.Request.Method;
@@ -642,8 +653,12 @@ public sealed class RetryProxy
         var internalCancel = InternalSessions.RequestCancel(requestHeaders);
         // HEAD 不可能是用户对话（Claude Code 会先发不带自定义头的 HEAD /api/hello 探测连通性）；
         // 把它算作真实请求会误伤正经本通道转发的后台准备。
-        var countsAsRealRequest = internalCancel is null && !HttpMethods.IsHead(method);
-        var metrics = Metrics;
+        var followsSwitch = internalCancel is null && !HttpMethods.IsHead(method);
+        // 模型清单可能由客户端在后台反复查询；不能据此重置空闲时间或取消保活，但仍须跟随 Key 切换。
+        var isModelList = RequestClassification.IsModelList(method, safePath);
+        var countsAsRealRequest = followsSwitch && !isModelList;
+        // 不仅不登记开始，成功、失败及重试也必须与通道的持久统计隔离。
+        var metrics = isModelList ? new ProxyMetrics() : Metrics;
         var cancel = Cancel;
         if (internalCancel is { } sessionCancel)
         {
@@ -663,6 +678,15 @@ public sealed class RetryProxy
             method,
             safePath,
             startedAt);
+        using var diagnostic = _diagnostics is null ? null : new RequestDiagnosticLifetime();
+        void BeginDiagnostics()
+        {
+            if (diagnostic is null || diagnostic.Trace is not null || _preparationProxy || guard.KeepAlive is null) return;
+            diagnostic.Trace = RequestDiagnosticTrace.Begin(_diagnostics,
+                new DiagnosticRequestInfo(requestId, Config.ClientType, DateOnly.FromDateTime(diagnosticStartedAt.DateTime),
+                    diagnosticStartedAt, method, safePath), startedAt);
+            guard.Diagnostics = diagnostic.Trace;
+        }
         using var requestCts = CancellationTokenSource.CreateLinkedTokenSource(Cancel, cancel, context.RequestAborted);
         CancelAt(requestCts, deadline);
         CancellationTokenSource? sessionCts = null;
@@ -674,25 +698,27 @@ public sealed class RetryProxy
         {
             var body = await ReadRequestBodyAsync(context, requestCts.Token).ConfigureAwait(false);
             var token = requestCts.Token;
-            if (guard.KeepAlive is not null && InternalSessions.BodyRequestCancel(body) is { } bodyCancel)
+            if (followsSwitch && InternalSessions.BodyRequestCancel(body) is { } bodyCancel)
             {
                 metrics = new ProxyMetrics();
                 cancel = bodyCancel;
                 requestId = $"{ProxyMetrics.KeepAlivePrefix}{requestId}";
                 requestLogger = Logger.ForRequest(requestId, internalRequest: true, preparingAtStart);
                 guard.KeepAlive = null;
+                followsSwitch = false;
                 sessionCts = CancellationTokenSource.CreateLinkedTokenSource(requestCts.Token, bodyCancel);
                 token = sessionCts.Token;
             }
 
             guard.Start();
-            if (guard.KeepAlive is null)
+            BeginDiagnostics();
+            if (!followsSwitch)
             {
                 body = HeaderRules.StripInternalRequestMetadata(body);
             }
 
             ctx = new RequestContext(metrics, requestLogger, cancel, token, requestId, method, safePath, deadline, startedAt, HeaderOrder(requestHeaders),
-                totalTimeoutSeconds, guard.KeepAlive is not null);
+                totalTimeoutSeconds, followsSwitch) { Diagnostics = diagnostic?.Trace };
             response = await HandleRequestInnerAsync(ctx, requestHeaders, rawQuery, body).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
@@ -715,6 +741,7 @@ public sealed class RetryProxy
             sessionCts?.Dispose();
         }
 
+        BeginDiagnostics();
         guard.Start();
         if (error != ProxyErrorKind.Dropped)
         {
@@ -725,30 +752,34 @@ public sealed class RetryProxy
         {
             case ProxyErrorKind.Cancelled:
                 metrics.Failure(requestId);
+                guard.Diagnostics?.Outcome(false, "请求被取消", status: 499);
                 requestLogger.Info($"[{requestId}] 通道或后台任务已取消，不重试，总 {startedAt.ElapsedSeconds:F2}秒");
                 break;
             case ProxyErrorKind.DeadlineExceeded:
                 metrics.Failure(requestId);
+                guard.Diagnostics?.Outcome(false, "总等待到期", status: 504);
                 requestLogger.Warn($"[{requestId}] {method} {safePath} -> 请求总等待达到 {StreamLifecycle.Format(totalTimeoutSeconds)}秒，已取消，不重试，返回 HTTP 504，总 {startedAt.ElapsedSeconds:F2}秒");
                 break;
             case ProxyErrorKind.Body:
                 metrics.Failure(requestId);
+                guard.Diagnostics?.Outcome(false, "请求正文读取失败", status: 400);
                 break;
         }
 
         if (response is null)
         {
+            if (error == ProxyErrorKind.Dropped) guard.Diagnostics?.Delivered(false);
             guard.Dispose();
             switch (error)
             {
                 case ProxyErrorKind.Cancelled:
-                    await WriteSimpleResponseAsync(context, 499, null, ReadOnlyMemory<byte>.Empty).ConfigureAwait(false);
+                    await WriteSimpleResponseAsync(context, 499, null, ReadOnlyMemory<byte>.Empty, guard.Diagnostics).ConfigureAwait(false);
                     break;
                 case ProxyErrorKind.DeadlineExceeded:
-                    await WriteSimpleResponseAsync(context, 504, "application/json; charset=utf-8", JsonBody.Error("proxy_timeout", "请求超过总等待上限，已停止重试")).ConfigureAwait(false);
+                    await WriteSimpleResponseAsync(context, 504, "application/json; charset=utf-8", JsonBody.Error("proxy_timeout", "请求超过总等待上限，已停止重试"), guard.Diagnostics).ConfigureAwait(false);
                     break;
                 case ProxyErrorKind.Body:
-                    await WriteSimpleResponseAsync(context, 400, "application/json; charset=utf-8", JsonBody.Error("invalid_request", bodyError ?? string.Empty)).ConfigureAwait(false);
+                    await WriteSimpleResponseAsync(context, 400, "application/json; charset=utf-8", JsonBody.Error("invalid_request", bodyError ?? string.Empty), guard.Diagnostics).ConfigureAwait(false);
                     break;
             }
 
@@ -763,7 +794,7 @@ public sealed class RetryProxy
                 guard.Metrics.RequestPhase(guard.RequestId, RequestPhase.ReceivingResponse);
             }
 
-            await DeliverAsync(context, response, requestCts.Token).ConfigureAwait(false);
+            await DeliverAsync(context, response, requestCts.Token, guard.Diagnostics).ConfigureAwait(false);
         }
         finally
         {
@@ -799,7 +830,7 @@ public sealed class RetryProxy
         return !string.IsNullOrEmpty(apiKey) && AccessKeyMatches(apiKey.Trim(), token);
     }
 
-    private static async Task DeliverAsync(HttpContext context, ProxyResponse response, CancellationToken token)
+    private static async Task DeliverAsync(HttpContext context, ProxyResponse response, CancellationToken token, RequestDiagnosticTrace? diagnostics = null)
     {
         var aborted = false;
         try
@@ -839,13 +870,14 @@ public sealed class RetryProxy
             aborted = true;
         }
 
+        diagnostics?.Delivered(!aborted);
         if (aborted)
         {
             context.Abort();
         }
     }
 
-    private static async Task WriteSimpleResponseAsync(HttpContext context, int status, string? contentType, ReadOnlyMemory<byte> body)
+    private static async Task WriteSimpleResponseAsync(HttpContext context, int status, string? contentType, ReadOnlyMemory<byte> body, RequestDiagnosticTrace? diagnostics = null)
     {
         try
         {
@@ -862,9 +894,11 @@ public sealed class RetryProxy
             }
 
             await context.Response.CompleteAsync().ConfigureAwait(false);
+            diagnostics?.Delivered(true);
         }
         catch (Exception)
         {
+            diagnostics?.Delivered(false);
             context.Abort();
         }
     }
@@ -1049,6 +1083,7 @@ public sealed class RetryProxy
             }
 
             var snapshot = plan.Snapshot;
+            ctx.Diagnostics?.SelectTarget(snapshot, plan.Model);
             if (plan.MissingKey)
             {
                 return MissingKeyResponse(ctx, snapshot);
@@ -1058,6 +1093,7 @@ public sealed class RetryProxy
             var canRetry = requireValidContext || retries < maxRetries;
             attemptNumber = Saturating.Add(attemptNumber, 1);
             ctx.Metrics.RequestAttempt(requestId, attemptNumber);
+            ctx.Diagnostics?.SetAttempt(attemptNumber);
             // 真实请求在输出前跟随切换：切换 Key 时本次尝试（含退避等待、等待生成）立即作废，改用新 Key 重发。
             using var attemptCts = followsSwitch ? CancellationTokenSource.CreateLinkedTokenSource(ctx.Token, switchToken) : null;
             var attempt = new AttemptScope(ctx, plan, attemptCts?.Token ?? ctx.Token, alternate && plan.AlternateHeaders is not null);
@@ -1092,6 +1128,7 @@ public sealed class RetryProxy
                         // 认证方式切换不受配置的重试次数限制；即使 max_retries=0，也必须给另一种格式一次机会。
                         alternate = true;
                         ctx.Logger.Info($"[{requestId}] {LogText.UpstreamStatus(status)} 拒绝 Claude 鉴权，换认证格式重试一次");
+                        ctx.Diagnostics?.Compatibility("认证格式兼容重发");
                         continue;
                     }
 
@@ -1185,8 +1222,10 @@ public sealed class RetryProxy
                                 var failureText = LogText.UpstreamStatus(status, summary);
                                 LogRetry(ctx, failureText, $"[{requestId}] {LogText.AttemptText(attemptNumber)} {method} {safePath} -> {failureText}{stats.FailureLogFields()}，{LogText.RetryDelayText(delay)}");
                                 ctx.Metrics.Retry(requestId, attemptNumber);
+                                ctx.Diagnostics?.EndSend(summary, stats);
+                                ctx.Diagnostics?.Retry(retries + 1, "HTTP 重试");
                                 ctx.Metrics.RequestPhase(requestId, RequestPhase.WaitingRetry);
-                                await WaitDelayAsync(delay, ctx.Deadline, attempt.Token).ConfigureAwait(false);
+                                await WaitForRetryAsync(ctx, attempt, delay).ConfigureAwait(false);
                                 retries++;
                                 continue;
                             }
@@ -1233,6 +1272,7 @@ public sealed class RetryProxy
                 // 旧 Key 的错误响应与重试日志节流都不再适用，改投后从头计。
                 lastResponse = null;
                 ctx.Retries.Reset();
+                ctx.Diagnostics?.Switched();
                 var label = _channel.Current.Label;
                 ctx.Logger.Info($"[{requestId}] 改投 {(label.Length > 0 ? label : "新 Key")}，未输出，立即重发（不计重试）");
             }
@@ -1365,6 +1405,7 @@ public sealed class RetryProxy
         var provider = snapshot.ProviderName.Length > 0 ? $"“{snapshot.ProviderName}”" : string.Empty;
         ctx.Logger.Warn($"[{ctx.RequestId}] {ctx.Method} {ctx.SafePath} -> 当前供应商{provider}没有 Key，未转发，向客户端返回 HTTP 403");
         ctx.Metrics.Failure(ctx.RequestId);
+        ctx.Diagnostics?.Outcome(false, "当前供应商没有 Key", status: 403);
         var headers = new HeaderList();
         headers.Set("content-type", "application/json; charset=utf-8");
         return ProxyResponse.Buffered(403, headers, JsonBody.Error("no_provider_key", $"当前供应商{provider}没有 Key，请先在 RetryProxy 中为它添加 Key"));
@@ -1427,9 +1468,11 @@ public sealed class RetryProxy
 
         HttpResponseMessage response;
         Stream stream;
+        ctx.Diagnostics?.SendStarted(plan.Snapshot, plan.Model);
         try
         {
             response = await (secure ? _httpsClient : _httpClient).SendAsync(request, HttpCompletionOption.ResponseHeadersRead, sendCts.Token).ConfigureAwait(false);
+            ctx.Diagnostics?.Headers((int)response.StatusCode);
             stream = await response.Content.ReadAsStreamAsync(sendCts.Token).ConfigureAwait(false);
         }
         catch (OperationCanceledException failure)
@@ -1503,6 +1546,7 @@ public sealed class RetryProxy
                     response.Source.Dispose();
                     _promptCache.Reject(request);
                     ctx.Metrics.CacheFallback(ctx.RequestId);
+                    ctx.Diagnostics?.Compatibility("缓存标识兼容重发");
                     ctx.Logger.Info($"[{ctx.RequestId}] 上游不接受代理补充的缓存标识，原请求兼容重发一次；同接口、模型及鉴权暂停补充");
                     // reject 之后不再有补充版本，这条路径每个请求最多走一次；总等待与取消仍覆盖两次发送。
                     continue;
@@ -1647,6 +1691,7 @@ public sealed class RetryProxy
         var usingSystemProxy = plan.UsingSystemProxy;
         var generationTimeoutSeconds = plan.Snapshot.GenerationTimeoutSeconds;
         var stats = new ResponseStats(responseHeaders, ctx.SafePath, plan.Model, plan.ReasoningEffort, plan.ModelIdentity).WithCacheKeyState(plan.CacheRequest.State);
+        ctx.Diagnostics?.Observe(stats);
         var generationGate = status is >= 200 and < 300 && stats.IsApiEventStream
             ? new GenerationGate(ContentDecoder.Create(responseHeaders.Get("content-encoding")))
             : null;
@@ -1657,6 +1702,7 @@ public sealed class RetryProxy
         if (generationGate is not null)
         {
             ctx.Metrics.RequestPhase(requestId, RequestPhase.WaitingGeneration);
+            ctx.Diagnostics?.WaitingGeneration();
         }
 
         // 等待生成期间也跟随切换：切换 Key 时这里抛出取消，由主循环改用新 Key 重发。
@@ -1685,6 +1731,7 @@ public sealed class RetryProxy
                     break;
                 }
 
+                ctx.Diagnostics?.Observe(stats);
                 throw new NoGenerationException($"等待生成达到 {StreamLifecycle.Format(generationTimeoutSeconds)}秒，未转发", stats.FailureLogFields());
             }
 
@@ -1700,6 +1747,7 @@ public sealed class RetryProxy
                 if (generationGate is not null && !generationGate.Finish())
                 {
                     stats.Finish(ctx.StartedAt.ElapsedSeconds);
+                    ctx.Diagnostics?.Observe(stats);
                     throw new NoGenerationException("生成前流结束，无完成事件，未转发", stats.FailureLogFields());
                 }
 
@@ -1735,10 +1783,12 @@ public sealed class RetryProxy
         if (canRetry && generationGate is { HasRateLimitError: true })
         {
             stats.Finish(ctx.StartedAt.ElapsedSeconds);
+            ctx.Diagnostics?.Observe(stats);
             throw new NoGenerationException("上游请求超限，未转发", stats.FailureLogFields());
         }
 
         ctx.Metrics.RequestPhase(requestId, RequestPhase.ReceivingResponse);
+        ctx.Diagnostics?.ResponseReady(stats);
         var lifecycle = new StreamLifecycle(
             ctx.Logger,
             ctx.Metrics,
@@ -1758,7 +1808,8 @@ public sealed class RetryProxy
             ctx.Deadline,
             ctx.TotalTimeoutSeconds,
             ctx.Cancel,
-            plan.LogFields);
+            plan.LogFields,
+            ctx.Diagnostics);
         if (upstreamFinished)
         {
             lifecycle.Finish();
@@ -1890,6 +1941,7 @@ public sealed class RetryProxy
             NoGenerationException generation => (generation.Reason, generation.Fields),
             _ => throw error,
         };
+        ctx.Diagnostics?.EndSend(label);
         var statusText = status is { } value ? LogText.UpstreamStatus(value) : "HTTP 无";
         double? delay = canRetry ? RetryDelay(retries, null, null, attempt.Plan.Snapshot) : null;
         var isTemporaryKeepAlive = _preparationProxy && ctx.RequestId.StartsWith(ProxyMetrics.KeepAlivePrefix, StringComparison.Ordinal);
@@ -1902,14 +1954,28 @@ public sealed class RetryProxy
                 : KeepAlive.Snapshot().Preparing ? "本轮结束，后台准备将在间隔后继续" : "本轮结束，下次按保活间隔继续";
             ctx.Logger.Warn($"{message}，{endText}");
             ctx.Metrics.Failure(ctx.RequestId);
+            ctx.Diagnostics?.Outcome(false, label, status: status);
             return true;
         }
 
         LogRetry(ctx, failureText, $"{message}，{LogText.RetryDelayText(wait)}");
         ctx.Metrics.Retry(ctx.RequestId, attemptNumber);
+        ctx.Diagnostics?.Retry(retries + 1, error is NoGenerationException ? "等待生成重试" : "网络错误重试");
         ctx.Metrics.RequestPhase(ctx.RequestId, RequestPhase.WaitingRetry);
-        await WaitDelayAsync(wait, ctx.Deadline, attempt.Token).ConfigureAwait(false);
+        await WaitForRetryAsync(ctx, attempt, wait).ConfigureAwait(false);
         return false;
+    }
+
+    private static async Task WaitForRetryAsync(RequestContext ctx, AttemptScope attempt, double delay)
+    {
+        ctx.Diagnostics?.BeginWait(delay);
+        var completed = false;
+        try
+        {
+            await WaitDelayAsync(delay, ctx.Deadline, attempt.Token).ConfigureAwait(false);
+            completed = true;
+        }
+        finally { ctx.Diagnostics?.EndWait(completed); }
     }
 
     /// <summary>按 <see cref="RetryLog"/> 节流写一次将要重试的失败：原因变了写完整行，同一原因每 20 次写一条进度。</summary>
@@ -2001,11 +2067,13 @@ public sealed class RetryProxy
         if (lastResponse is { } response)
         {
             ctx.Logger.Warn($"[{ctx.RequestId}] 重试耗尽，返回最后完整响应 {LogText.HttpStatus(response.Status, response.Summary)}");
+            ctx.Diagnostics?.FinalResponse(response.Status);
             return ProxyResponse.Buffered(response.Status, response.Headers, response.Body);
         }
 
         var headers = new HeaderList();
         headers.Set("content-type", "application/json; charset=utf-8");
+        ctx.Diagnostics?.FinalResponse(502);
         return ProxyResponse.Buffered(502, headers, JsonBody.Error("upstream_unavailable", $"上游暂时不可用，已尝试 {attempts} 次"));
     }
 

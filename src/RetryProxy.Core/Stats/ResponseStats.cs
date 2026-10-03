@@ -6,6 +6,7 @@ using System.Text.Json;
 using RetryProxy.Core.Cache;
 using RetryProxy.Core.Internal;
 using RetryProxy.Core.Metrics;
+using RetryProxy.Core.Proxy;
 
 namespace RetryProxy.Core.Stats;
 
@@ -427,6 +428,17 @@ internal sealed class ResponseStats
     public string LogFields() => FormatLogFields(_outcome is { IsFailed: true });
 
     public string FailureLogFields() => FormatLogFields(true);
+
+    internal DiagnosticResponseData DiagnosticSnapshot()
+    {
+        string? code = null;
+        foreach (var (label, value) in _errorFields)
+        {
+            if (label == "上游错误码") { code = value; break; }
+            if (label == "上游错误类型") code ??= value;
+        }
+        return new DiagnosticResponseData(FailureSummary(), code, _upstreamRequestId, _lastEventType, FirstContentSeconds());
+    }
 
     internal static bool IsRateLimitIdentifier(string? value) =>
         value is "rate_limit_exceeded" or "rate_limit_error" or "too_many_requests";

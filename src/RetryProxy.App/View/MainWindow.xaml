@@ -76,6 +76,15 @@
                     </ui:NavigationViewItem.Icon>
                 </ui:NavigationViewItem>
 
+                <ui:NavigationViewItem Content="{i18n:T 请求诊断}"
+                                       AutomationProperties.AutomationId="RequestDiagnosticsNavigation"
+                                       NavigationCacheMode="Enabled"
+                                       TargetPageType="{x:Type pages:RequestDiagnosticsPage}">
+                    <ui:NavigationViewItem.Icon>
+                        <ui:SymbolIcon Symbol="Search24" />
+                    </ui:NavigationViewItem.Icon>
+                </ui:NavigationViewItem>
+
                 <ui:NavigationViewItem Content="{i18n:T 运行日志}"
                                        NavigationCacheMode="Enabled"
                                        TargetPageType="{x:Type pages:LogPage}">
@@ -163,8 +172,8 @@
                                  Header="{i18n:T 显示窗口}"
                                  Icon="{ui:SymbolIcon Window24}" />
                     <Separator />
-                    <MenuItem x:Name="ClaudeTrayMenu" Header="Claude Code" />
-                    <MenuItem x:Name="CodexTrayMenu" Header="Codex" />
+                    <MenuItem x:Name="ClaudeTrayMenu" Header="Claude Code" behavior:TraySubmenuPlacement.IsEnabled="True" />
+                    <MenuItem x:Name="CodexTrayMenu" Header="Codex" behavior:TraySubmenuPlacement.IsEnabled="True" />
                     <Separator />
                     <ui:MenuItem Command="{Binding ExitCommand}"
                                  Header="{i18n:T 退出}"

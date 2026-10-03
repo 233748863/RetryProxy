@@ -70,6 +70,32 @@ public class ChannelSwitchTests
         });
     }
 
+    [Fact]
+    public async Task ModelQueriesFollowKeySwitchWithoutEnteringUsage()
+    {
+        var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        const string models = "{\"data\":[{\"id\":\"model-b\"}]}";
+        await using var upstreamB = await FakeUpstream.StartAsync(async context =>
+        {
+            Assert.Equal("Bearer sk-real-b", context.Request.Headers.Authorization.ToString());
+            Assert.Equal("/v1/models?trace=1", context.Request.Path + context.Request.QueryString);
+            await Upstream.Json(context, 200, models);
+        });
+        await using var fixture = await Start(async context =>
+        {
+            reached.TrySetResult();
+            await Upstream.Pending(context);
+        }, upstream => Key(upstream, "a", "sk-real-a"));
+        using var client = TestClient.Create();
+        var pending = client.GetStringAsync($"{fixture.Address}/v1/models?trace=1");
+        await reached.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        Assert.Equal(1, fixture.Proxy.UpdateSnapshot(Key(upstreamB.BaseUrl, "b", "sk-real-b")));
+        Assert.Equal(models, await pending);
+        Assert.Equal(0UL, fixture.Metrics.Snapshot().TotalRequests);
+        Assert.Equal(0UL, fixture.Metrics.Snapshot().SuccessfulRequests);
+        Assert.Equal(0UL, fixture.Metrics.Snapshot().RetryCount);
+    }
+
     private static async Task<HttpStatusCode> Post(HttpClient client, string url, string body, Dictionary<string, string> headers)
     {
         using var response = await TestClient.Send(client, HttpMethod.Post, url, body, headers: headers);

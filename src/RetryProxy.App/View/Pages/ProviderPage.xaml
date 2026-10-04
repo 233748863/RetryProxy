@@ -126,7 +126,8 @@
                             <WrapPanel Margin="0,8,0,0">
                                 <ui:Button Content="{i18n:T 添加 Key}" Icon="{ui:SymbolIcon Add24}" Command="{Binding AddKeyCommand}" Padding="8,4" />
                                 <ui:Button Content="{i18n:T 准备全部 Key}" Command="{Binding PrepareAllCommand}" Margin="8,0,0,0" Padding="8,4" AutomationProperties.AutomationId="{Binding PrepareAllId}" />
-                                <ui:Button Content="{Binding FoldText}" Command="{Binding FoldCommand}" Margin="8,0,0,0" Padding="8,4" Visibility="{Binding CanFold, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                                <TextBlock Text="{Binding FoldSummary}" Margin="10,0,0,0" VerticalAlignment="Center" Style="{StaticResource SecondaryText}" AutomationProperties.AutomationId="{Binding FoldSummaryId}" />
+                                <ui:Button Content="{Binding FoldActionText}" Command="{Binding FoldCommand}" Margin="8,0,0,0" Padding="8,4" Visibility="{Binding CanFold, Converter={StaticResource BooleanToVisibilityConverter}}" AutomationProperties.AutomationId="{Binding FoldId}" />
                             </WrapPanel>
                         </StackPanel>
                     </Border>

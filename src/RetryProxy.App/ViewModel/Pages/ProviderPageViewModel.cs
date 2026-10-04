@@ -249,8 +249,12 @@ public partial class ProviderCardViewModel : ObservableObject
     [ObservableProperty] private bool _hasWebsite;
     [ObservableProperty] private bool _expanded;
     [ObservableProperty] private bool _canFold;
-    [ObservableProperty] private string _foldText = string.Empty;
+    [ObservableProperty] private string _foldSummary = string.Empty;
+    [ObservableProperty] private string _foldActionText = string.Empty;
+    private HashSet<string> _visibleIds = [];
     public string MenuId => "ProviderMenu_" + Id;
+    public string FoldId => "Fold_" + Id;
+    public string FoldSummaryId => "FoldSummary_" + Id;
     public ObservableCollection<ProviderKeyRowViewModel> Keys { get; } = [];
     public ProviderCardViewModel(ProviderPageViewModel owner, string id) { _owner = owner; Id = id; }
     public void Refresh(ProviderEndpoint provider)
@@ -270,11 +274,11 @@ public partial class ProviderCardViewModel : ObservableObject
         if (_provider is null) return;
         var current = _owner.Workspace.SelectedRouteRef();
         var selectedKey = IsCurrent ? current?.CurrentKeyId : null;
-        var visible = _provider.Keys.Where((key, index) => Expanded || index < 3 || key.Id == selectedKey).ToList();
-        CanFold = _provider.Keys.Count > 3;
-        FoldText = Expanded ? ProviderPageViewModel.T("收起") : string.Format(ProviderPageViewModel.T("还有 {0} 个 Key"), _provider.Keys.Count - visible.Count);
-        // 当前 Key 排在第 4 位时不显示“还有 0 个”。
-        CanFold = Expanded ? _provider.Keys.Count > 3 : _provider.Keys.Count > visible.Count;
+        // 收起时只留当前 Key；本卡不是当前供应商时留第一个 Key 作代表。
+        var lead = _provider.Keys.Any(key => key.Id == selectedKey) ? selectedKey : _provider.Keys.Count > 0 ? _provider.Keys[0].Id : null;
+        var visible = Expanded ? _provider.Keys.ToList() : _provider.Keys.Where(key => key.Id == lead).ToList();
+        _visibleIds = visible.Select(key => key.Id).ToHashSet();
+        UpdateFold();
         var existing = Keys.ToDictionary(row => row.Id);
         var rows = visible.Select(key =>
         {
@@ -284,9 +288,19 @@ public partial class ProviderCardViewModel : ObservableObject
         }).ToList();
         CollectionSync.Update(Keys, rows);
     }
+    private void UpdateFold()
+    {
+        if (_provider is null) return;
+        var hidden = _provider.Keys.Where(key => !_visibleIds.Contains(key.Id)).ToList();
+        var prepared = hidden.Count(key => _owner.Preparations.FindForKey(new PreparationKeyRef(Id, key.Id)) is { IsReady: true });
+        FoldSummary = Expanded ? string.Empty : string.Format(ProviderPageViewModel.T("还有 {0} 个 Key（{1} 个已准备）"), hidden.Count, prepared);
+        FoldActionText = ProviderPageViewModel.T(Expanded ? "收起" : "展开");
+        CanFold = Expanded ? _provider.Keys.Count > 1 : hidden.Count > 0;
+    }
     public void RefreshPreparations()
     {
         foreach (var key in Keys) key.RefreshPreparation();
+        UpdateFold();
     }
     public string PrepareAllId => "PrepareAll_" + Id;
     [RelayCommand] private void PrepareAll() => _owner.PrepareAll(Id);

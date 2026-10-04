@@ -218,9 +218,13 @@ try {
  Wait-For { $script:window=[RetryProxyTrayVerification]::FindWindow($app.Id,'LLM Retry Proxy',$null); $window -ne [IntPtr]::Zero } 'Window not created'
  Wait-For { $null -ne (Find-Control 'CurrentProviderKey') } 'Provider page not loaded'
  if((Find-Control 'CurrentProviderKey').Current.Name -notlike '*Key E*'){throw 'Current key missing'}
- if(!(Find-Control 'key-E')){throw 'Folded current Key E missing'}
- if(Find-Control 'key-D'){throw 'Folded noncurrent Key D unexpectedly visible'}
+ if(!(Find-Control 'key-E')){throw 'Collapsed current Key E missing'}
+ foreach($hidden in @('key-A','key-B','key-C','key-D')){if(Find-Control $hidden){throw "Collapsed noncurrent $hidden unexpectedly visible"}}
+ Wait-For { (Find-Control 'FoldSummary_codex-provider').Current.Name -like '*还有 4 个 Key*' } 'Collapsed key summary missing'
  Capture 'm3-providers'
+ Invoke-Control 'Fold_codex-provider'
+ Wait-For { $null -ne (Find-Control 'key-A') } 'Expand did not reveal all keys'
+ if(-not (Find-Control 'key-D')){throw 'Expanded Key D missing'}
  Invoke-Control 'key-B'
  Wait-For { (Find-Control 'CurrentProviderKey').Current.Name -like '*Key B*' } 'Switch did not update page'
  Invoke-Control '撤销' -Name

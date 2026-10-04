@@ -323,6 +323,7 @@ try {
     }
     if (@(Read-Events | Where-Object { -not $_.valid -or $_.keyId -eq 'b1' }).Count -gt 0) { throw '批量准备使用了错误凭据或当前通道 Key' }
     Invoke-Control 'ProviderNavigation'
+    Invoke-Control 'Fold_a'
     foreach ($keyId in @('a1', 'a2', 'a3')) {
         Wait-For { Test-KeyStatus $keyId '已准备*' } "供应商页没有同步准备状态：$keyId"
         if (@(Find-Elements "PrepareKey_$keyId" | Where-Object { $_.Current.Name -eq '停止' }).Count -ne 1) { throw "供应商 Key 行缺少停止入口：$keyId" }
@@ -361,6 +362,7 @@ try {
     if (@(Read-Events | Where-Object { $_.keyId -eq 'a1' }).Count -ne $beforeRestart.a1) { throw '手动停止的 Key 在重启后产生了准备请求' }
     if (@((Read-Config).preparations).Count -ne 3) { throw '重启改变了准备任务总数' }
     Invoke-Control 'ProviderNavigation'
+    Invoke-Control 'Fold_a'
     Wait-For { Test-KeyStatus 'a2' '已准备*' } '重启后供应商状态没有同步'
     Open-KeyMenu 'a2'
     Invoke-Control '删除' -ByName

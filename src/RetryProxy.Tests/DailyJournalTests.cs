@@ -279,7 +279,12 @@ public class DailyJournalTests : IDisposable
         Assert.Equal(0UL, snapshot.SuccessfulRequests);
     }
 
-    /// <summary>行布局必须与 Rust 版 serde 输出逐字一致，两个版本才能互读同一份日志。</summary>
+    /// <summary>
+    /// 行布局沿用 Rust 版 serde 输出；key_id / key_name 是本版新增的两个可选字段，位置在行尾。
+    /// 旧文件（Rust 版或本版早期版本写的）没有这两段，读入时为空字符串，本版仍能正确累加。
+    /// 反方向（Rust 版读本版新写的行）未在本仓库验证：Rust 源码不在本仓库，
+    /// 结论依赖 serde 默认忽略未知字段这一行为。
+    /// </summary>
     [Fact]
     public void JournalLinesMatchTheRustSerdeLayout()
     {
@@ -294,13 +299,13 @@ public class DailyJournalTests : IDisposable
                 CachedTokens = 800,
                 InputAccounting = CacheInputAccounting.IncludesCached,
                 CacheKeyStatus = "代理已补全",
-            }), 2);
+            }, "key-1", "主号"), 2);
         }
 
         var lines = File.ReadAllText(spec.JournalPath(new DateOnly(2026, 9, 19)), Encoding.UTF8).Split('\n');
         Assert.Equal("{\"record\":\"header\",\"version\":1,\"date\":\"2026-09-19\",\"route_id\":\"route\",\"route_name\":\"通道\",\"legacy_imported\":false}", lines[0]);
-        Assert.Equal("{\"record\":\"request\",\"value\":{\"request_id\":\"done\",\"updated_at_unix_ms\":1,\"sequence\":1,\"outcome\":\"failure\",\"retry_count\":0,\"last_retry_attempt\":null,\"cache_key\":null,\"cache_fallback\":false,\"cache\":null}}", lines[1]);
-        Assert.Equal("{\"record\":\"request\",\"value\":{\"request_id\":\"gpt\",\"updated_at_unix_ms\":2,\"sequence\":2,\"outcome\":\"success\",\"retry_count\":0,\"last_retry_attempt\":null,\"cache_key\":null,\"cache_fallback\":false,\"cache\":{\"request_id\":\"gpt\",\"model\":\"gpt-test\",\"completed_at_unix_ms\":2,\"input_tokens\":1000,\"cached_tokens\":800,\"cache_creation_tokens\":null,\"input_accounting\":\"includes_cached\",\"cache_key_status\":\"代理已补全\"}}}", lines[2]);
+        Assert.Equal("{\"record\":\"request\",\"value\":{\"request_id\":\"done\",\"updated_at_unix_ms\":1,\"sequence\":1,\"outcome\":\"failure\",\"retry_count\":0,\"last_retry_attempt\":null,\"cache_key\":null,\"cache_fallback\":false,\"cache\":null,\"key_id\":\"\",\"key_name\":\"\"}}", lines[1]);
+        Assert.Equal("{\"record\":\"request\",\"value\":{\"request_id\":\"gpt\",\"updated_at_unix_ms\":2,\"sequence\":2,\"outcome\":\"success\",\"retry_count\":0,\"last_retry_attempt\":null,\"cache_key\":null,\"cache_fallback\":false,\"cache\":{\"request_id\":\"gpt\",\"model\":\"gpt-test\",\"completed_at_unix_ms\":2,\"input_tokens\":1000,\"cached_tokens\":800,\"cache_creation_tokens\":null,\"input_accounting\":\"includes_cached\",\"cache_key_status\":\"代理已补全\"},\"key_id\":\"key-1\",\"key_name\":\"主号\"}}", lines[2]);
         Assert.Equal(string.Empty, lines[3]);
     }
 
@@ -318,5 +323,63 @@ public class DailyJournalTests : IDisposable
         state.Change("live", new DailyChange.Failed(), 1);
         Assert.Equal(1UL, state.Snapshot().FailedRequests);
         Assert.Contains("\"route_id\":\"other\"", File.ReadAllText(path));
+    }
+
+    /// <summary>成功请求记录下当时实际使用的供应商 Key，重启后按 Key 拆分的用量要能重建。</summary>
+    [Fact]
+    public void ProviderKeyIsPersistedAndRebuiltOnRestart()
+    {
+        var spec = Spec("key-route");
+        var instant = Now(19, 12);
+        var ms = Millis(instant);
+        using (var state = new MetricsState(instant, spec))
+        {
+            state.Change("one", new DailyChange.Succeeded(Cache("one", true), "key-1", "主号"), ms);
+            state.Change("two", new DailyChange.Succeeded(Cache("two", false), "key-2", "备用"), ms + 1);
+        }
+
+        using var restored = new MetricsState(instant, spec);
+        var keys = restored.Snapshot().Cache.Keys;
+        Assert.Equal(2, keys.Count);
+        Assert.Equal("主号", keys["key-1"].Name);
+        Assert.Equal(1UL, keys["key-1"].Requests);
+        Assert.Equal("备用", keys["key-2"].Name);
+        Assert.Equal(1UL, keys["key-2"].Requests);
+    }
+
+    /// <summary>历史每日汇总只读文件：同一请求的多行只算一次，缺失的那天返回空汇总。</summary>
+    [Fact]
+    public void DailyHistorySummarisesOneDayWithoutCountingARequestTwice()
+    {
+        var spec = Spec("history-route");
+        var day = new DateOnly(2026, 9, 19);
+        var instant = Now(19, 12);
+        var ms = Millis(instant);
+        using (var state = new MetricsState(instant, spec))
+        {
+            state.Change("bad", new DailyChange.Failed(), ms);
+            state.Change("retried", new DailyChange.Retry(2), ms + 1);
+            state.Change("retried", new DailyChange.Succeeded(Cache("retried", true), "key-1", "主号"), ms + 2);
+        }
+
+        var summary = DailyHistory.ReadDay(_directory, "history-route", day);
+        Assert.True(summary.HasData);
+        Assert.Equal(2UL, summary.TotalRequests);
+        Assert.Equal(1UL, summary.SuccessfulRequests);
+        Assert.Equal(1UL, summary.FailedRequests);
+        Assert.Equal(1UL, summary.RetryCount);
+        Assert.Equal(1000UL, summary.InputTokens);
+        Assert.Equal(800UL, summary.CachedTokens);
+        Assert.Equal(80.0, summary.HitRatePercent());
+
+        var missing = DailyHistory.ReadDay(_directory, "history-route", day.AddDays(-1));
+        Assert.False(missing.HasData);
+        Assert.Equal(0UL, missing.TotalRequests);
+
+        var range = DailyHistory.ReadRange(_directory, "history-route", day.AddDays(-2), 3);
+        Assert.Equal(3, range.Count);
+        Assert.Equal(day, range[2].Date);
+        Assert.True(range[2].HasData);
+        Assert.False(range[0].HasData);
     }
 }

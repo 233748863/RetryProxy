@@ -178,4 +178,74 @@ public class MetricsTests
         Assert.True(Volatile.Read(ref count) >= 4);
         Assert.Equal(0UL, metrics.Snapshot().ActiveRequests);
     }
+
+    private static CacheRequest Usage(string id, string model, ulong? input, ulong? cached, ulong? creation)
+    {
+        return new CacheRequest
+        {
+            RequestId = id,
+            Model = model,
+            CompletedAtUnixMs = 0,
+            InputTokens = input,
+            CachedTokens = cached,
+            CacheCreationTokens = creation,
+            InputAccounting = CacheInputAccounting.IncludesCached,
+            CacheKeyStatus = "保持原请求",
+        };
+    }
+
+    [Fact]
+    public void UsageIsBrokenDownByModelAndByProviderKey()
+    {
+        var metrics = new ProxyMetrics();
+        metrics.Success("a", Usage("a", "claude-sonnet-5-5", 1000, 900, 100), "key-1", "主号");
+        metrics.Success("b", Usage("b", "claude-sonnet-5-5", 2000, 1000, 0), "key-2", "备用");
+        metrics.Success("c", Usage("c", "gpt-5.5", 500, 0, 0), "key-1", "主号");
+
+        var cache = metrics.Snapshot().Cache;
+        Assert.Equal(2, cache.Models.Count);
+        var claude = cache.Models["claude-sonnet-5-5"];
+        Assert.Equal(2UL, claude.Requests);
+        Assert.Equal(2UL, claude.MeasuredRequests);
+        Assert.Equal(3000UL, claude.InputTokens);
+        Assert.Equal(1900UL, claude.CachedTokens);
+        Assert.Equal(100UL, claude.CacheCreationTokens);
+        Assert.Equal(100.0 * 1900 / 3000, claude.HitRatePercent()!.Value, 9);
+
+        var gpt = cache.Models["gpt-5.5"];
+        Assert.Equal(1UL, gpt.Requests);
+        Assert.Equal(0.0, gpt.HitRatePercent());
+
+        Assert.Equal(2, cache.Keys.Count);
+        var main = cache.Keys["key-1"];
+        Assert.Equal("主号", main.Name);
+        Assert.Equal(2UL, main.Requests);
+        Assert.Equal(1500UL, main.InputTokens);
+        Assert.Equal(900UL, main.CachedTokens);
+        Assert.Equal("备用", cache.Keys["key-2"].Name);
+    }
+
+    [Fact]
+    public void UsageBreakdownCountsRequestsWithoutValidUsageButKeepsThemOutOfTheRate()
+    {
+        var metrics = new ProxyMetrics();
+        metrics.Success("a", Usage("a", "m", 100, null, null), "key-1", "主号");
+
+        var bucket = metrics.Snapshot().Cache.Keys["key-1"];
+        Assert.Equal(1UL, bucket.Requests);
+        Assert.Equal(0UL, bucket.MeasuredRequests);
+        Assert.Null(bucket.HitRatePercent());
+    }
+
+    [Fact]
+    public void UsageBreakdownStaysOutOfTheSerialisedSnapshot()
+    {
+        var metrics = new ProxyMetrics();
+        metrics.Success("a", Usage("a", "m", 100, 50, 0), "key-1", "主号");
+
+        var json = Serialize(metrics.Snapshot().Cache);
+        Assert.DoesNotContain("Models", json);
+        Assert.DoesNotContain("Keys", json);
+        Assert.DoesNotContain("key-1", json);
+    }
 }

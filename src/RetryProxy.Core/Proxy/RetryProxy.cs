@@ -1809,6 +1809,8 @@ public sealed class RetryProxy
             ctx.TotalTimeoutSeconds,
             ctx.Cancel,
             plan.LogFields,
+            plan.Snapshot.KeyId,
+            plan.Snapshot.KeyName,
             ctx.Diagnostics);
         if (upstreamFinished)
         {

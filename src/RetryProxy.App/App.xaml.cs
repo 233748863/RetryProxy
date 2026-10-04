@@ -82,6 +82,7 @@ public partial class App : Application
             services.AddView<ProviderPage, ProviderPageViewModel>();
             services.AddView<StatisticsPage, StatisticsPageViewModel>();
             services.AddSingleton<OverviewPageViewModel>();
+            services.AddSingleton<ActiveRequestsViewModel>();
             services.AddView<PreparationPage, PreparationPageViewModel>();
             services.AddView<RequestDiagnosticsPage, RequestDiagnosticsPageViewModel>();
             services.AddView<LogPage, LogPageViewModel>();

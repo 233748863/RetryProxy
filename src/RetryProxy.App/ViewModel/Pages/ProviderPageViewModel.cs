@@ -47,6 +47,8 @@ public partial class ProviderPageViewModel : ViewModel
     [ObservableProperty] private string _currentKey = string.Empty;
     [ObservableProperty] private string _today = string.Empty;
     [ObservableProperty] private bool _keepAliveEnabled;
+    [ObservableProperty] private string _keepAliveHint = string.Empty;
+    [ObservableProperty] private string? _keepAliveHintToolTip;
     [ObservableProperty] private bool _hasCurrentProvider;
     public event Action<string>? LocateRequested;
     internal static string T(string text) => I18nService.Instance.Translate(text);
@@ -107,7 +109,14 @@ public partial class ProviderPageViewModel : ViewModel
         CanTakeOver = !ClientConfigPaths.WritesBlocked && key is not null;
         ClientActionText = T(connection.Status is ClientConnectionStatus.Modified or ClientConnectionStatus.Unavailable ? "重新接管" : "一键接管");
         var metrics = route is not null && Workspace.Services.TryGetValue(route.Id, out var service) ? service.Metrics.Snapshot() : new MetricsSnapshot();
-        Today = string.Format(T("今日 {0} · 成功 {1} · 重试 {2} · 失败 {3}"), metrics.TotalRequests, metrics.SuccessfulRequests, metrics.RetryCount, metrics.FailedRequests);
+        Today = string.Format(T("通道 {0}/{1} 在运行 · 今日 {2} · 成功 {3} · 重试 {4} · 失败 {5}"),
+            Workspace.RunningCount(), Workspace.Config.Routes.Count,
+            metrics.TotalRequests, metrics.SuccessfulRequests, metrics.RetryCount, metrics.FailedRequests);
+        KeepAliveHint = route is null ? string.Empty : Workspace.KeepAliveHint(route);
+        var watchdog = route is not null && Workspace.RouteKeepAlives.TryGetValue(route.Id, out var alive) ? alive.Snapshot() : null;
+        KeepAliveHintToolTip = watchdog?.PreparationLastError is { } reason
+            ? string.Format(T("最近一次后台问答未完成：{0}"), reason)
+            : null;
         _syncing = true;
         KeepAliveEnabled = route?.KeepaliveEnabled ?? false;
         _syncing = false;

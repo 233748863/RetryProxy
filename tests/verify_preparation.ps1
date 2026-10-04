@@ -329,7 +329,7 @@ try {
     Wait-For { @(Find-Elements 'ProxySettings' -ById).Count -gt 0 } 'Application did not open Providers by default'
     Invoke-Control 'SelectCodex' -ById
     $destinations = @(
-        @{ Navigation = 'StatisticsNavigation'; Marker = 'ManageProviders' },
+        @{ Navigation = 'StatisticsNavigation'; Marker = 'StatisticsTabOverview' },
         @{ Navigation = 'PreparationNavigation'; Marker = 'AddPreparation' },
         @{ Navigation = '运行日志'; Marker = 'LogCounter'; ByName = $true },
         @{ Navigation = '软件设置'; Marker = 'SwitchAppearance'; ByName = $true }
@@ -342,24 +342,40 @@ try {
         Wait-For { @(Find-Elements 'ProxySettings' -ById).Count -gt 0 } 'Navigation did not return to Providers'
     }
     Invoke-Control 'StatisticsNavigation' -ById
-    Wait-For { @(Find-Elements 'ManageProviders' -ById).Count -gt 0 } 'Statistics did not load'
-    if (@(Find-Elements 'CachePageTitle' -ById).Count -eq 0) { throw 'Statistics lost the cache details section' }
+    Wait-For { @(Find-Elements 'StatisticsTabOverview' -ById).Count -gt 0 } 'Statistics did not load'
+    # 概况/缓存/在途三个子标签各自一屏，切换后只显示当前标签的内容。
+    Invoke-Control 'StatisticsTabCache' -ById
+    Wait-For { @(Find-Elements '统计范围').Count -gt 0 } 'Statistics lost the cache details section'
+    Invoke-Control 'StatisticsTabActive' -ById
+    Wait-For {
+        @(Find-Elements '统计范围').Count -eq 0 -and @(Find-Elements '在途请求').Count -gt 0
+    } 'Statistics did not switch to the active requests tab'
+    Invoke-Control 'StatisticsTabOverview' -ById
+    Wait-For {
+        @(Find-Elements '在途请求').Count -eq 0 -and @(Find-Elements 'OverviewTotalRequests' -ById).Count -gt 0
+    } 'Statistics did not return to the overview tab'
     foreach ($id in @('OverviewChannelPicker', 'CacheChannelPicker', 'EnableAllChannels', 'DisableAllChannels')) {
         if (@(Find-Elements $id -ById).Count -gt 0) { throw "Removed control is still on Statistics: $id" }
     }
-    foreach ($client in @(@{ Selector = 'SelectClaude'; Port = $claudePort }, @{ Selector = 'SelectCodex'; Port = $codexPort })) {
+    $expectedProviders = if ($WithChannels) {
+        @(@{ Selector = 'SelectClaude'; Provider = $longProvider }, @{ Selector = 'SelectCodex'; Provider = 'fixture' })
+    } else {
+        @(@{ Selector = 'SelectClaude'; Provider = '未选择供应商' }, @{ Selector = 'SelectCodex'; Provider = '未选择供应商' })
+    }
+    foreach ($client in $expectedProviders) {
         Invoke-Control $client.Selector -ById
         Wait-For {
-            $url = @(Find-Elements 'OverviewLocalUrl' -ById)[0]
-            return $null -ne $url -and $url.Current.Name.Contains([string]$client.Port)
+            $current = @(Find-Elements 'StatisticsCurrentProviderKey' -ById)[0]
+            return $null -ne $current -and $current.Current.Name.Contains($client.Provider)
         } 'Client selection did not update Statistics'
         Assert-WindowStable 'switching the current client in Statistics'
     }
     if (-not $WithChannels) {
         Wait-For { @(Find-Elements '未选择供应商').Count -gt 0 } 'Statistics lost the unconfigured-client state'
     }
-    Invoke-Control 'ManageProviders' -ById
-    Wait-For { @(Find-Elements 'ProxySettings' -ById).Count -gt 0 } 'Statistics shortcut did not open Providers'
+    Invoke-Control 'ProviderNavigation' -ById
+    Wait-For { @(Find-Elements 'ProxySettings' -ById).Count -gt 0 } 'Statistics did not lead back to Providers'
+    Wait-For { @(Find-Elements 'ProviderKeepAliveHint' -ById).Count -gt 0 } 'Providers lost the channel summary line'
     Invoke-Control 'PreparationNavigation' -ById
     Wait-For { @(Find-Elements '当前客户端尚未添加准备任务').Count -gt 0 } 'Empty preparation page was not shown'
     Assert-WindowStable 'opening the preparation page'

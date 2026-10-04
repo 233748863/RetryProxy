@@ -312,7 +312,7 @@ try {
         Invoke-UiElement $mainWindow 'SelectCodex' -ById
         Wait-TrayCondition { $null -ne (Find-UiElement $mainWindow 'CurrentProviderKey' -ById) } 'Current provider and key are missing'
         Invoke-NavigationItem $mainWindow '统计'
-        Wait-TrayCondition { $null -ne (Find-UiElement $mainWindow 'ManageProviders' -ById) } 'Statistics did not load'
+        Wait-TrayCondition { $null -ne (Find-UiElement $mainWindow 'StatisticsTabOverview' -ById) } 'Statistics did not load'
         foreach ($id in @('ToggleChannel', 'EnableAllChannels', 'DisableAllChannels', 'ChannelKeepAlive')) {
             if ($null -ne (Find-UiElement $mainWindow $id -ById)) { throw "Management control is still on Statistics: $id" }
         }
@@ -320,8 +320,15 @@ try {
             $counter = Find-UiElement $mainWindow 'OverviewTotalRequests' -ById
             return $null -ne $counter -and $counter.Current.Name -eq [string]$cacheHealth.metrics.total_requests
         } 'Statistics did not show current-client request totals'
-        Invoke-UiElement $mainWindow 'ManageProviders' -ById
-        Wait-TrayCondition { $null -ne (Find-UiElement $mainWindow 'ProxySettings' -ById) } 'Manage providers shortcut failed'
+        Invoke-UiElement $mainWindow 'StatisticsTabCache' -ById
+        Wait-TrayCondition { $null -ne (Find-UiElement $mainWindow '统计范围') } 'Statistics did not switch to the cache tab'
+        Invoke-UiElement $mainWindow 'StatisticsTabActive' -ById
+        Wait-TrayCondition { $null -eq (Find-UiElement $mainWindow '统计范围') } 'Statistics kept the cache tab while another tab is active'
+        Invoke-UiElement $mainWindow 'StatisticsTabOverview' -ById
+        Wait-TrayCondition { $null -ne (Find-UiElement $mainWindow 'OverviewTotalRequests' -ById) } 'Statistics did not return to the overview tab'
+        # 统计页不再带“供应商管理”快捷按钮，回供应商页改用导航项。
+        Invoke-NavigationItem $mainWindow '供应商'
+        Wait-TrayCondition { $null -ne (Find-UiElement $mainWindow 'ProxySettings' -ById) } 'Statistics did not lead back to Providers'
         Invoke-UiElement $mainWindow 'ProxySettings' -ById
         Wait-TrayCondition { $null -ne (Find-UiElement $mainWindow 'ChannelListenPort' -ById) } 'Proxy settings drawer did not open'
         Invoke-UiElement $mainWindow 'ToggleProxy' -ById
@@ -342,6 +349,7 @@ try {
         Wait-TrayCondition { $null -ne (Find-UiElement $mainWindow 'SwitchAppearance' -ById) } 'Appearance setting is missing'
         Invoke-UiElement $mainWindow 'SwitchAppearance' -ById
         Invoke-NavigationItem $mainWindow '统计'
+        Invoke-UiElement $mainWindow 'StatisticsTabOverview' -ById
         Wait-TrayCondition {
             $counter = Find-UiElement $mainWindow 'OverviewTotalRequests' -ById
             return $null -ne $counter -and $counter.Current.Name -eq [string]$cacheHealth.metrics.total_requests
@@ -378,9 +386,10 @@ try {
         } 'Window did not return to normal size before cache checks'
         Write-Host 'Tray minimize, hide and restore checks passed.'
 
-        # 缓存明细在统计页下半部分，导航和查看记录不影响代理。
+        # 缓存明细是统计页的“缓存”子标签，导航和查看记录不影响代理。
         Invoke-NavigationItem $mainWindow '统计'
-        Wait-TrayCondition { $null -ne (Find-UiElement $mainWindow 'CachePageTitle' -ById) } 'Statistics did not include cache details'
+        Invoke-UiElement $mainWindow 'StatisticsTabCache' -ById
+        Wait-TrayCondition { $null -ne (Find-UiElement $mainWindow '统计范围') } 'Statistics did not include cache details'
         $cachePageResult = Invoke-RestMethod "http://127.0.0.1:$proxyPort/test" -TimeoutSec 5
         if ($process.HasExited -or $cachePageResult.result -ne 'proxy-ok') { throw 'Opening the cache page interrupted the proxy' }
         Invoke-NavigationItem $mainWindow '统计'

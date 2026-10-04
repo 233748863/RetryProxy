@@ -65,6 +65,28 @@ public sealed class ActiveRequest : IEquatable<ActiveRequest>
     public override int GetHashCode() => HashCode.Combine(RequestId, Method, Path, Phase, Attempt);
 }
 
+/// <summary>按模型或按 Key 汇总的当日用量；Key 只保留 ID 与显示名称，不含密钥。</summary>
+public sealed class UsageBreakdown
+{
+    public string Id { get; set; } = string.Empty;
+
+    public string Name { get; set; } = string.Empty;
+
+    public ulong Requests { get; set; }
+
+    public ulong MeasuredRequests { get; set; }
+
+    public ulong InputTokens { get; set; }
+
+    public ulong CachedTokens { get; set; }
+
+    public ulong CacheCreationTokens { get; set; }
+
+    public double? HitRatePercent() => InputTokens > 0 ? 100.0 * CachedTokens / InputTokens : null;
+
+    public UsageBreakdown Clone() => (UsageBreakdown)MemberwiseClone();
+}
+
 public sealed class CacheSnapshot
 {
     public const int HistoryLimit = 20;
@@ -112,6 +134,14 @@ public sealed class CacheSnapshot
     [JsonPropertyName("recent_requests")]
     public List<CacheRequest> RecentRequests { get; set; } = new();
 
+    /// <summary>按模型拆分的当日用量；只给界面用，不写进 health。</summary>
+    [JsonIgnore]
+    public Dictionary<string, UsageBreakdown> Models { get; set; } = new(StringComparer.Ordinal);
+
+    /// <summary>按供应商 Key 拆分的当日用量；只给界面用，不写进 health。</summary>
+    [JsonIgnore]
+    public Dictionary<string, UsageBreakdown> Keys { get; set; } = new(StringComparer.Ordinal);
+
     public double? HitRatePercent() => InputTokens > 0 ? 100.0 * CachedTokens / InputTokens : null;
 
     public double? RecentHitRatePercent()
@@ -130,17 +160,18 @@ public sealed class CacheSnapshot
         return input > 0 ? (double)(100m * cached / input) : null;
     }
 
-    internal void Record(CacheRequest request)
+    internal void Record(CacheRequest request, string keyId = "", string keyName = "")
     {
-        if (request.Usage() is { } usage)
+        var usage = request.Usage();
+        if (usage is { } usageTokens)
         {
             ulong inputTokens;
             ulong cachedTokens;
             ulong createdTokens;
             try
             {
-                inputTokens = checked(InputTokens + usage.Input);
-                cachedTokens = checked(CachedTokens + usage.Cached);
+                inputTokens = checked(InputTokens + usageTokens.Input);
+                cachedTokens = checked(CachedTokens + usageTokens.Cached);
                 createdTokens = checked(CacheCreationTokens + (request.CacheCreationTokens ?? 0));
             }
             catch (OverflowException)
@@ -157,16 +188,19 @@ public sealed class CacheSnapshot
                 CacheCreationMeasuredRequests = Saturating.Add(CacheCreationMeasuredRequests, 1);
             }
 
-            if (usage.Cached == 0)
+            if (usageTokens.Cached == 0)
             {
                 ZeroHitRequests = Saturating.Add(ZeroHitRequests, 1);
-                ZeroHitInputTokens += usage.Input;
+                ZeroHitInputTokens += usageTokens.Input;
             }
         }
         else
         {
             UnmeasuredRequests = Saturating.Add(UnmeasuredRequests, 1);
         }
+
+        AddBreakdown(Models, request.Model, request.Model, usage, request.CacheCreationTokens);
+        AddBreakdown(Keys, keyId, keyName, usage, request.CacheCreationTokens);
 
         if (RecentRequests.Count == HistoryLimit)
         {
@@ -176,6 +210,30 @@ public sealed class CacheSnapshot
         RecentRequests.Add(request);
     }
 
+    /// <summary>把一次请求的用量累加到指定分组的桶里；没有 Key 记录的旧数据归到空 ID 桶。</summary>
+    private static void AddBreakdown(Dictionary<string, UsageBreakdown> buckets, string id, string name, (ulong Input, ulong Cached)? usage, ulong? creation)
+    {
+        if (!buckets.TryGetValue(id, out var bucket))
+        {
+            bucket = new UsageBreakdown { Id = id, Name = name };
+            buckets[id] = bucket;
+        }
+
+        if (name.Length > 0)
+        {
+            bucket.Name = name;
+        }
+
+        bucket.Requests = Saturating.Add(bucket.Requests, 1);
+        if (usage is { } tokens)
+        {
+            bucket.MeasuredRequests = Saturating.Add(bucket.MeasuredRequests, 1);
+            bucket.InputTokens = Saturating.Add(bucket.InputTokens, tokens.Input);
+            bucket.CachedTokens = Saturating.Add(bucket.CachedTokens, tokens.Cached);
+            bucket.CacheCreationTokens = Saturating.Add(bucket.CacheCreationTokens, creation ?? 0);
+        }
+    }
+
     public CacheSnapshot Clone()
     {
         var clone = (CacheSnapshot)MemberwiseClone();
@@ -183,6 +241,19 @@ public sealed class CacheSnapshot
         foreach (var request in RecentRequests)
         {
             clone.RecentRequests.Add(request.Clone());
+        }
+
+        clone.Models = CloneBreakdowns(Models);
+        clone.Keys = CloneBreakdowns(Keys);
+        return clone;
+    }
+
+    private static Dictionary<string, UsageBreakdown> CloneBreakdowns(Dictionary<string, UsageBreakdown> source)
+    {
+        var clone = new Dictionary<string, UsageBreakdown>(source.Count, StringComparer.Ordinal);
+        foreach (var pair in source)
+        {
+            clone[pair.Key] = pair.Value.Clone();
         }
 
         return clone;

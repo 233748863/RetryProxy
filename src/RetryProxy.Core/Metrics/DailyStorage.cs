@@ -30,14 +30,18 @@ public sealed class DailyStorage : IDailyStorage
     }
 
     /// <summary>通道 ID 是配置数据，不能当作可信的路径片段，所以只用它的哈希做目录名。</summary>
-    public string Directory
+    public string Directory => DirectoryFor(_logDirectory, _routeId);
+
+    /// <summary>某通道的每日统计目录；读取历史时不必先创建实例。</summary>
+    public static string DirectoryFor(string logDirectory, string routeId)
     {
-        get
-        {
-            var digest = SHA256.HashData(Encoding.UTF8.GetBytes(_routeId));
-            return Path.Combine(_logDirectory, "daily-statistics", Convert.ToHexString(digest).ToLowerInvariant());
-        }
+        var digest = SHA256.HashData(Encoding.UTF8.GetBytes(routeId));
+        return Path.Combine(logDirectory, "daily-statistics", Convert.ToHexString(digest).ToLowerInvariant());
     }
+
+    /// <summary>某通道某一天的统计文件路径。</summary>
+    public static string JournalPathFor(string logDirectory, string routeId, DateOnly date)
+        => Path.Combine(DirectoryFor(logDirectory, routeId), $"{DateText(date)}.jsonl");
 
     public string JournalPath(DateOnly date) => Path.Combine(Directory, $"{DateText(date)}.jsonl");
 

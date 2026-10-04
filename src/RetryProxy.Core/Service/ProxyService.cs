@@ -85,6 +85,9 @@ public sealed class ProxyService
 
     public string RouteName { get; }
 
+    /// <summary>本通道日志目录；统计页用它读取历史每日统计文件。</summary>
+    public string LogDirectory => _logger.DirectoryPath;
+
     public ProxyMetrics Metrics { get; }
 
     public KeepAliveWatchdog KeepAlive { get; private set; }

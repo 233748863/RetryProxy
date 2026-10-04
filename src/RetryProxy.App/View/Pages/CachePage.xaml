@@ -36,15 +36,6 @@
     </UserControl.Resources>
 
         <StackPanel>
-            <TextBlock Margin="0,0,0,12"
-                       AutomationProperties.AutomationId="CachePageTitle"
-                       FontSize="16" FontWeight="SemiBold"
-                       Text="{i18n:T 缓存明细}" />
-
-            <TextBlock Foreground="{DynamicResource TextFillColorTertiaryBrush}"
-                       Text="{i18n:T 当前客户端尚无通道，请前往供应商页配置；收到成功回复后这里会显示缓存记录}"
-                       Visibility="{Binding HasChannel, Converter={StaticResource BooleanToVisibilityRevertConverter}}" />
-
             <ui:Card Padding="14" Visibility="{Binding HasChannel, Converter={StaticResource BooleanToVisibilityConverter}}">
                 <StackPanel>
                     <!--  行 1：今日命中  -->

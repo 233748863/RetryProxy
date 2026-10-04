@@ -6,6 +6,7 @@
       xmlns:i18n="clr-namespace:RetryProxy.Service.I18n"
       xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
       xmlns:pages="clr-namespace:RetryProxy.ViewModel.Pages"
+      xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
       xmlns:views="clr-namespace:RetryProxy.View.Pages"
       Title="StatisticsPage"
       d:DataContext="{d:DesignInstance Type=pages:StatisticsPageViewModel}"
@@ -14,13 +15,93 @@
       FontFamily="{StaticResource TextThemeFontFamily}"
       Foreground="{DynamicResource TextFillColorPrimaryBrush}"
       mc:Ignorable="d">
-    <!-- 两个分区共用页面滚动和客户端选择，保留原统计图、瓦片、明细及其筛选逻辑。 -->
+    <!--  顶部：客户端选择 + 当前供应商·Key 上下文；下面三个子标签各自一屏，不再堆成一条长滚动。  -->
     <ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
-        <StackPanel Margin="{StaticResource PagePadding}">
-            <TextBlock Margin="0,0,0,12" FontSize="16" FontWeight="SemiBold" Text="{i18n:T 统计}" />
-            <controls:ClientSelector Margin="0,0,0,12" />
-            <views:OverviewPage DataContext="{Binding Overview}" />
-            <views:CachePage DataContext="{Binding Cache}" />
+        <StackPanel Margin="24,20,24,28">
+            <Grid Margin="0,0,0,10">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <TextBlock VerticalAlignment="Center"
+                           FontSize="18"
+                           FontWeight="SemiBold"
+                           Text="{i18n:T 统计}" />
+                <TextBlock Grid.Column="1"
+                           VerticalAlignment="Center"
+                           FontSize="11"
+                           Foreground="{Binding DateCaptionBrush}"
+                           Text="{Binding DateCaption}"
+                           TextTrimming="CharacterEllipsis"
+                           ToolTip="{Binding DateHelp}" />
+            </Grid>
+
+            <controls:ClientSelector Margin="0,0,0,10" />
+
+            <Grid Margin="0,0,0,12"
+                  Visibility="{Binding HasChannel, Converter={StaticResource BooleanToVisibilityConverter}}">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0"
+                           VerticalAlignment="Center"
+                           FontSize="11"
+                           Foreground="{DynamicResource TextFillColorTertiaryBrush}"
+                           Text="{i18n:T 当前：}" />
+                <TextBlock Grid.Column="1"
+                           Margin="4,0,8,0"
+                           VerticalAlignment="Center"
+                           AutomationProperties.AutomationId="StatisticsCurrentProviderKey"
+                           Text="{Binding CurrentProviderKey}"
+                           TextTrimming="CharacterEllipsis"
+                           ToolTip="{Binding CurrentProviderKey}" />
+                <ui:InfoBadge Grid.Column="2"
+                              VerticalAlignment="Center"
+                              Severity="{Binding StateSeverity}"
+                              Value="{Binding StateLabel}" />
+            </Grid>
+
+            <TextBlock Margin="0,0,0,12"
+                       Foreground="{DynamicResource TextFillColorTertiaryBrush}"
+                       Text="{Binding EmptyHint}"
+                       TextWrapping="Wrap"
+                       Visibility="{Binding HasChannel, Converter={StaticResource BooleanToVisibilityRevertConverter}}" />
+
+            <StackPanel Margin="0,0,0,12"
+                        Orientation="Horizontal"
+                        Visibility="{Binding HasChannel, Converter={StaticResource BooleanToVisibilityConverter}}">
+                <ui:Button AutomationProperties.AutomationId="StatisticsTabOverview"
+                           Appearance="{Binding IsOverview, Converter={StaticResource BooleanToChipAppearanceConverter}}"
+                           Command="{Binding SelectTabCommand}"
+                           CommandParameter="overview"
+                           Content="{i18n:T 概况}"
+                           Margin="0"
+                           Style="{StaticResource ChipButton}" />
+                <ui:Button AutomationProperties.AutomationId="StatisticsTabCache"
+                           Appearance="{Binding IsCache, Converter={StaticResource BooleanToChipAppearanceConverter}}"
+                           Command="{Binding SelectTabCommand}"
+                           CommandParameter="cache"
+                           Content="{i18n:T 缓存}"
+                           Style="{StaticResource ChipButton}" />
+                <ui:Button AutomationProperties.AutomationId="StatisticsTabActive"
+                           Appearance="{Binding IsActive, Converter={StaticResource BooleanToChipAppearanceConverter}}"
+                           Command="{Binding SelectTabCommand}"
+                           CommandParameter="active"
+                           Content="{i18n:T 在途}"
+                           Style="{StaticResource ChipButton}" />
+            </StackPanel>
+
+            <Grid Visibility="{Binding IsOverview, Converter={StaticResource BooleanToVisibilityConverter}}">
+                <views:OverviewPage DataContext="{Binding Overview}" />
+            </Grid>
+            <Grid Visibility="{Binding IsCache, Converter={StaticResource BooleanToVisibilityConverter}}">
+                <views:CachePage DataContext="{Binding Cache}" />
+            </Grid>
+            <Grid Visibility="{Binding IsActive, Converter={StaticResource BooleanToVisibilityConverter}}">
+                <views:ActiveRequestsPage DataContext="{Binding Active}" />
+            </Grid>
         </StackPanel>
     </ScrollViewer>
 </Page>

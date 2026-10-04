@@ -148,6 +148,8 @@ internal sealed class MetricsState : IDisposable
                 }
 
                 record.Cache = cache;
+                record.KeyId = succeeded.KeyId;
+                record.KeyName = succeeded.KeyName;
                 break;
             case DailyChange.Failed when record.Outcome is null:
                 record.Outcome = RequestOutcome.Failure;
@@ -167,7 +169,9 @@ internal sealed class MetricsState : IDisposable
             || before.Outcome != record.Outcome
             || before.RetryCount != record.RetryCount
             || before.CacheKey != record.CacheKey
-            || before.CacheFallback != record.CacheFallback;
+            || before.CacheFallback != record.CacheFallback
+            || before.KeyId != record.KeyId
+            || before.KeyName != record.KeyName;
         if (changed)
         {
             record.UpdatedAtUnixMs = nowMs;
@@ -199,10 +203,10 @@ internal sealed class MetricsState : IDisposable
                     _totals.SuccessfulRequests = Saturating.Add(_totals.SuccessfulRequests, 1);
                     if (after.Cache is { } cache)
                     {
-                        _totals.Cache.Record(cache.Clone());
+                        _totals.Cache.Record(cache.Clone(), after.KeyId, after.KeyName);
                         if (cache.InputAccounting == CacheInputAccounting.IncludesCached && PromptCache.IsGptModel(cache.Model))
                         {
-                            _totals.GptCache.Record(cache.Clone());
+                            _totals.GptCache.Record(cache.Clone(), after.KeyId, after.KeyName);
                         }
                     }
 

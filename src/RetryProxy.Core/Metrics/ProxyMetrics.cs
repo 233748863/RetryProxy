@@ -130,7 +130,8 @@ public sealed class ProxyMetrics : IDisposable
         NotifyUi();
     }
 
-    public void Success(string requestId, CacheRequest? cache) => Change(requestId, new DailyChange.Succeeded(cache));
+    public void Success(string requestId, CacheRequest? cache, string keyId = "", string keyName = "")
+        => Change(requestId, new DailyChange.Succeeded(cache, keyId, keyName));
 
     public void Retry(string requestId, ulong attempt) => Change(requestId, new DailyChange.Retry(attempt));
 

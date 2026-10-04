@@ -48,6 +48,16 @@ public sealed class DailyRequest
     [JsonPropertyName("cache")]
     public CacheRequest? Cache { get; set; }
 
+    /// <summary>
+    /// 本次成功请求实际使用的供应商 Key（只存 ID 与显示名称，不含密钥）。
+    /// 旧版日志与保活请求没有这一段，读出来是空字符串，界面显示为"未记录"。
+    /// </summary>
+    [JsonPropertyName("key_id")]
+    public string KeyId { get; set; } = string.Empty;
+
+    [JsonPropertyName("key_name")]
+    public string KeyName { get; set; } = string.Empty;
+
     public void Retry(ulong attempt)
     {
         if (LastRetryAttempt is null || attempt > LastRetryAttempt.Value)
@@ -70,7 +80,7 @@ internal abstract record DailyChange
 {
     public sealed record Started : DailyChange;
 
-    public sealed record Succeeded(CacheRequest? Cache) : DailyChange;
+    public sealed record Succeeded(CacheRequest? Cache, string KeyId = "", string KeyName = "") : DailyChange;
 
     public sealed record Failed : DailyChange;
 

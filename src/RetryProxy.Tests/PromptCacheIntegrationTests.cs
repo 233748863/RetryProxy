@@ -102,13 +102,13 @@ public class PromptCacheIntegrationTests
     }
 
     [Fact]
-    public async Task ClaudeCacheDistinguishesCreationOnlyMissingUsageAndFailedReplies()
+    public async Task ClaudeCacheCountsMissingWriteCreationOnlyAndFailedReplies()
     {
-        foreach (var (body, measured, unmeasured, zeroHit) in new (string, ulong, ulong, ulong)[]
+        foreach (var (body, measured, unmeasured, zeroHit, inputTokens, creationTokens, hitRate) in new (string, ulong, ulong, ulong, ulong, ulong, double?)[]
                  {
-                     ("{\"model\":\"claude-test\",\"content\":[{\"type\":\"text\",\"text\":\"fixture-answer\"}],\"stop_reason\":\"end_turn\",\"usage\":{\"input_tokens\":0,\"output_tokens\":5,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":1000}}", 1, 0, 1),
-                     ("{\"model\":\"claude-test\",\"content\":[{\"type\":\"text\",\"text\":\"fixture-answer\"}],\"stop_reason\":\"end_turn\",\"usage\":{\"input_tokens\":100,\"output_tokens\":5,\"cache_read_input_tokens\":800}}", 0, 1, 0),
-                     ("{\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\"},\"usage\":{\"input_tokens\":100,\"output_tokens\":0,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":0}}", 0, 0, 0),
+                     ("{\"model\":\"claude-test\",\"content\":[{\"type\":\"text\",\"text\":\"fixture-answer\"}],\"stop_reason\":\"end_turn\",\"usage\":{\"input_tokens\":0,\"output_tokens\":5,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":1000}}", 1, 0, 1, 1000UL, 1000UL, 0.0),
+                     ("{\"model\":\"claude-test\",\"content\":[{\"type\":\"text\",\"text\":\"fixture-answer\"}],\"stop_reason\":\"end_turn\",\"usage\":{\"input_tokens\":100,\"output_tokens\":5,\"cache_read_input_tokens\":800}}", 1, 0, 0, 900UL, 0UL, 100.0 * 800 / 900),
+                     ("{\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\"},\"usage\":{\"input_tokens\":100,\"output_tokens\":0,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":0}}", 0, 0, 0, 0UL, 0UL, null),
                  })
         {
             await using var proxy = await Start(context => Upstream.Json(context, 200, body), 5.0, 0);
@@ -122,16 +122,9 @@ public class PromptCacheIntegrationTests
             Assert.Equal(zeroHit, snapshot.Cache.ZeroHitRequests);
             Assert.Equal((int)(measured + unmeasured), snapshot.Cache.RecentRequests.Count);
             Assert.Equal(0UL, snapshot.GptCache.MeasuredRequests);
-            if (measured == 1)
-            {
-                Assert.Equal(1000UL, snapshot.Cache.InputTokens);
-                Assert.Equal(1000UL, snapshot.Cache.CacheCreationTokens);
-                Assert.Equal(0.0, snapshot.Cache.HitRatePercent());
-            }
-            else
-            {
-                Assert.Null(snapshot.Cache.HitRatePercent());
-            }
+            Assert.Equal(inputTokens, snapshot.Cache.InputTokens);
+            Assert.Equal(creationTokens, snapshot.Cache.CacheCreationTokens);
+            Assert.Equal(hitRate, snapshot.Cache.HitRatePercent());
         }
     }
 

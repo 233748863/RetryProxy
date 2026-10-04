@@ -215,7 +215,7 @@ public class LegacyLogRestoreTests : IDisposable
     }
 
     [Fact]
-    public void ClaudeUsageIsCombinedOnlyWhenAllThreeFieldsWereLogged()
+    public void ClaudeUsageWithoutReportedWriteUsesInputPlusRead()
     {
         WriteLog(
             "retry-proxy.log",
@@ -225,7 +225,7 @@ public class LegacyLogRestoreTests : IDisposable
             "2026-09-19 01:00:03 INFO [通道][44444444] POST /v1/chat/completions -> 上游 HTTP 200，模型 other-model，输入 未获取 / 输出 未获取 token，耗时 1.00 秒");
         var records = LegacyLogRestore.Restore(_directory, "通道", Date);
         Assert.Equal((1000UL, 800UL), records["11111111"].Cache!.Usage());
-        Assert.Null(records["22222222"].Cache!.TotalInputTokens());
+        Assert.Equal((800UL, 800UL), records["22222222"].Cache!.Usage());
         Assert.Equal((1000UL, 0UL), records["33333333"].Cache!.Usage());
         var absent = records["44444444"].Cache!;
         Assert.Equal("other-model", absent.Model);

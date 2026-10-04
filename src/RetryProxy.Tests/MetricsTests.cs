@@ -2,6 +2,7 @@ using System;
 using System.Text.Json;
 using System.Threading;
 using RetryProxy.Core.Metrics;
+using RetryProxy.Core.Workspace;
 using Xunit;
 
 namespace RetryProxy.Tests;
@@ -98,10 +99,13 @@ public class MetricsTests
         claude.RequestId = "00000002";
         metrics.RecordCacheRequest(claude);
         var cache = metrics.Snapshot().Cache;
-        Assert.Equal(1UL, cache.UnmeasuredRequests);
+        Assert.Equal(0UL, cache.UnmeasuredRequests);
         Assert.Equal(0UL, cache.ZeroHitRequests);
-        Assert.Equal(65.0, cache.HitRatePercent());
-        Assert.Null(cache.RecentRequests[^1].TotalInputTokens());
+        Assert.Equal(2900UL, cache.InputTokens);
+        Assert.Equal(2100UL, cache.CachedTokens);
+        Assert.Equal(100.0 * 2100 / 2900, cache.HitRatePercent());
+        Assert.Equal(900UL, cache.RecentRequests[^1].TotalInputTokens());
+        Assert.Equal(100.0 * 800 / 900, cache.RecentRequests[^1].HitRatePercent());
     }
 
     [Fact]
@@ -118,6 +122,20 @@ public class MetricsTests
         request.InputTokens = ulong.MaxValue;
         Assert.Null(request.Usage());
         Assert.True(request.UsageIsInvalid());
+    }
+
+    [Fact]
+    public void ClaudeTotalInputWithoutReportedWriteUsesInputPlusRead()
+    {
+        var request = MakeCacheRequest(0, 100, 800);
+        request.InputAccounting = CacheInputAccounting.ExcludesCached;
+        Assert.Equal(900UL, request.TotalInputTokens());
+        Assert.Equal(100.0 * 800 / 900, request.HitRatePercent()!.Value);
+        Assert.False(request.UsageIsInvalid());
+        request.InputTokens = null;
+        Assert.Null(request.TotalInputTokens());
+        Assert.Null(request.HitRatePercent());
+        Assert.Equal("未获取", CacheText.RequestRateText(request));
     }
 
     [Fact]

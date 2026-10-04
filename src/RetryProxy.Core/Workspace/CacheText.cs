@@ -92,10 +92,10 @@ public static class CacheText
     public static string CreationHelp(CacheSnapshot cache)
     {
         return "缓存写入 = 本次回复报告的新建缓存用量，不计为缓存命中。\n"
-            + $"{cache.CacheCreationMeasuredRequests} / {cache.MeasuredRequests} 个有效请求取得写入用量，合计 {cache.CacheCreationTokens} token；未获取的写入用量不填成 0。";
+            + $"{cache.CacheCreationMeasuredRequests} / {cache.MeasuredRequests} 个有效请求取得写入用量，合计 {cache.CacheCreationTokens} token；未获取的写入用量不计入写入合计，命中率的总输入按未缓存输入 + 缓存读取计算。";
     }
 
-    public const string ClaudeHelp = "Claude 总输入 = 未缓存输入 + 缓存读取 + 缓存写入；任一项未获取时不计算命中率。其他兼容接口使用回复中的总输入量。";
+    public const string ClaudeHelp = "Claude 总输入 = 未缓存输入 + 缓存读取 + 缓存写入；上游没报缓存写入时按前两项相加，命中率为上限值。缺未缓存输入或缓存读取时不计算命中率。其他兼容接口使用回复中的总输入量。";
 
     /// <summary>明细页首行的日期标题，例如“今日 09-22 命中”。</summary>
     public static string DateHeadline(DateTime now) => $"今日 {now:MM-dd} 命中";

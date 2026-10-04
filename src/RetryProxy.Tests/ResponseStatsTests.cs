@@ -635,6 +635,22 @@ public class ResponseStatsTests
     }
 
     [Fact]
+    public void ClaudeCacheRateUsesInputPlusReadWhenUpstreamOmitsWrite()
+    {
+        var stats = EventStats("/v1/messages");
+        Event(stats, """{"type":"message_start","message":{"model":"claude-test","usage":{"input_tokens":100,"output_tokens":0,"cache_read_input_tokens":800}}}""", 0.2);
+        Event(stats, """{"type":"message_delta","usage":{"output_tokens":5}}""", 0.3);
+        Event(stats, """{"type":"message_stop"}""", 0.4);
+        var fields = stats.LogFields();
+        Assert.Contains("缓存 88.9%（读 800）", fields);
+        var request = stats.CacheRequest("req")!;
+        Assert.Null(request.CacheCreationTokens);
+        Assert.Equal(900UL, request.TotalInputTokens());
+        Assert.Equal(100.0 * 800 / 900, request.HitRatePercent()!.Value);
+        AssertComplete(stats);
+    }
+
+    [Fact]
     public void NonStreamingProtocolsPreserveLargeCountsAndFirstByteTime()
     {
         foreach (var usage in new[]

@@ -12,9 +12,11 @@ internal sealed class TokenUsage
     {
         "/cache_read_input_tokens", "/input_tokens_details/cached_tokens", "/prompt_tokens_details/cached_tokens", "/prompt_cache_hit_tokens",
     };
+    // 后两个是部分中转站改写过的字段名；上游整个不报写入时保持 null，命中率按缺写入的口径计算。
     private static readonly string[] CacheCreationPointers =
     {
         "/cache_creation_input_tokens", "/input_tokens_details/cache_write_tokens", "/prompt_tokens_details/cache_write_tokens",
+        "/cache_creation_tokens", "/cache_write_tokens",
     };
     private static readonly string[] ReasoningPointers =
     {

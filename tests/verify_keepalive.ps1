@@ -39,6 +39,8 @@ function Wait-Condition([scriptblock]$Condition, [string]$Failure, [int]$Seconds
 
 function Get-Root {
     $app.Refresh()
+    if ($app.HasExited) { throw "程序已退出，退出码 $($app.ExitCode)" }
+    if ($app.MainWindowHandle -eq 0) { throw '程序主窗口句柄为 0' }
     return [Windows.Automation.AutomationElement]::FromHandle($app.MainWindowHandle)
 }
 
@@ -382,7 +384,7 @@ while ($null -ne $line) {
     if (@($events | Where-Object background).Count -ne $expectedCliCount) { throw 'CLI 保活没有完整经过本地代理' }
     if ($health.metrics.total_requests -ne $expectedRealCount) { throw '保活被计入真实请求统计' }
     $expectedStatistics = '成功 1 轮 · 失败 0 轮 · 中断 1 轮'
-    Invoke-NavigationItem '统计'
+    Invoke-NavigationItem '供应商'
     Wait-Condition {
         $root = Get-Root
         $elements = $root.FindAll([Windows.Automation.TreeScope]::Descendants, [Windows.Automation.Condition]::TrueCondition)

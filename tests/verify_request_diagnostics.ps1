@@ -162,6 +162,22 @@ function Capture([string]$Name,[int]$ExpectedWidth=0,[int]$ExpectedHeight=0) {
         $record.captures += @{name=$Name;width=$width;height=$height;theme=(Theme);requestIds=@(Diagnostic-Rows | ForEach-Object id)}
     } finally { $graphics.Dispose(); $image.Dispose() }
 }
+function Capture-RowHover([string]$Name,[string]$RequestId) {
+    Focus-App
+    $row=Find-Control $RequestId
+    Check ($row -and !$row.Current.IsOffscreen) '悬停目标请求行可见'
+    $box=$row.Current.BoundingRectangle
+    $original=[Windows.Forms.Cursor]::Position
+    try {
+        [Windows.Forms.Cursor]::Position=[Drawing.Point]::new([int]($box.Left+$box.Width/2),[int]($box.Top+$box.Height/2))
+        Start-Sleep -Milliseconds 300
+        $hit=[Windows.Automation.AutomationElement]::FromPoint([Windows.Point]::new([Windows.Forms.Cursor]::Position.X,[Windows.Forms.Cursor]::Position.Y))
+        while ($hit -and $hit.Current.AutomationId -ne $RequestId) { $hit=[Windows.Automation.TreeWalker]::ControlViewWalker.GetParent($hit) }
+        Check ($null -ne $hit) '真实鼠标命中目标请求行'
+        Capture $Name
+        $record.checks += '悬停截图已记录，圆角轮廓需视觉复核'
+    } finally { [Windows.Forms.Cursor]::Position=$original }
+}
 function Get-FreePort {
     $listener=[Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback,0); $listener.Start()
     try { return ([Net.IPEndPoint]$listener.LocalEndpoint).Port } finally { $listener.Stop() }
@@ -391,6 +407,7 @@ public static class RequestDiagnosticWindow {
     $record.dateSelection=@($date | ForEach-Object { @{name=$_.Current.Name;automationId=$_.Current.AutomationId} })
     Check ($date.Count -eq 1 -and $date[0].Current.Name -like "今天*$(Get-Date -Format yyyy-MM-dd)*") '默认查询今天'
     Capture 'dark-codex-list'
+    Capture-RowHover 'dark-row-hover' $retry.id
 
     Invoke-Control 'SelectClaude'; Assert-Rows 1 'diag-claude-model'
     $claude=Row-For 'diag-claude-model'; $record.requestIds.claude=$claude.id
@@ -440,6 +457,7 @@ public static class RequestDiagnosticWindow {
     Check (@($upstream | Where-Object case -eq 'retry').Count -eq 2 -and @($upstream | Where-Object case -eq 'models').Count -eq 1 -and @($upstream | Where-Object { !$_.credentialIsFixture }).Count -eq 0) '假上游确认重试两次发送、一次模型查询与测试凭据'
 
     Set-LightTheme; Assert-Rows 3; Capture 'light-codex-list'
+    Capture-RowHover 'light-row-hover' $retry.id
     Set-Search $retry.id; Assert-Rows 1; Open-Detail $retry.id; Capture 'light-retry-detail'; Close-Detail $retry.id
     $bounds=[RetryProxyTrayVerification]::Bounds($window)
     [RetryProxyTrayVerification]::SetBounds($window,$bounds.Left,$bounds.Top,760,600)

@@ -21,6 +21,14 @@
             <Setter Property="Padding" Value="0" />
             <Setter Property="HorizontalContentAlignment" Value="Stretch" />
             <Setter Property="Focusable" Value="False" />
+            <!-- 行内圆角按钮统一处理悬停与焦点，容器不再叠加默认直角高亮。 -->
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ListBoxItem">
+                        <ContentPresenter />
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
         </Style>
     </Page.Resources>
     <Grid Margin="24,16,24,16">

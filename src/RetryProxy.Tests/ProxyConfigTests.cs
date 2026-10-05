@@ -527,7 +527,7 @@ public class ProxyConfigTests
     }
 
     /// <summary>
-    /// 用正在使用的 dist\User\config.json 的结构（2026-09-28）：两条通道都用 "Any"，选中 Claude 通道。
+    /// 用正在使用的 dist 配置的结构（2026-09-28 的 User\config.json，现已迁至 User\config.db）：两条通道都用 "Any"，选中 Claude 通道。
     /// 迁移后通道 ID 不变（每日统计按它分目录），各客户端得到自己的 "Any"。
     /// </summary>
     [Fact]

@@ -18,11 +18,16 @@
 | `src\RetryProxy.App` | WPF 程序（WPF-UI，供应商 / 统计 / 一键准备 / 请求诊断 / 运行日志；页脚软件设置 / 关于） |
 | `src\RetryProxy.Core` | 配置、代理管线、统计持久化、保活与 CLI 会话、工作区编排（不依赖 WPF） |
 | `src\RetryProxy.Tests` | xUnit 用例（从 Rust 版 `tests/` 与模块单测逐一移植） |
+| `src/RetryProxy.App.Tests` | Windows 应用层配置迁移、备份、禁写与防抖回归；使用隔离目录和真实 SQLite |
 | `tests\` | PowerShell 端到端验收脚本（见下） |
 | `build\` | 发布、截图与窗口恢复检查脚本 |
 | `docs\` | PRD 与三份分析报告 |
 
 ## 构建与发布
+
+2026-10-05 12:06：SQLite 迁库已正式发布到 `dist`。配置改用 `User/config.db`，每日统计与请求诊断共用 `logs/data.db`，设置页合并为“日志与数据”。重新构建的 Release 全量 1311 项与 13 个隔离验收套件全部通过。旧 PID 19308 正常退出、两客户端恢复直连后，仅替换程序、运行时检查脚本和英文资源，新 PID 32372 的双端口健康、监听归属和自动接管通过。配置业务字段、界面偏好、客户端及首次接管原始备份保留，原 JSON 已备份并改名，两库完整性检查通过；正式供应商、统计、请求诊断及完整目录卡截图已查看，检查后返回供应商页并保留客户端选择。
+
+当天统计按已确认规则从保留的运行日志恢复，节流或轮转缺失的累计重试次数不补算，旧统计和诊断文件仍完整保留。正式包 SHA-256：`9CD2B51E0F0CAADDA1C7D71E6B99FB4A834FF4E743DB13DA4EA6FD96A791652F`。备份：`build/instance-backups/upgrade-20261005-120614/`；发布与验收：`.tmp/release-sqlite-20261005/`；完整记录：`docs/PRD-数据存储迁移.md` §9。开发阶段的失败、修复与未替换正式实例时的保护记录继续保留在 §8。
 
 2026-10-04 16:20：缓存命中率口径修正已发布到 `dist`，正式实例由 PID 24240 替换为 11924（源码提交 `9688ba2` 已推送）。Claude 通道的上游没报缓存写入时，总输入按“未缓存输入 + 缓存读取”计算，命中率为上限值；缺未缓存输入或缓存读取时仍不计算，写入用量继续显示未获取。起因是 AnyRouter 的 anthropic 格式回复不带 `cache_creation_input_tokens`（OpenRouter 系中转站普遍如此，官方文档该字段为 null），按旧规则 Claude 通道日志没有百分比、统计页缓存子标签全是未获取、最近 20 次全部未计入。日志百分比、统计页命中率、走势图、按模型与按 Key 拆分同一处生效；缓存页“统计范围”的 Claude 说明与写入说明同步改写。Release 1258 项测试通过，`verify_providers`、`verify_exe -VerifyTray`、`verify_managed_preparation`、`verify_keepalive -Automatic -NoScreenshot` 四套隔离验收 exit 0；包 SHA-256 `0E9F1D393DB69D01C118E46D6355DED302D98377E345257962ADB25BCEA3D057`，58,573,297 字节。备份并正常退出 PID 24240，核验两客户端恢复直连后仅替换程序、运行时检查脚本与英文资源；新 PID 11924 的 18080/18081 健康、监听归属与两客户端自动接管通过。发布后实机核验：18081 缓存命中率 96.78%、今日有效 550 次 / 未计入 0 次，请求行出现 `缓存 99.4%（读 346697）`，缓存页截图 `.tmp/release-claude-cache-rate-20261004/live-cache-tab.png` 已检查（大号 96.84%、20 格走势按命中率填色、写入列仍为未获取）。备份：`build/instance-backups/upgrade-20261004-162032/`；发布与验收记录：`.tmp/release-claude-cache-rate-20261004/`。未改真实客户端配置。
 
@@ -82,17 +87,17 @@ Claude 通道（含一键准备选 Claude Code 时）默认模拟 Claude Code �
 
 左侧“一键准备”提供“跟随当前 / 从列表选择 / 手动填写”三种来源；列表来源可一次勾选多个 Key，每个 Key 一项任务，并按供应商分组。供应商页的“准备”和“准备全部 Key”直接启动任务，页面实时显示准备耗时、下次保活倒计时，悬停查看今日轮次与成功数。每项任务独立启停，切换当前 Key 不停止已有准备；当前 A 的已停止跟随任务在切到 B 后，点击 A 的“准备”会保留跟随任务并新建固定 A，原跟随任务下次开始取 B。管理来源在每次开始时读取最新地址、密钥与模型，运行中的任务沿用启动时设置，不读取真实客户端配置中的密钥；模型留空沿用各 Key 的有效主模型，手动填写必须指定模型。
 
-准备任务拥有独立后台代理和会话；准备期间代理先暂存回复，仅将完整、含有效上下文用量与文本的结果交给后台客户端，其余结果由代理在每轮 600 秒内不限次数地重试，到期返回 HTTP 504，随机等待 1.5～2.5 秒后开始下一轮准备。取得上下文后按设定间隔保活（默认 5 分钟，可设 0.5～1440 分钟），直到停止；准备结果不发送到用户对话，也不保证用户请求命中准备会话的缓存。任务设置保存在 `User\config.json` 的 `preparations` 节点，管理来源只存供应商与 Key 的 ID，不复制密钥；手动来源的 API Key 明文保存。重启后自动恢复退出时仍运行的任务，手动停止的不恢复；今日轮次与成功数跨重启保留。删除 Key 或供应商时先等待关联任务停止，再一次保存删除结果，保存失败保留配置。日志归入“一键准备”，持续标明任务编号、客户端及“准备 / 独立保活 / 服务”行为，不记录 API Key。
+准备任务拥有独立后台代理和会话；准备期间代理先暂存回复，仅将完整、含有效上下文用量与文本的结果交给后台客户端，其余结果由代理在每轮 600 秒内不限次数地重试，到期返回 HTTP 504，随机等待 1.5～2.5 秒后开始下一轮准备。取得上下文后按设定间隔保活（默认 5 分钟，可设 0.5～1440 分钟），直到停止；准备结果不发送到用户对话，也不保证用户请求命中准备会话的缓存。任务设置保存在 `User\config.db` 的 `preparations` 行，管理来源只存供应商与 Key 的 ID，不复制密钥；手动来源的 API Key 明文保存。重启后自动恢复退出时仍运行的任务，手动停止的不恢复；今日轮次与成功数跨重启保留。删除 Key 或供应商时先等待关联任务停止，再一次保存删除结果，保存失败保留配置。日志归入“一键准备”，持续标明任务编号、客户端及“准备 / 独立保活 / 服务”行为，不记录 API Key。
 
 运行日志模型与思考等级对照（2026-10-02 14:21 精简版已发布）：请求行比较实际发往上游的模型及明确指定的等级与响应报告值；两端明确相同时只显示一次，不一致写 `模型 A -> B (不一致)`、`思考 xhigh -> low (不一致)`，仅对应字段使用主题警示色/半粗。单端缺失显示“未指定 / 未报告”，两端都缺失则省略字段；模型只保留一个字段，比较使用供应商映射后的出站值。等级读取 `output_config.effort`、`reasoning.effort`、`reasoning_effort`，按此顺序取首个存在字段，不把思考预算或推理 token 换算成等级。兼容流式和非流式响应；对照只反映上游自报信息，不证明底层模型真实性，不改变请求正文或成功计数。用量、缓存与耗时同步精简，日志恢复兼容新旧格式；Release 1276 项测试通过，实际窗口深浅主题及 760×600 窄窗复验通过，首次验收失败和正式配置保护结果见上方发布记录。
 
-请求诊断按日期、结果、供应商、Key、实际出站模型和请求编号筛选日常请求；点击记录在右侧只读抽屉查看各次发送、兼容重发、手动改投及计划/实际等待，支持复制编号和安全摘要。记录保存在 `logs/request-diagnostics/`，保留含今天的 7 个本机自然日，每日上限 64 MiB；丢失或损坏明确标为不完整，旧运行缺少收尾不伪造成功、失败或总耗时。后台保活、准备及模型列表不纳入；不保存正文、密钥或查询串，不改变原成功判定，不新增有效回复校验。原日志与每日统计继续独立工作。
+请求诊断按日期、结果、供应商、Key、实际出站模型和请求编号筛选日常请求；点击记录在右侧只读抽屉查看各次发送、兼容重发、手动改投及计划/实际等待，支持复制编号和安全摘要。记录保存在 `logs/data.db` 的诊断表，保留含今天的 7 个本机自然日，每日事件负载上限 64 MiB；丢失或损坏明确标为不完整，旧运行缺少收尾不伪造成功、失败或总耗时。后台保活、准备及模型列表不纳入；不保存正文、密钥或查询串，不改变原成功判定，不新增有效回复校验。原日志与每日统计继续独立工作。
 
 运行日志按“通道代理 / 通道保活 / 一键准备 / 系统”筛选来源，可叠加级别和关键字搜索；“仅当前客户端”同时筛选该客户端的通道与独立准备日志；准备任务的“查看日志”会直接按任务筛选，准备完成后的保活、停止和异常仍保留原任务标识。每次请求及后台问答沿用开始时的来源和行为，避免状态切换后收尾日志被分错类；文件与界面使用相同标识，例如 `[一键准备][准备 1 · Codex][独立保活][请求 …]`。
 
 ```powershell
 dotnet build RetryProxy.sln
-dotnet test src\RetryProxy.Tests\RetryProxy.Tests.csproj
+dotnet test RetryProxy.sln
 powershell -File build\publish.ps1          # 先跑测试，再发布到 dist\RetryProxy.exe（单文件、框架依赖、win-x64）
 powershell -File build\publish.ps1 -SkipTests
 ```
@@ -103,47 +108,56 @@ powershell -File build\publish.ps1 -SkipTests
 
 ```powershell
 # 代理、等待生成重试、缓存合并、两次重启后统计一致（无界面部分，任意 PowerShell）
-powershell -File tests\verify_exe.ps1
+powershell -File tests\verify_exe.ps1 -ExePath <开发或隔离发布包路径>
 # 追加托盘隐藏/还原、缓存页、隐藏期间流式请求、窗口异常位置恢复、关闭退出（在私有桌面运行）
-powershell -File tests\verify_exe.ps1 -VerifyTray
+powershell -File tests\verify_exe.ps1 -VerifyTray -ExePath <开发或隔离发布包路径>
 # 独立准备：空通道启动、模型获取、完成后保活、两项任务分别启停（私有桌面）
-pwsh -File tests\verify_preparation.ps1
+pwsh -File tests\verify_preparation.ps1 -ExePath <开发或隔离发布包路径>
 # 追加供应商/统计跨页客户端同步、准备任务独立启停与日志筛选
-pwsh -File tests\verify_preparation.ps1 -WithChannels
+pwsh -File tests\verify_preparation.ps1 -WithChannels -ExePath <开发或隔离发布包路径>
 # 较小窗口中的准备抽屉、模型选择与客户端切换（私有桌面）
-pwsh -File tests\verify_preparation.ps1 -WithChannels -CompactWindow
+pwsh -File tests\verify_preparation.ps1 -WithChannels -CompactWindow -ExePath <开发或隔离发布包路径>
 # 三 Key 批量、供应商状态、已有任务禁选、重启恢复和删除联动（真实临时配置）
-pwsh -File tests\verify_managed_preparation.ps1
+pwsh -File tests\verify_managed_preparation.ps1 -ExePath <开发或隔离发布包路径>
 # 同一流程改用可见的隔离窗口并截图到 .tmp\M5-*（不操作正在使用的实例）
-pwsh -File tests\verify_managed_preparation.ps1 -Screenshot
+pwsh -File tests\verify_managed_preparation.ps1 -Screenshot -ExePath <开发或隔离发布包路径>
 # 通道自动保活与真实请求让行（旧通道准备入口的验收移入准备脚本及 xUnit）
-pwsh -File tests\verify_keepalive.ps1 -Automatic -NoScreenshot
+pwsh -File tests\verify_keepalive.ps1 -Automatic -NoScreenshot -ExePath <开发或隔离发布包路径>
 # 供应商卡片、嵌套 Key 编辑、即时切换/撤销、隐藏托盘切换、草稿取消与窄抽屉
-pwsh -File tests\verify_providers.ps1
+pwsh -File tests\verify_providers.ps1 -ExePath <开发或隔离发布包路径>
 # 接管向导、原配置备份、切换/撤销、改端口、停止/退出直连、重启接管与持久取消
 # 默认在当前桌面截图；-NoScreenshot 仅取消截图，不跳过界面操作
-pwsh -File tests\verify_clients.ps1
+pwsh -File tests\verify_clients.ps1 -ExePath <开发或隔离发布包路径>
 # 设置页外观按钮、深浅循环、切页后操作和重启保留（可见隔离窗口与截图）
-pwsh -File tests\verify_appearance.ps1
+pwsh -File tests\verify_appearance.ps1 -ExePath <开发或隔离发布包路径>
 # 模型/等级日志对照、深浅主题与实际760×600窄窗（本机假上游，截图颜色需人工核对）
 pwsh -File tests\verify_log_comparison.ps1 -ExePath <开发或隔离发布包路径>
 # 请求诊断筛选、只读详情、复制、实时更新、正常/异常重启及深浅/窄窗（截图需人工核对）
 pwsh -STA -File tests\verify_request_diagnostics.ps1 -ExePath <开发或隔离发布包路径> -OutputDirectory <验收记录目录>
+# 配置迁库、故障保护与目录卡；输出目录必须为新目录
+pwsh -STA -File tests/verify_config_storage.ps1 -ExePath <开发或隔离发布包路径> -OutputDirectory <新验收记录目录>
+# 运行依赖复制与配置断言工具自身的回归，不启动程序
+pwsh -File tests/verify_runtime_files.ps1
+python -X utf8 -m unittest discover -s tests -p test_config_storage_probe.py
 ```
 
-验收时显式传入 `-ExePath` 指向开发构建产物；测试复制程序到临时目录，使用独立端口和客户端目录，不停止或覆盖正在使用的 dist 实例。`verify_clients.ps1` 与 `verify_managed_preparation.ps1` 使用真实临时配置文件；仅当程序、Claude 与 Codex 目录均位于同一个临时测试目录时，`RETRY_PROXY_UI_TEST_ROOT` 才允许使用独立单实例名称。`RETRY_PROXY_CONFIG_JSON` 注入模式始终禁止写客户端配置，不能用于接管和重启恢复的落盘验收。使用固定 28080 / 28081 端口的既有验收脚本依次运行，避免相互占用。
+配置库专项默认使用合成配置；可用 `-ConfigPath` 指定只读配置副本，以校验实际供应商、Key、通道与准备任务完整导入。测试副本关闭后台保活和准备；普通通道按既有规则自启，仅监听随机本机端口，不调用真实供应商。
+
+验收时显式传入 `-ExePath` 指向开发构建产物；共享运行文件复制器同时复制开发构建所需的 `runtimes` 原生依赖，兼容内嵌原生库的单文件发布包。测试复制程序到临时目录，使用独立端口和客户端目录，不停止或覆盖正在使用的 dist 实例。`verify_clients.ps1` 与 `verify_managed_preparation.ps1` 使用真实临时配置文件；仅当程序、Claude 与 Codex 目录均位于同一个临时测试目录时，`RETRY_PROXY_UI_TEST_ROOT` 才允许使用独立单实例名称。`RETRY_PROXY_CONFIG_JSON` 注入模式始终禁止写客户端配置，不能用于接管和重启恢复的落盘验收。使用固定 28080 / 28081 端口的既有验收脚本依次运行，避免相互占用。
 
 ## 配置与数据
 
-- 配置文件：`User\config.json`（程序目录下）。首次启动且没有该文件时，会一次性导入 Rust 版留在注册表 `HKCU\Software\LLM Retry Proxy\ConfigJson` 的配置。
-- 配置版本 schema 7（2026-09-29 起）：服务商按客户端（Codex / Claude Code）分开，可挂多个 API Key（明文保存）；每个客户端固定一条通道（Codex 默认 18080、Claude Code 默认 18081）。旧版配置在首次打开时自动升级：同一服务商被两个客户端使用时各拆一份，同一客户端有多条通道时只保留选中的那条（其次是第一条），通道 ID 不变、当日统计照常累加；升级前原文件备份到 `User\backup\`（只保留最近 5 份），升级内容写入日志。不支持退回旧版本。
-- 配置先写临时文件再整体替换，写到一半中断也不会损坏原文件；配置文件读不出来或内容无效时，先备份原文件，本次运行使用默认设置且不保存任何修改，修正或删除 `User\config.json` 后重启即可。
-- 日志：`logs\retry-proxy.log`（轮转 `.1`～`.3`）；当日统计：`logs\daily-statistics\<sha256(通道 ID)>\yyyy-MM-dd.jsonl`，行布局沿用 Rust 版 serde 输出，本版在行尾新增可选字段 `key_id` / `key_name`；没有这两个字段的旧文件读入后为空，界面显示“未记录 Key”。Rust 版读本版新写的行未在本仓库验证。
+- 配置库：`User/config.db`。`proxy` 保存供应商、Key、通道与接管状态，`common` 和 `other` 保存界面偏好，`preparations` 保存准备任务；四行同一事务提交，库结构版本与代理配置 schema 7 分开管理。
+- 配置版本 schema 7：服务商按客户端分开，每个客户端固定一条通道；旧 schema 6 按既有规则单向迁移，保留通道 ID，统计按下述迁库规则处理。不支持直接退回旧版本。
+- 首次迁移：配置表为空且存在 `User/config.json` 时，先备份原文件，再导入数据库；成功后保留为 `config.json.migrated.bak`，备份失败停止迁移。没有旧文件时，仍可一次性导入 Rust 版注册表 `HKCU\Software\LLM Retry Proxy\ConfigJson`，不回写注册表。
+- 配置保护：删除供应商或 Key、接管前，导出全部配置到 `User/backup/config_yyyyMMdd_HHmmss_fff.json.bak`，保留最近 5 份，导出失败中止操作。库打不开、缺行或节点无效时，保存故障备份并禁止本次运行写盘，不用默认值覆盖；只读库可读取，但保存会被拒绝并提示。配置与备份含明文 Key，请妥善保管。
+- 配置恢复：先退出程序，另行保留故障库及其 `-wal`、`-shm` 伴随文件，再移走整组库文件，把 JSON 备份复制为 `User/config.json`，重启导入。不要在运行中只删除主库。
+- 运行日志：`logs/retry-proxy.log`，轮转 `.1`～`.3`。每日统计与请求诊断共用 `logs/data.db`；统计永久保留，诊断只保留含今天的 7 个本机自然日。设置页“日志与数据”打开该目录。旧 `daily-statistics` 与 `request-diagnostics` 文件夹保留，迁移后不再读写，不导入历史；该通道在库中尚无统计记录时，从运行日志恢复当天统计，恢复标记随数据保存，重启不重复导入。
 - 健康与统计：`http://127.0.0.1:<端口>/_retry/health`。
 - 访问限制（2026-09-29 起）：通道只接受本机客户端的请求，Host 须为 `127.0.0.1` 或 `localhost`，带 `Origin` 头（网页发起）的请求一律拒绝，健康检查同样受限；被拒绝时返回 HTTP 403，日志每分钟最多记一条。
 - 上游地址（2026-09-29 起）：Claude Code 把请求路径原样接在服务商地址后；Codex 的客户端地址为 `http://127.0.0.1:<端口>/v1`，服务商地址没有路径时按 `<地址>/v1` 处理，例 `https://anyrouter.top` → `https://anyrouter.top/v1/responses`，`https://new.sharedchat.cc/codex` → `https://new.sharedchat.cc/codex/responses`。
 - 当前 Key 与本地口令（2026-10-01 调整）：普通本机通道统一替换入站鉴权并使用当前供应商的当前 Key；旧真实 Key、错误口令或无凭据请求均按相同规则转发，原密钥与口令不外发，模型按当前供应商规则映射。当前无 Key 时在本地返回 HTTP 403 `no_provider_key`。切换时，尚未向客户端输出的请求立即改用新 Key 重发，已开始输出的请求继续原 Key，请求完成行统一记录实际使用的“供应商 · Key”。接管仍写入随机本地口令以识别受管理的配置；后台独立准备代理仍严格要求正确口令。普通通道由此允许本机其他程序使用当前 Key，用户已确认接受这一边界；Host / Origin 限制与密钥脱敏继续保留。未连接本机通道的窗口不受切换控制。
-- 环境变量：`RETRY_PROXY_CONFIG_JSON`（整份配置注入，测试用，注入时不写代理或客户端配置文件）、`RETRY_PROXY_CODEX_CLI` / `RETRY_PROXY_CLAUDE_CLI`（指定本机 CLI 路径，支持 `.ps1`）。
+- 环境变量：`RETRY_PROXY_CONFIG_JSON`（整份配置注入，测试用，注入时不创建或写入配置库，也不写客户端配置）、`RETRY_PROXY_CODEX_CLI` / `RETRY_PROXY_CLAUDE_CLI`（指定本机 CLI 路径，支持 `.ps1`）。
 
 ## 许可证
 

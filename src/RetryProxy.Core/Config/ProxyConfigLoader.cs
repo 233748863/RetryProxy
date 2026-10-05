@@ -8,7 +8,7 @@ public enum ProxyConfigSource
     /// <summary>RETRY_PROXY_CONFIG_JSON 环境变量注入（测试用，保存为空操作）。</summary>
     EnvironmentInjection,
 
-    /// <summary>User\config.json 中已有的代理配置。</summary>
+    /// <summary>User\config.db 中已有的代理配置。</summary>
     ConfigFile,
 
     /// <summary>首次启动时从注册表一次性导入的 Rust 版配置。</summary>
@@ -44,7 +44,7 @@ public static class ProxyConfigLoader
     /// 按优先级选取配置：环境变量注入 → 已持久化的配置 → 注册表旧配置 → 内置默认；
     /// 随后校验并套用环境变量覆盖。
     /// </summary>
-    /// <param name="persisted">config.json 中已读出的代理配置；文件不存在时传 null。</param>
+    /// <param name="persisted">config.db 中已读出的代理配置；没有已保存的配置时传 null。</param>
     /// <param name="environ">环境变量快照；null 表示当前进程环境。</param>
     /// <param name="registryReader">注册表读取函数，便于测试替换；null 使用真实注册表。</param>
     public static ProxyConfigLoadResult Load(

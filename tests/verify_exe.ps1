@@ -6,9 +6,10 @@
 # C# 版端到端验收（移植自 D:\API-Proxy\tests\verify_rust_exe.ps1）。
 # 与 Rust 版的差异：托盘钩子窗口按标题前缀 wpfui_th_ 查找，托盘操作一律用回调消息 2048 + WM_LBUTTONDBLCLK（显示/隐藏切换）；
 # 最小化保持在任务栏（IsIconic），隐藏到托盘只改可见性；统计页合并概况与缓存，代理设置从供应商页抽屉进入；
-# 配置注入时不写 User\config.json。
+# 配置注入时不写 User\config.json，也不创建 User\config.db。
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot 'runtime_files.ps1')
 if ($UseCurrentDesktop -and -not $VerifyTray) { throw '-UseCurrentDesktop requires -VerifyTray' }
 $ExePath = (Resolve-Path -LiteralPath $ExePath).ProviderPath
 $distDir = Split-Path -Parent $ExePath
@@ -134,7 +135,7 @@ function Start-App {
 
 try {
     # 只复制程序文件和翻译，不读取或复制真实用户配置；兼容单文件发布与开发构建。
-    Get-ChildItem -LiteralPath $distDir -File | Where-Object { $_.Name -match '\.(exe|dll)$|\.(deps|runtimeconfig)\.json$' } | Copy-Item -Destination $runtimeDir
+    Copy-RetryProxyRuntime -ExePath $ExePath -DestinationDirectory $runtimeDir
     $translations = Join-Path $distDir 'User\I18n'
     if (Test-Path -LiteralPath $translations) {
         New-Item -ItemType Directory -Path (Join-Path $runtimeDir 'User') -Force | Out-Null
@@ -541,8 +542,9 @@ try {
     Write-Host 'Restart and daily statistics checks passed.'
     if (Test-Path (Join-Path $runtimeDir "config.json")) { throw "EXE created config.json" }
     if (Test-Path (Join-Path $runtimeDir "User\config.json")) { throw "EXE created User\config.json while the configuration was injected" }
+    if (Test-Path (Join-Path $runtimeDir "User\config.db")) { throw "EXE created User\config.db while the configuration was injected" }
     $verificationPassed = $true
-    [pscustomobject]@{ Result = $result.result; Retries = $final.metrics.retry_count; GenerationVerified = $true; ConfigFile = $false; TrayVerified = $VerifyTray.IsPresent; NaturalTrayEvents = $UseCurrentDesktop.IsPresent; WindowRecoveryVerified = $VerifyTray.IsPresent; CachePageVerified = $VerifyTray.IsPresent; DailyStatisticsVerified = $true; RestartCount = 2 }
+    [pscustomobject]@{ Result = $result.result; Retries = $final.metrics.retry_count; GenerationVerified = $true; ConfigFile = $false; ConfigDb = $false; TrayVerified = $VerifyTray.IsPresent; NaturalTrayEvents = $UseCurrentDesktop.IsPresent; WindowRecoveryVerified = $VerifyTray.IsPresent; CachePageVerified = $VerifyTray.IsPresent; DailyStatisticsVerified = $true; RestartCount = 2 }
 }
 catch {
     Write-Host "Verification failed; evidence retained at $runtimeDir"

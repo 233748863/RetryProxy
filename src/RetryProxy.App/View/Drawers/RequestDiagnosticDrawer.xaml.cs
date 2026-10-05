@@ -11,6 +11,7 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Threading;
 
+using RetryProxy.Helpers.Ui;
 namespace RetryProxy.View.Drawers;
 
 public partial class RequestDiagnosticDrawer : DrawerPage
@@ -199,15 +200,14 @@ public partial class RequestDiagnosticDrawer : DrawerPage
 
     private void Copy(string? text)
     {
-        try
+        if (string.IsNullOrEmpty(text)) { SetError("没有可复制的诊断内容"); return; }
+        SetError(null);
+        ClipboardSafe.SetText(text, ok =>
         {
-            if (string.IsNullOrEmpty(text)) { SetError("没有可复制的诊断内容"); return; }
-            Clipboard.SetText(text);
-            SetError(null);
+            if (!ok) { SetError("复制失败，请稍后重试"); return; }
             CopyNotice.Text = DrawerText.T("已复制");
             CopyNotice.Visibility = Visibility.Visible;
-        }
-        catch (Exception) { SetError("复制失败，请稍后重试"); }
+        });
     }
 }
 

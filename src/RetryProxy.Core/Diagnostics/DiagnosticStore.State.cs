@@ -5,13 +5,12 @@ namespace RetryProxy.Core.Diagnostics;
 
 public sealed partial class DiagnosticStore
 {
-    // 每个活动请求只有摘要；日期查询缓存额外持有目标索引和文件偏移，不持有事件对象。
+    // 每个活动请求只有摘要；日期查询缓存只保留归并状态与重放游标，不持有事件对象。
     private sealed class SummaryState(DiagnosticRequestInfo request, string session)
     {
         internal readonly DiagnosticRequestInfo Request = request;
         internal readonly string Session = session;
         internal readonly HashSet<DiagnosticTarget> Targets = [];
-        internal readonly List<EventLocation> Locations = [];
         internal long LastSequence;
         internal bool Incomplete;
         internal bool Finished;
@@ -96,22 +95,16 @@ public sealed partial class DiagnosticStore
         }
     }
 
-    private sealed record EventLocation(string Path, long Offset, int Length, long Sequence);
     private readonly record struct RequestKey(string Session, string RequestId);
     private sealed record QueryRow(DiagnosticSummary Summary, string Session, HashSet<DiagnosticTarget> Targets);
     private sealed class DayCache(DateOnly date)
     {
         internal readonly DateOnly Date = date;
         internal readonly Dictionary<RequestKey, SummaryState> Requests = [];
-        internal readonly Dictionary<string, FileCursor> Files = new(StringComparer.OrdinalIgnoreCase);
         internal readonly HashSet<string> IncompleteSessions = new(StringComparer.Ordinal);
-    }
-
-    private sealed class FileCursor(string path, string session)
-    {
-        internal readonly string Path = path;
-        internal readonly string Session = session;
-        internal long Offset;
-        internal bool Incomplete;
+        /// <summary>已重放到的最大行号；只增不改的追加表让增量重放按行号游标即可。</summary>
+        internal long Cursor;
+        /// <summary>已读行的 payload_bytes 合计，配合单日读预算。</summary>
+        internal long PayloadBytes;
     }
 }

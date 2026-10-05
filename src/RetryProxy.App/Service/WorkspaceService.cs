@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging;
 using RetryProxy.Core.Config;
 using RetryProxy.Core.Diagnostics;
+using RetryProxy.Core.Storage;
 using RetryProxy.Core.Client;
 using RetryProxy.Core.Cli;
 using RetryProxy.Core.Logging;
@@ -46,8 +47,9 @@ public sealed class WorkspaceService
         _proxyLogger = proxyLogger;
         _snackbar = snackbar;
         var all = configService.Get();
-        Diagnostics = new DiagnosticStore(Path.Combine(proxyLogger.DirectoryPath, "request-diagnostics"));
-        Workspace = new ProxyWorkspace(proxyLogger, all.Proxy ?? ProxyConfig.Builtin(), SaveProxyConfig, Diagnostics);
+        Data = new DataDatabase(proxyLogger.DirectoryPath);
+        Diagnostics = new DiagnosticStore(Data);
+        Workspace = new ProxyWorkspace(proxyLogger, all.Proxy ?? ProxyConfig.Builtin(), SaveProxyConfig, Diagnostics, Data);
         Workspace.BeforeDestructiveChange = configService.BackupBeforeDeletion;
         Workspace.NoticePosted += OnNoticePosted;
         I18n.I18nService.Instance.PropertyChanged += (_, _) => RequestRefresh();
@@ -105,6 +107,9 @@ public sealed class WorkspaceService
     public PreparationCatalog PreparationManagement { get; }
     public IDiagnosticRepository Diagnostics { get; }
 
+    /// <summary>统计库（logs\data.db）；每日统计与请求诊断共用。</summary>
+    public DataDatabase Data { get; }
+
     private void SaveProxyConfig(ProxyConfig config) => PreparationManagement.SaveProxy(config);
 
     public void PrepareKeys(ClientType client, IEnumerable<PreparationKeyRef> keys)
@@ -153,6 +158,7 @@ public sealed class WorkspaceService
         Clients.Shutdown();
         PreparationManagement.Shutdown(Workspace);
         Diagnostics.Dispose();
+        Data.Dispose();
         _refreshTimer.Stop();
         _hintTimer.Stop();
     }

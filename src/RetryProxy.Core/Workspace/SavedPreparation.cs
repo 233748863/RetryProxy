@@ -1,7 +1,7 @@
 namespace RetryProxy.Core.Workspace;
 
 /// <summary>
-/// 一项准备任务写入 User\config.json 的内容（preparations 数组的一个元素）。
+/// 一项准备任务写入 User\config.db 的内容（preparations 行 JSON 数组的一个元素）。
 /// 只存设置，不存服务、端口与会话。
 /// 例：{"id":"3f2a…","number":1,"clientType":"codex","providerSource":"custom","providerUrl":"https://api.example.com",
 ///      "apiKey":"sk-…","model":"gpt-5","reasoningEffort":"high","idleMinutes":"5","providerId":"","keyId":"","wasRunning":false}

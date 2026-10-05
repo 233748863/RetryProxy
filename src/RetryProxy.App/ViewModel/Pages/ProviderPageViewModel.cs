@@ -15,6 +15,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
 
+using RetryProxy.Helpers.Ui;
 namespace RetryProxy.ViewModel.Pages;
 
 public partial class ProviderPageViewModel : ViewModel
@@ -226,8 +227,7 @@ public partial class ProviderPageViewModel : ViewModel
     private void Copy(string text)
     {
         if (text.Length == 0) return;
-        try { Clipboard.SetText(text); }
-        catch (Exception) { Workspace.Notice = T("复制失败，请稍后重试"); }
+        ClipboardSafe.SetText(text, ok => { if (!ok) Workspace.Notice = T("复制失败，请稍后重试"); });
     }
     internal void OpenWebsite(string id)
     {

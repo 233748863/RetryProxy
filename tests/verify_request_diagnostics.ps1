@@ -6,6 +6,7 @@ param(
 # 必须由验收者显式执行：当前桌面的隔离实际窗口；不启动或替换 dist，不读取真实配置。
 # 正常重启以及仅本脚本 PID 的模拟异常退出，用来验证独立诊断恢复；所有现场始终保留。
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'runtime_files.ps1')
 $root = Split-Path -Parent $PSScriptRoot
 if (!$OutputDirectory) { $OutputDirectory = Join-Path $root ('.tmp/request-diagnostics-' + [guid]::NewGuid().ToString('N')) }
 $OutputDirectory = [IO.Path]::GetFullPath($OutputDirectory)
@@ -14,7 +15,7 @@ $variables = @('RETRY_PROXY_CONFIG_JSON','RETRY_PROXY_UI_TEST_ROOT','CLAUDE_CONF
 $variables += @(Get-ChildItem Env: | Where-Object Name -like 'RETRY_*' | ForEach-Object Name)
 $variables = @($variables | Sort-Object -Unique)
 $saved = @{}; foreach ($name in $variables) { $saved[$name] = [Environment]::GetEnvironmentVariable($name) }
-$app=$null; $job=$null; $client=$null; $window=[IntPtr]::Zero; $clipboardBefore=$null; $lastCopied=$null; $ownsOutput=$false
+$app=$null; $job=$null; $client=$null; $window=[IntPtr]::Zero; $clipboardBefore=$null; $lastCopied=$null; $clipboardCaptured=$false; $ownsOutput=$false
 $record = [ordered]@{passed=$false;runtime=$runtime;executable=$ExePath;checks=@();captures=@();requests=@();runs=@();visualReview='待人工检查深浅主题、760x600 窄窗截图与事件文字；UIA 不证明布局或颜色正确。'}
 $privateKey='sk-diagnostic-fixture-only'; $privateBody='diagnostic-private-body-canary'; $privateQuery='diagnostic-private-query-canary'; $privateResponse='diagnostic-private-response-canary'
 $canaries=@($privateKey,$privateBody,$privateQuery,$privateResponse)
@@ -32,6 +33,17 @@ function Wait-For([scriptblock]$Condition,[string]$Failure,[int]$Seconds=20) {
 function Check([bool]$Condition,[string]$Name) {
     if (!$Condition) { throw $Name }
     $record.checks += $Name
+}
+function Get-ClipboardTextSafe([int]$Attempts=5) {
+    # 剪贴板同步工具（远程控制/剪贴板历史）会短暂独占剪贴板：打开失败时短暂重试。
+    # 返回 $null 表示始终打不开；'' 表示剪贴板里没有文本。
+    foreach ($attempt in 1..$Attempts) {
+        try {
+            if ([Windows.Forms.Clipboard]::ContainsText()) { return [Windows.Forms.Clipboard]::GetText() }
+            return ''
+        } catch { Start-Sleep -Milliseconds 100 }
+    }
+    return $null
 }
 function Find-Control([string]$Value,[switch]$ByName) {
     $element=[Windows.Automation.AutomationElement]::FromHandle($window)
@@ -110,7 +122,25 @@ function Read-SharedText([string]$Path) {
     $reader=[IO.StreamReader]::new($stream)
     try { return $reader.ReadToEnd() } finally { $reader.Dispose() }
 }
-function Theme { [int]((Read-SharedText (Join-Path $runtime 'User/config.json') | ConvertFrom-Json).commonConfig.currentThemeType) }
+$configDbReaderScript = @'
+import sqlite3, sys
+connection = sqlite3.connect(sys.argv[1], timeout=5)
+try:
+    row = connection.execute("SELECT value FROM config WHERE key = ?", (sys.argv[2],)).fetchone()
+finally:
+    connection.close()
+sys.stdout.write('' if row is None else row[0])
+'@
+function Read-ConfigDb([string]$Key) {
+    $db = Join-Path $runtime 'User/config.db'
+    if (!(Test-Path -LiteralPath $db)) { throw '配置库尚未创建' }
+    $reader = Join-Path $runtime 'read-config-db.py'
+    if (!(Test-Path -LiteralPath $reader)) { [IO.File]::WriteAllText($reader, $configDbReaderScript) }
+    $output = @(& python -X utf8 $reader $db $Key 2>&1)
+    if ($LASTEXITCODE -ne 0) { throw "读取配置库失败：$($output -join ' ')" }
+    return ($output -join "`n")
+}
+function Theme { [int]((Read-ConfigDb 'common' | ConvertFrom-Json).currentThemeType) }
 function Set-LightTheme {
     Navigate '软件设置' 'SwitchAppearance'
     for ($i=0; $i -lt 6 -and (Theme) -lt 3; $i++) {
@@ -191,12 +221,14 @@ function Copy-And-Check([string]$Button,[string]$RequestId,[switch]$IdOnly) {
     # 不与 WPF 的 OLE 写入/刷新并发打开剪贴板。
     Start-Sleep -Milliseconds 250
     Wait-For {
-        if (![Windows.Forms.Clipboard]::ContainsText()) { return $false }
-        $copied=[Windows.Forms.Clipboard]::GetText()
+        $copied=Get-ClipboardTextSafe
+        if (!$copied) { return $false }
         if ($IdOnly) { return $copied -ceq $RequestId }
         return $copied.Contains($RequestId) -and $copied.Contains('原重试次数')
     } '诊断复制未得到当前请求编号或安全摘要'
-    $text=[Windows.Forms.Clipboard]::GetText(); $script:lastCopied=$text
+    $text=Get-ClipboardTextSafe -Attempts 15
+    if ($null -eq $text) { throw '剪贴板被其他程序占用，无法读取复制结果' }
+    $script:lastCopied=$text
     $copyError=Find-Control '复制失败，请稍后重试' -ByName
     Check (!$copyError -or $copyError.Current.IsOffscreen) '复制完成且界面未留下复制失败提示'
     Assert-Safe $text '复制内容'
@@ -220,10 +252,26 @@ function Close-Detail([string]$RequestId) {
     Check ($null -ne (Find-Control 'DiagnosticList')) '关闭抽屉恢复请求列表'
     Check ($null -eq (Find-Control '放弃未保存的修改？' -ByName)) '只读抽屉没有未保存确认'
 }
-function Diagnostic-FilesText {
-    $directory=Join-Path $runtime 'logs/request-diagnostics'
-    if (!(Test-Path -LiteralPath $directory)) { return '' }
-    return (@(Get-ChildItem -LiteralPath $directory -File -Recurse -Filter '*.jsonl' | ForEach-Object { Read-SharedText $_.FullName }) -join "`n")
+function Diagnostic-DbText {
+    $db=Join-Path $runtime 'logs/data.db'
+    if (!(Test-Path -LiteralPath $db)) { return '' }
+    # 请求诊断已迁入 SQLite（WAL）：经 python sqlite3 读取；应用运行中多进程并发由 WAL 保证。
+    $reader=@'
+import sqlite3, sys
+connection = sqlite3.connect(sys.argv[1], timeout=5)
+rows = connection.execute("SELECT session_id, request_id, kind, entry_json, COALESCE(request_json, '') FROM diagnostic_events").fetchall()
+connection.close()
+sys.stdout.write('\n'.join('|'.join('' if v is None else str(v) for v in row) for row in rows))
+'@
+    $scriptPath=Join-Path ([IO.Path]::GetTempPath()) ('retry-proxy-diag-read-' + [guid]::NewGuid().ToString('N') + '.py')
+    try {
+        [IO.File]::WriteAllText($scriptPath,$reader,[Text.UTF8Encoding]::new($false))
+        $output=@(& python -X utf8 $scriptPath $db 2>&1)
+        if ($LASTEXITCODE -ne 0) { throw "读取诊断库失败：$($output -join ' ')" }
+        return ($output -join "`n")
+    } finally {
+        Remove-Item -LiteralPath $scriptPath -Force -ErrorAction SilentlyContinue
+    }
 }
 
 try {
@@ -246,7 +294,9 @@ public static class RequestDiagnosticWindow {
 }
 '@
     }
-    $clipboardBefore=[Windows.Forms.Clipboard]::GetDataObject()
+    $clipboardCaptured=$true
+    try { $clipboardBefore=[Windows.Forms.Clipboard]::GetDataObject() }
+    catch { $clipboardCaptured=$false; if ($record) { $record.clipboardCaptureFailure=$_.Exception.Message } }
     New-Item -ItemType Directory -Path $runtime,(Join-Path $runtime 'User') | Out-Null
     foreach ($name in $variables) { Remove-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue }
     $env:RETRY_PROXY_UI_TEST_ROOT=$runtime
@@ -256,7 +306,7 @@ public static class RequestDiagnosticWindow {
     [IO.File]::WriteAllText((Join-Path $env:CLAUDE_CONFIG_DIR 'settings.json'),'{}')
     [IO.File]::WriteAllText((Join-Path $env:CODEX_HOME 'config.toml'),'')
     $package=Split-Path -Parent $ExePath
-    Get-ChildItem -LiteralPath $package -File | Where-Object { $_.Name -match '\.(exe|dll)$|\.(deps|runtimeconfig)\.json$' } | Copy-Item -Destination $runtime
+    Copy-RetryProxyRuntime -ExePath $ExePath -DestinationDirectory $runtime
     $translations=Join-Path $package 'User/I18n'
     if (!(Test-Path -LiteralPath $translations)) { $translations=Join-Path $root 'src/RetryProxy.App/User/I18n' }
     Copy-Item -LiteralPath $translations -Destination (Join-Path $runtime 'User/I18n') -Recurse
@@ -419,7 +469,7 @@ public static class RequestDiagnosticWindow {
     $crash=Begin-Fixture 'crash'
     Wait-For { $r=Row-For 'diag-crash-model'; $r -and $r.text.Contains('处理中') } '异常恢复场景未进入处理中'
     $crashRow=Row-For 'diag-crash-model'; $record.requestIds.crash=$crashRow.id
-    Wait-For { (Diagnostic-FilesText).Contains($crashRow.id) } '旧运行开始事件尚未落盘'
+    Wait-For { (Diagnostic-DbText).Contains($crashRow.id) } '旧运行开始事件尚未落库'
     Capture 'before-simulated-crash'
     Stop-App -SimulateCrash
     Complete-Fixture $crash -Aborted
@@ -436,7 +486,7 @@ public static class RequestDiagnosticWindow {
     Close-Detail $crashRow.id
     Navigate '运行日志' 'LogRows'
     Stop-App
-    Assert-Safe (Diagnostic-FilesText) '独立诊断文件'
+    Assert-Safe (Diagnostic-DbText) '独立诊断数据库'
     Check ([IO.File]::ReadAllText((Join-Path $env:CLAUDE_CONFIG_DIR 'settings.json')) -ceq '{}' -and [IO.File]::ReadAllText((Join-Path $env:CODEX_HOME 'config.toml')) -ceq '') '隔离客户端配置未被接管或修改'
     $record.passed=$true
     Write-Host "PASS：请求诊断交互、筛选、只读详情、复制、实时更新、正常及异常重启；截图待人工复核。记录：$OutputDirectory；现场：$runtime"
@@ -456,10 +506,13 @@ public static class RequestDiagnosticWindow {
         if ($app) { $app.Dispose() }
         if ($job) { Stop-Job $job; Remove-Job $job -Force }
         if ($client) { $client.Dispose() }
-        # 不覆盖验收期间其他程序新写的剪贴板，不把原剪贴板写入任何文件。
-        if ($lastCopied -and [Windows.Forms.Clipboard]::ContainsText() -and [Windows.Forms.Clipboard]::GetText() -ceq $lastCopied) {
-            if ($clipboardBefore) { [Windows.Forms.Clipboard]::SetDataObject($clipboardBefore,$true) } else { [Windows.Forms.Clipboard]::Clear() }
-        }
+        # 不覆盖验收期间其他程序新写的剪贴板，不把原剪贴板写入任何文件；剪贴板被占用不视为验收失败。
+        try {
+            $current=Get-ClipboardTextSafe -Attempts 15
+            if ($clipboardCaptured -and $lastCopied -and $current -ceq $lastCopied) {
+                if ($clipboardBefore) { [Windows.Forms.Clipboard]::SetDataObject($clipboardBefore,$true) } else { [Windows.Forms.Clipboard]::Clear() }
+            }
+        } catch { if ($record) { $record.clipboardRestoreFailure=$_.Exception.Message } }
     } catch { $record.cleanupFailure=$_.Exception.Message; $record.passed=$false; throw }
     finally {
         foreach ($name in $variables) {
@@ -467,6 +520,6 @@ public static class RequestDiagnosticWindow {
             else { [Environment]::SetEnvironmentVariable($name,$saved[$name]) }
         }
         if ($ownsOutput -and (Test-Path -LiteralPath $OutputDirectory)) { $record | ConvertTo-Json -Depth 15 | Set-Content -LiteralPath (Join-Path $OutputDirectory 'summary.json') -Encoding utf8 }
-        # runtime、请求诊断文件、原始运行日志、截图和summary始终保留；不执行目录清理。
+        # runtime、请求诊断数据库、原始运行日志、截图和summary始终保留；不执行目录清理。
     }
 }

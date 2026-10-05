@@ -1,5 +1,6 @@
 using System;
 using RetryProxy.Core.Cache;
+using RetryProxy.Core.Storage;
 
 namespace RetryProxy.Core.Metrics;
 
@@ -25,10 +26,10 @@ public sealed class ProxyMetrics : IDisposable
         _state = new MetricsState(DateTime.Now, storage);
     }
 
-    /// <summary>从日志目录下的当日 jsonl 恢复统计（对应 ProxyMetrics::from_daily_logs）。</summary>
-    public static ProxyMetrics FromDailyLogs(string logDirectory, string routeId, string routeName)
+    /// <summary>从 logs\data.db 恢复当日统计（对应 ProxyMetrics::from_daily_logs）。</summary>
+    public static ProxyMetrics FromDailyLogs(DataDatabase data, string routeId, string routeName)
     {
-        return new ProxyMetrics(new DailyStorage(logDirectory, routeId, routeName));
+        return new ProxyMetrics(new SqliteDailyStorage(data, routeId, routeName));
     }
 
     /// <summary>测试用：内部状态。</summary>

@@ -35,13 +35,9 @@ public partial class SettingsPageViewModel : ViewModel
     [ObservableProperty]
     private bool _autoStartEnabled;
 
-    /// <summary>运行日志目录（retry-proxy.log 所在）。</summary>
+    /// <summary>运行日志与数据目录（retry-proxy.log 和 data.db 所在）。</summary>
     [ObservableProperty]
     private string _logDirectory = string.Empty;
-
-    /// <summary>每日统计目录（daily-statistics）。</summary>
-    [ObservableProperty]
-    private string _statisticsDirectory = string.Empty;
 
     public SettingsPageViewModel(IConfigService configService, WorkspaceService workspaceService, ClientTakeoverService clients)
     {
@@ -51,7 +47,6 @@ public partial class SettingsPageViewModel : ViewModel
         Clients = [new(ClientType.Claude, workspaceService, clients), new(ClientType.Codex, workspaceService, clients)];
         Config = configService.Get();
         LogDirectory = workspaceService.Workspace.Logger.DirectoryPath;
-        StatisticsDirectory = Path.Combine(LogDirectory, "daily-statistics");
         _syncingAutoStart = true;
         AutoStartEnabled = AutoStart.IsEnabled();
         _syncingAutoStart = false;
@@ -100,10 +95,7 @@ public partial class SettingsPageViewModel : ViewModel
     private System.Threading.Tasks.Task ClientSetup() => _clients.ShowSetupAsync();
 
     [RelayCommand]
-    private void OnOpenLogDirectory() => OpenDirectory(LogDirectory, "日志目录");
-
-    [RelayCommand]
-    private void OnOpenStatisticsDirectory() => OpenDirectory(StatisticsDirectory, "统计目录");
+    private void OnOpenLogDirectory() => OpenDirectory(LogDirectory, "日志与数据");
 
     private void OpenDirectory(string directory, string label)
     {

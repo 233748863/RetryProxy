@@ -293,11 +293,7 @@
   "缓存写入 token": "Cache write tokens",
   "点击复制请求编号，可在日志文件中查找": "Click to copy the request ID; search the log file with it",
   "统计范围": "Scope",
-  "日志目录": "Log directory",
-  "每日统计目录": "Daily statistics directory",
   "打开目录": "Open folder",
-  "运行日志 retry-proxy.log 所在目录": "Folder containing retry-proxy.log",
-  "每个通道一个子目录，按天保存 jsonl 统计记录": "One sub-folder per channel, one jsonl file per day",
   "项目主页": "Project page",
   "依赖致谢": "Acknowledgements",
   "感谢以下开源项目": "Thanks to these open-source projects",
@@ -701,5 +697,8 @@
   "通道 {0}/{1} 在运行 · 今日 {2} · 成功 {3} · 重试 {4} · 失败 {5}": "{0}/{1} channels running · today {2} · {3} succeeded · {4} retries · {5} failed",
   "最近一次后台问答未完成：{0}": "The most recent background request did not complete: {0}",
   "有效 {0} 次 · 未计入 {1} 次": "{0} measured · {1} unmeasured",
-  "已复用 {0} / 总输入 {1} token · 写入 {2}": "Reused {0} / total input {1} token · written {2}"
+  "已复用 {0} / 总输入 {1} token · 写入 {2}": "Reused {0} / total input {1} token · written {2}",
+  "日志与数据": "Logs and data",
+  "运行日志 retry-proxy.log；统计与诊断 data.db": "Runtime log: retry-proxy.log; statistics and diagnostics: data.db",
+  "打开运行日志、统计与诊断数据库所在目录": "Open the folder containing runtime logs, statistics and diagnostics"
 }

@@ -8,6 +8,7 @@ using RetryProxy.Core.KeepAlive;
 using RetryProxy.Core.Logging;
 using RetryProxy.Core.Metrics;
 using RetryProxy.Core.Proxy;
+using RetryProxy.Core.Storage;
 using RetryProxyPipeline = RetryProxy.Core.Proxy.RetryProxy;
 
 namespace RetryProxy.Core.Service;
@@ -38,6 +39,8 @@ public sealed class ProxyService
     private TaskCompletionSource<bool>? _stopSignal;
     private Task? _task;
     private Action? _notifier;
+    /// <summary>RequestStop 时记下的在途请求数；取消会立刻让在途请求收尾，必须在取消前读（见 RequestStop）。</summary>
+    private ulong _discardedAtStop;
     private (string ApiKey, string AccessKey, ClaudeAuthMode AuthMode)? _preparationProxy;
     /// <summary>最新快照；正在启动、代理还没建好时先存着，建好后立即套用。</summary>
     private ChannelSnapshot? _snapshot;
@@ -58,10 +61,10 @@ public sealed class ProxyService
         KeepAlive = new KeepAliveWatchdog(false, TimeSpan.FromSeconds(ConfigDefaults.KeepaliveIdleMinutes * 60.0));
     }
 
-    /// <summary>从日志目录恢复当日统计后创建服务；恢复结果写进该通道的日志。</summary>
-    public static ProxyService WithDailyStatistics(ProxyLogger logger, string routeId, string routeName)
+    /// <summary>从统计库恢复当日统计后创建服务；恢复结果写进该通道的日志。</summary>
+    public static ProxyService WithDailyStatistics(ProxyLogger logger, DataDatabase data, string routeId, string routeName)
     {
-        var metrics = ProxyMetrics.FromDailyLogs(logger.DirectoryPath, routeId, routeName);
+        var metrics = ProxyMetrics.FromDailyLogs(data, routeId, routeName);
         var snapshot = metrics.Snapshot();
         var routeLogger = logger.Route(routeName);
         if (snapshot.StatisticsWarning is { } warning)
@@ -74,19 +77,22 @@ public sealed class ProxyService
                 $"已恢复 {snapshot.StatisticsDate} 当日统计：请求 {snapshot.TotalRequests}，成功 {snapshot.SuccessfulRequests}，失败 {snapshot.FailedRequests}，重试 {snapshot.RetryCount}，历史未完成 {snapshot.HistoricalUnfinishedRequests}");
         }
 
-        return new ProxyService(logger, routeName, metrics);
+        return new ProxyService(logger, routeName, metrics) { Data = data };
     }
 
     /// <summary>沿用已有统计实例新建服务（通道改名或换看门狗后替换服务时使用）。</summary>
-    public static ProxyService WithMetrics(ProxyLogger logger, string routeName, ProxyMetrics metrics)
+    public static ProxyService WithMetrics(ProxyLogger logger, string routeName, ProxyMetrics metrics, DataDatabase? data = null)
     {
-        return new ProxyService(logger, routeName, metrics);
+        return new ProxyService(logger, routeName, metrics) { Data = data };
     }
 
     public string RouteName { get; }
 
-    /// <summary>本通道日志目录；统计页用它读取历史每日统计文件。</summary>
+    /// <summary>本通道日志目录。</summary>
     public string LogDirectory => _logger.DirectoryPath;
+
+    /// <summary>统计库（logs\data.db）；统计页的 7 天趋势经它查询。无统计实例的服务为 null。</summary>
+    public DataDatabase? Data { get; private set; }
 
     public ProxyMetrics Metrics { get; }
 
@@ -314,6 +320,8 @@ public sealed class ProxyService
             }
 
             _state = ServiceState.Stopping;
+            // 先记下「处理中」再取消：取消会让在途请求立刻收尾并从统计里移除，晚读会漏掉它们（丢弃计数不确定）。
+            _discardedAtStop = Metrics.Snapshot().ActiveRequests;
             _cancel?.Cancel();
             _stopSignal?.TrySetResult(true);
             _stopSignal = null;
@@ -409,9 +417,13 @@ public sealed class ProxyService
             serviceLogger.Info($"代理已启动：{config.LocalUrl}{(label.Length > 0 ? $"，当前 {label}" : string.Empty)}（跟随系统代理）");
             var keepAliveTask = KeepAlivePollLoopAsync(proxy, cancel.Token);
             var fingerprintTask = proxy.RefreshTlsFingerprintLoopAsync(cancel.Token);
-            // 停用通道要立刻放弃在处理中的请求：先读「处理中」，再取消，再硬停 Kestrel。
+            // 停用通道要立刻放弃在处理中的请求：RequestStop 已在取消前记下「处理中」的数量，这里取用后再取消并硬停 Kestrel。
             await Task.WhenAny(stopSignal, Task.Delay(Timeout.Infinite, cancel.Token)).ConfigureAwait(false);
-            discarded = Metrics.Snapshot().ActiveRequests;
+            lock (_lock)
+            {
+                discarded = _discardedAtStop;
+            }
+
             cancel.Cancel();
             await host.StopAsync(TimeSpan.FromMilliseconds(100)).ConfigureAwait(false);
             await host.DisposeAsync().ConfigureAwait(false);

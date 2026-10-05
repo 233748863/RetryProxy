@@ -867,6 +867,7 @@ internal sealed class ClientLifecycleFixture : IDisposable
     public void Dispose()
     {
         foreach (var service in Workspace.Services.Values) service.ForceStateForTest(ServiceState.Stopped);
+        Workspace.Dispose();
         Logger.Dispose();
         if (Directory.Exists(Root)) Directory.Delete(Root, recursive: true);
     }

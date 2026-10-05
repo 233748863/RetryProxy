@@ -7,7 +7,7 @@ using System.Text.Json.Serialization;
 namespace RetryProxy.Core.Config;
 
 /// <summary>
-/// 全部配置。序列化到 User/config.json。
+/// 全部配置。四个节点分别序列化为 User\config.db 的 config 表四行（proxy / common / other / preparations）。
 /// </summary>
 [Serializable]
 public partial class AllConfig : ObservableObject

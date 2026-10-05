@@ -4,7 +4,7 @@ namespace RetryProxy.Core.Config;
 
 /// <summary>
 /// 供应商下的一个 API Key。例：名称 "PLUS"、密钥 "sk-…a1b2"、不覆盖模型。
-/// 密钥按用户决定（PRD-供应商管理 P5）明文保存在 config.json。
+/// 密钥按用户决定（PRD-供应商管理 P5）明文保存在 config.db。
 /// </summary>
 public sealed class ProviderKey : IEquatable<ProviderKey>
 {

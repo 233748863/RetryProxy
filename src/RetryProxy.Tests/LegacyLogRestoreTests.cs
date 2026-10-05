@@ -1,10 +1,13 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
 using System.Text.Json;
+using Microsoft.Data.Sqlite;
 using RetryProxy.Core.Cache;
 using RetryProxy.Core.Metrics;
+using RetryProxy.Core.Storage;
 using Xunit;
 
 namespace RetryProxy.Tests;
@@ -19,8 +22,23 @@ public class LegacyLogRestoreTests : IDisposable
         Directory.CreateDirectory(_directory);
     }
 
+    private readonly List<DataDatabase> _databases = new();
+
+    private DataDatabase Data()
+    {
+        var data = new DataDatabase(_directory);
+        _databases.Add(data);
+        return data;
+    }
+
     public void Dispose()
     {
+        foreach (var data in _databases)
+        {
+            data.Dispose();
+        }
+
+        SqliteConnection.ClearAllPools();
         try
         {
             Directory.Delete(_directory, recursive: true);
@@ -151,7 +169,7 @@ public class LegacyLogRestoreTests : IDisposable
         Assert.Null(records["cccccccc"].Cache);
         Assert.Null(records["dddddddd"].Outcome);
 
-        var spec = new DailyStorage(_directory, "route", "通道");
+        var spec = new SqliteDailyStorage(Data(), "route", "通道");
         var instant = new DateTime(2026, 9, 19, 12, 0, 0, DateTimeKind.Local);
         MetricsSnapshot snapshot;
         using (var state = new MetricsState(instant, spec))

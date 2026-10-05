@@ -247,7 +247,7 @@ public partial class OverviewPageViewModel : ViewModel
 
     private IReadOnlyList<DailySummary> LoadPastDays(string routeId, DateTime today)
     {
-        if (!Workspace.Services.TryGetValue(routeId, out var service))
+        if (!Workspace.Services.TryGetValue(routeId, out var service) || service.Data is not { } data)
         {
             return [];
         }
@@ -255,7 +255,7 @@ public partial class OverviewPageViewModel : ViewModel
         try
         {
             var first = DateOnly.FromDateTime(today).AddDays(-(TrendDays - 1));
-            return DailyHistory.ReadRange(service.LogDirectory, routeId, first, TrendDays - 1);
+            return DailyHistory.ReadRange(data, routeId, first, TrendDays - 1);
         }
         catch (Exception error) when (error is System.IO.IOException or UnauthorizedAccessException)
         {

@@ -93,6 +93,7 @@ public class ProviderManagementTests
                 service.Stop(TimeSpan.FromSeconds(5));
             }
 
+            App.Dispose();
             Logger.Dispose();
             try
             {

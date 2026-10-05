@@ -10,6 +10,7 @@
 		<AllowUnsafeBlocks>true</AllowUnsafeBlocks>
 		<ApplicationIcon>Resources\Images\logo.ico</ApplicationIcon>
 		<DebugType>embedded</DebugType>
+		<IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
 	</PropertyGroup>
 
 	<ItemGroup>
@@ -40,6 +41,7 @@
 
 	<ItemGroup>
 		<ProjectReference Include="..\RetryProxy.Core\RetryProxy.Core.csproj" />
+		<InternalsVisibleTo Include="RetryProxy.App.Tests" />
 	</ItemGroup>
 
 	<ItemGroup>

@@ -91,12 +91,10 @@ internal abstract record DailyChange
     public sealed record CacheFallback : DailyChange;
 }
 
-/// <summary>
-/// 当日统计的持久化端（M3 实现 jsonl 日志）；M2 只定义接口，内存态不落盘。
-/// </summary>
+/// <summary>当日统计的持久化端（SQLite 实现见 <see cref="SqliteDailyJournal"/>）。</summary>
 public interface IDailyJournal
 {
-    /// <summary>追加一条记录；失败时抛出 <see cref="System.IO.IOException"/>。</summary>
+    /// <summary>写入一条记录（UPSERT，幂等）；失败时抛出 <see cref="System.IO.IOException"/> 或 SQLite 异常。</summary>
     void Append(DailyRequest record);
 }
 
@@ -115,7 +113,7 @@ public sealed class DailyJournalOpenResult
     public string? OpenErrorKind { get; init; }
 }
 
-/// <summary>日志存储描述；M3 提供实现。</summary>
+/// <summary>当日统计存储；实现见 <see cref="SqliteDailyStorage"/>。</summary>
 public interface IDailyStorage
 {
     DailyJournalOpenResult Open(DateOnly date, bool importLegacy);

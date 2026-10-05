@@ -26,6 +26,8 @@ build/*.png
 
 # Runtime data
 src/RetryProxy.App/User/config.json
+src/RetryProxy.App/User/config.json.migrated.bak
+src/RetryProxy.App/User/config.db*
 src/RetryProxy.App/User/backup/
 src/RetryProxy.App/User/Temp/
 

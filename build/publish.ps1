@@ -7,13 +7,19 @@
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $app = Join-Path $root 'src\RetryProxy.App\RetryProxy.App.csproj'
-$tests = Join-Path $root 'src\RetryProxy.Tests\RetryProxy.Tests.csproj'
+# 所有测试工程都参与发布门禁，新增应用层配置回归时不能只跑 Core 测试。
+$testProjects = @(Get-ChildItem -LiteralPath (Join-Path $root 'src') -Directory -Filter '*Tests' |
+    ForEach-Object { Get-ChildItem -LiteralPath $_.FullName -Filter '*.csproj' -File } |
+    Sort-Object FullName)
 $OutDir = [IO.Path]::GetFullPath($OutDir)
 
 if (-not $SkipTests) {
-    Write-Host '== dotnet test'
-    dotnet test $tests -c Release --nologo
-    if ($LASTEXITCODE -ne 0) { throw "tests failed ($LASTEXITCODE)" }
+    if ($testProjects.Count -eq 0) { throw 'No test projects found' }
+    foreach ($project in $testProjects) {
+        Write-Host "== dotnet test: $($project.Name)"
+        dotnet test $project.FullName -c Release --nologo
+        if ($LASTEXITCODE -ne 0) { throw "tests failed: $($project.Name) ($LASTEXITCODE)" }
+    }
 }
 
 Write-Host "== dotnet publish -> $OutDir"

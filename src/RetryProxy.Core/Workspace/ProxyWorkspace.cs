@@ -9,6 +9,7 @@ using RetryProxy.Core.Diagnostics;
 using RetryProxy.Core.KeepAlive;
 using RetryProxy.Core.Logging;
 using RetryProxy.Core.Service;
+using RetryProxy.Core.Storage;
 
 namespace RetryProxy.Core.Workspace;
 
@@ -17,26 +18,34 @@ namespace RetryProxy.Core.Workspace;
 /// 服务商/通道增删改、启停与通道保活设置。只在界面线程上访问；
 /// 后台线程只会通过 <see cref="SetUiNotifier"/> 设置的回调请求刷新。
 /// </summary>
-public sealed partial class ProxyWorkspace
+public sealed partial class ProxyWorkspace : IDisposable
 {
     private readonly Action<ProxyConfig>? _save;
     private readonly IRequestDiagnostics? _diagnostics;
+    private readonly DataDatabase _data;
+    /// <summary>自建的库由本对象处置；构造时传入的库由调用方（应用层 WorkspaceService）处置。</summary>
+    private readonly DataDatabase? _ownedData;
     private readonly HashSet<string> _reportedServiceErrors = new();
     /// <summary>仅本次运行有效：用户手动停止的通道不被自动启动流程再次拉起。</summary>
     private readonly HashSet<string> _manuallyStoppedRoutes = new();
     private bool _startupRequested;
     private Action? _uiNotifier;
 
-    public ProxyWorkspace(ProxyLogger logger, ProxyConfig config, Action<ProxyConfig>? save, IRequestDiagnostics? diagnostics = null)
+    public ProxyWorkspace(ProxyLogger logger, ProxyConfig config, Action<ProxyConfig>? save, IRequestDiagnostics? diagnostics = null, DataDatabase? data = null)
     {
         Logger = logger;
         _diagnostics = diagnostics;
+        _data = data ?? new DataDatabase(logger.DirectoryPath);
+        _ownedData = data is null ? _data : null;
         Config = config.Clone().Normalize();
         _save = save;
         SelectedRoute = Config.SelectedRoute?.Id ?? string.Empty;
         SelectedClient = Config.SelectedRoute?.ClientType ?? Config.ClientType;
         SelectedProvider = ProviderForRoute(Config.SelectedRoute)?.Id ?? string.Empty;
     }
+
+    /// <summary>释放自建的统计库（停掉写队列、释放文件句柄）；可重复调用。</summary>
+    public void Dispose() => _ownedData?.Dispose();
 
     public ProxyLogger Logger { get; }
 
@@ -199,13 +208,13 @@ public sealed partial class ProxyWorkspace
                     continue;
                 }
 
-                var service = ProxyService.WithMetrics(Logger, route.Name, existing.Metrics).WithKeepAliveWatchdog(watchdog).WithDiagnostics(_diagnostics);
+                var service = ProxyService.WithMetrics(Logger, route.Name, existing.Metrics, _data).WithKeepAliveWatchdog(watchdog).WithDiagnostics(_diagnostics);
                 service.SetUiNotifier(_uiNotifier);
                 Services[route.Id] = service;
             }
             else
             {
-                var service = ProxyService.WithDailyStatistics(Logger, route.Id, route.Name).WithKeepAliveWatchdog(watchdog).WithDiagnostics(_diagnostics);
+                var service = ProxyService.WithDailyStatistics(Logger, _data, route.Id, route.Name).WithKeepAliveWatchdog(watchdog).WithDiagnostics(_diagnostics);
                 service.SetUiNotifier(_uiNotifier);
                 Services[route.Id] = service;
             }

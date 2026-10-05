@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using Microsoft.Data.Sqlite;
 using RetryProxy.Core.Cache;
 
 namespace RetryProxy.Core.Metrics;
@@ -43,7 +44,7 @@ internal sealed class MetricsState : IDisposable
         {
             opened = storage.Open(date, importLegacy);
         }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidDataException)
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidDataException or SqliteException)
         {
             opened = new DailyJournalOpenResult { OpenErrorKind = IoErrorKind.Describe(error) };
         }
@@ -259,7 +260,7 @@ internal sealed class MetricsState : IDisposable
             {
                 _journal.Append(_records[id]);
             }
-            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException or SqliteException)
             {
                 _writeWarning = $"当日统计日志写入失败（{IoErrorKind.Describe(error)}），未保存数据将在下次更新时重试";
                 return;
@@ -284,9 +285,6 @@ internal sealed class MetricsState : IDisposable
         return snapshot;
     }
 
-    /// <summary>测试用：当前的 jsonl 追加句柄。</summary>
-    internal IDailyJournal? JournalForTest => _journal;
-
     public void Dispose()
     {
         (_journal as IDisposable)?.Dispose();
@@ -294,7 +292,7 @@ internal sealed class MetricsState : IDisposable
     }
 }
 
-/// <summary>把 .NET 的 IO 异常映射成 Rust io::ErrorKind 风格的短标签，供警告文案使用。</summary>
+/// <summary>把 .NET 的 IO 异常与 SQLite 错误码映射成 Rust io::ErrorKind 风格的短标签，供警告文案使用。</summary>
 internal static class IoErrorKind
 {
     public static string Describe(Exception error) => error switch
@@ -304,9 +302,21 @@ internal static class IoErrorKind
         InvalidDataException => "InvalidData",
         PathTooLongException => "InvalidFilename",
         IOException io when io.InnerException is InvalidDataException => "InvalidData",
+        IOException io when io.InnerException is SqliteException sqlite => DescribeSqlite(sqlite),
         IOException io when (io.HResult & 0xFFFF) == 32 => "ResourceBusy",
         IOException io when (io.HResult & 0xFFFF) == 112 => "StorageFull",
         IOException => "Other",
+        SqliteException sqlite => DescribeSqlite(sqlite),
         _ => error.GetType().Name,
+    };
+
+    private static string DescribeSqlite(SqliteException error) => error.SqliteErrorCode switch
+    {
+        5 or 6 => "ResourceBusy",     // SQLITE_BUSY / SQLITE_LOCKED
+        8 => "PermissionDenied",      // SQLITE_READONLY
+        11 or 26 => "InvalidData",    // SQLITE_CORRUPT / SQLITE_NOTADB
+        13 => "StorageFull",          // SQLITE_FULL
+        14 => "NotFound",             // SQLITE_CANTOPEN
+        _ => "Other",
     };
 }

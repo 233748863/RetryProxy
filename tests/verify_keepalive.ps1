@@ -8,6 +8,7 @@
 # 通道设置从供应商页的代理设置抽屉进入；独立准备成功/重试/取消由 verify_preparation.ps1 和 xUnit 覆盖。
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'runtime_files.ps1')
 $ExePath = (Resolve-Path -LiteralPath $ExePath).ProviderPath
 $distDir = Split-Path -Parent $ExePath
 $oldConfig = $env:RETRY_PROXY_CONFIG_JSON
@@ -188,7 +189,7 @@ public static class KeepaliveNative {
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr handle);
 }
 '@
-    Get-ChildItem -LiteralPath $distDir -File | Where-Object { $_.Name -match '\.(exe|dll)$|\.(deps|runtimeconfig)\.json$' } | Copy-Item -Destination $runtime
+    Copy-RetryProxyRuntime -ExePath $ExePath -DestinationDirectory $runtime
     $translations = Join-Path $distDir 'User\I18n'
     if (Test-Path -LiteralPath $translations) {
         New-Item -ItemType Directory -Path (Join-Path $runtime 'User') -Force | Out-Null

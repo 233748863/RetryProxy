@@ -5,6 +5,7 @@ param(
 )
 # 当前桌面真实窗口验收；只启动临时副本，只请求本机假上游，保留现场，不写应用日志。
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'runtime_files.ps1')
 $ExePath = (Resolve-Path -LiteralPath $ExePath).ProviderPath
 $root = Split-Path -Parent $PSScriptRoot
 if (!$OutputDirectory) { $OutputDirectory = Join-Path $root ('.tmp/log-comparison-' + [guid]::NewGuid().ToString('N')) }
@@ -77,12 +78,25 @@ function Log-Texts {
     @($rows.FindAll([Windows.Automation.TreeScope]::Descendants,[Windows.Automation.Condition]::TrueCondition) |
         ForEach-Object { $_.Current.Name } | Where-Object { $_ -match '^\d{4}-\d\d-\d\d .+\[(通道代理|系统)\]' } | Sort-Object -Unique)
 }
-function Theme {
-    $stream = [IO.FileStream]::new((Join-Path $runtime 'User/config.json'),[IO.FileMode]::Open,[IO.FileAccess]::Read,([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
-    $reader = [IO.StreamReader]::new($stream)
-    try { return [int](($reader.ReadToEnd() | ConvertFrom-Json).commonConfig.currentThemeType) }
-    finally { $reader.Dispose() }
+$configDbReaderScript = @'
+import sqlite3, sys
+connection = sqlite3.connect(sys.argv[1], timeout=5)
+try:
+    row = connection.execute("SELECT value FROM config WHERE key = ?", (sys.argv[2],)).fetchone()
+finally:
+    connection.close()
+sys.stdout.write('' if row is None else row[0])
+'@
+function Read-ConfigDb([string]$Key) {
+    $db = Join-Path $runtime 'User/config.db'
+    if (!(Test-Path -LiteralPath $db)) { throw '配置库尚未创建' }
+    $reader = Join-Path $runtime 'read-config-db.py'
+    if (!(Test-Path -LiteralPath $reader)) { [IO.File]::WriteAllText($reader, $configDbReaderScript) }
+    $output = @(& python -X utf8 $reader $db $Key 2>&1)
+    if ($LASTEXITCODE -ne 0) { throw "读取配置库失败：$($output -join ' ')" }
+    return ($output -join "`n")
 }
+function Theme { [int]((Read-ConfigDb 'common' | ConvertFrom-Json).currentThemeType) }
 function Set-LightTheme {
     Navigate '软件设置' 'SwitchAppearance'
     for ($i=0; $i -lt 6 -and (Theme) -lt 3; $i++) {
@@ -154,7 +168,7 @@ try {
     [IO.File]::WriteAllText((Join-Path $env:CLAUDE_CONFIG_DIR 'settings.json'),'{}')
     [IO.File]::WriteAllText((Join-Path $env:CODEX_HOME 'config.toml'),'')
     $package = Split-Path -Parent $ExePath
-    Get-ChildItem -LiteralPath $package -File | Where-Object { $_.Name -match '\.(exe|dll)$|\.(deps|runtimeconfig)\.json$' } | Copy-Item -Destination $runtime
+    Copy-RetryProxyRuntime -ExePath $ExePath -DestinationDirectory $runtime
     $translations = Join-Path $package 'User/I18n'
     if (!(Test-Path -LiteralPath $translations)) { $translations = Join-Path $root 'src/RetryProxy.App/User/I18n' }
     Copy-Item -LiteralPath $translations -Destination (Join-Path $runtime 'User/I18n') -Recurse

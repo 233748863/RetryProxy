@@ -1,48 +1,148 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Data.Sqlite;
 using RetryProxy.Core.Config;
 using RetryProxy.Core.Diagnostics;
+using RetryProxy.Core.Storage;
 using Xunit;
 
 namespace RetryProxy.Tests;
 
+/// <summary>
+/// 请求诊断迁库（logs\data.db 的 diagnostic_events / diagnostic_marks）：写入、重放、详情、保留、
+/// 容量与损坏、写失败。覆盖与旧 jsonl 版相同的语义：追加行 → 事件行、文件头控制记录 → 标记表、
+/// 行号游标 → id 游标、文件字节上限 → payload_bytes 汇总、末行覆盖 → 唯一约束幂等。
+/// </summary>
 public sealed class DiagnosticStoreTests : IDisposable
 {
     private readonly string _directory = Path.Combine(Path.GetTempPath(), "retry-proxy-diagnostics-tests", Guid.NewGuid().ToString("N"));
+    private readonly List<DataDatabase> _databases = new();
     private readonly TestClock _clock = new(new DateTimeOffset(2026, 10, 3, 12, 0, 0, TimeSpan.Zero));
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
+    private static readonly JsonSerializerOptions RowJson = new(JsonSerializerDefaults.Web)
+    {
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+        IgnoreReadOnlyProperties = true,
+        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
+    };
 
     public DiagnosticStoreTests() => Directory.CreateDirectory(_directory);
-    public void Dispose() { try { Directory.Delete(_directory, true); } catch (IOException) { } }
-    private DiagnosticStore Store(DiagnosticStoreOptions? options = null) => new(_directory, _clock, options);
+
+    public void Dispose()
+    {
+        foreach (var data in _databases) data.Dispose();
+        SqliteConnection.ClearAllPools();
+        try { Directory.Delete(_directory, true); } catch (IOException) { }
+    }
+
+    private DataDatabase Data()
+    {
+        var data = new DataDatabase(_directory);
+        _databases.Add(data);
+        return data;
+    }
+
+    private DiagnosticStore Store(DiagnosticStoreOptions? options = null) => new(Data(), _clock, options);
+
     private DiagnosticRequestInfo Info(string? id = null, ClientType client = ClientType.Codex, int seconds = 0)
         => new(id ?? Guid.NewGuid().ToString("N"), client, DateOnly.FromDateTime(_clock.GetLocalNow().DateTime),
             _clock.GetLocalNow().AddSeconds(seconds), "POST", "/v1/responses");
+
     private DiagnosticQuery Query(ClientType client = ClientType.Codex) => new(DateOnly.FromDateTime(_clock.GetLocalNow().DateTime), client);
+
     private static DiagnosticTarget Target(string provider = "provider-a", string key = "key-a", string model = "model-a")
         => new(provider, "历史供应商 " + provider, key, "历史账号 " + key, model);
+
     private static void Send(IDiagnosticRequest request, DiagnosticTarget? target = null, ulong retryCount = 0)
         => request.Record(new DiagnosticEntry(DiagnosticEventKind.SendStarted, 1) { Target = target ?? Target(), RetryCount = retryCount });
+
     private static void Complete(IDiagnosticRequest request, DiagnosticOutcome outcome = DiagnosticOutcome.Success)
     {
         request.Record(new DiagnosticEntry(DiagnosticEventKind.Outcome, 3) { Outcome = outcome, FirstContentSeconds = 1.25 });
         request.Record(new DiagnosticEntry(DiagnosticEventKind.Delivery, 3.5) { Delivery = DiagnosticDelivery.Complete });
         request.Record(new DiagnosticEntry(DiagnosticEventKind.Finished, 4));
     }
-    private string[] Files() => Directory.GetFiles(_directory, "*.jsonl");
-    private static string ReadShared(string path)
+
+    private long Scalar(string sql)
     {
-        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-        using var reader = new StreamReader(stream);
-        return reader.ReadToEnd();
+        using var connection = Data().Database.Connect();
+        using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        return Convert.ToInt64(command.ExecuteScalar(), CultureInfo.InvariantCulture);
     }
+
+    private void Exec(string sql)
+    {
+        using var connection = Data().Database.Connect();
+        using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        command.ExecuteNonQuery();
+    }
+
+    private string StoredText()
+    {
+        using var connection = Data().Database.Connect();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT COALESCE(entry_json, '') || ' ' || COALESCE(request_json, '') FROM diagnostic_events ORDER BY id;";
+        using var reader = command.ExecuteReader();
+        var builder = new StringBuilder();
+        while (reader.Read()) builder.AppendLine(reader.GetString(0));
+        return builder.ToString();
+    }
+
+    private void SeedEvent(string session, string requestId, DateOnly date, long sequence, DiagnosticEntry entry, DiagnosticRequestInfo? request)
+    {
+        var entryJson = JsonSerializer.Serialize(entry, RowJson);
+        var requestJson = request is null ? null : JsonSerializer.Serialize(request, RowJson);
+        var payload = Encoding.UTF8.GetByteCount(entryJson) + (requestJson is null ? 0 : Encoding.UTF8.GetByteCount(requestJson));
+        using var connection = Data().Database.Connect();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT INTO diagnostic_events (session_id, request_id, date, sequence, kind, entry_json, request_json, payload_bytes, created_at_ms)
+            VALUES ($session, $request, $date, $sequence, $kind, $entry, $requestJson, $payload, $created);
+            """;
+        command.Parameters.AddWithValue("$session", session);
+        command.Parameters.AddWithValue("$request", requestId);
+        command.Parameters.AddWithValue("$date", DiagnosticStore.DateText(date));
+        command.Parameters.AddWithValue("$sequence", sequence);
+        command.Parameters.AddWithValue("$kind", DiagnosticStore.KindText(entry.Kind));
+        command.Parameters.AddWithValue("$entry", entryJson);
+        command.Parameters.AddWithValue("$requestJson", (object?)requestJson ?? DBNull.Value);
+        command.Parameters.AddWithValue("$payload", payload);
+        command.Parameters.AddWithValue("$created", _clock.GetUtcNow().ToUnixTimeMilliseconds());
+        command.ExecuteNonQuery();
+    }
+
+    /// <summary>阻塞的假写入端：进入后等待释放，再真正执行写动作（验证队列溢出与退出等待）。</summary>
+    private static Func<Action<SqliteConnection>, Task> BlockingWrite(DataDatabase data, TaskCompletionSource entered, Task release)
+        => async action =>
+        {
+            entered.TrySetResult();
+            await release.ConfigureAwait(false);
+            using var connection = data.Database.Connect();
+            action(connection);
+        };
+
+    /// <summary>统计写入的假写入端：库中已有事件行时发出信号（验证定时与批量落库）。</summary>
+    private static Func<Action<SqliteConnection>, Task> SignalingWrite(DataDatabase data, TaskCompletionSource flushed)
+        => action =>
+        {
+            using var connection = data.Database.Connect();
+            action(connection);
+            using var command = connection.CreateCommand();
+            command.CommandText = "SELECT COUNT(*) FROM diagnostic_events;";
+            if (Convert.ToInt64(command.ExecuteScalar(), CultureInfo.InvariantCulture) > 0) flushed.TrySetResult();
+            return Task.CompletedTask;
+        };
 
     [Fact]
     public async Task CompletedHistoryRestoresExactObservedResultDeliveryCountersAndFullIdentity()
@@ -78,10 +178,10 @@ public sealed class DiagnosticStoreTests : IDisposable
         Assert.Null(result.Warning);
         var detail = await restored.ReadDetailAsync(info.Date, info.RequestId);
         Assert.All(detail.Events, value => Assert.Equal(session, value.SessionId));
-        var text = File.ReadAllText(Assert.Single(Files()));
-        Assert.Contains("\"version\":1", text);
+        var text = StoredText();
         Assert.Contains("\"kind\":\"sendStarted\"", text);
         Assert.Contains("\"outcome\":\"success\"", text);
+        Assert.Contains(info.RequestId, text);
         Assert.DoesNotContain("\"label\"", text);
     }
 
@@ -247,15 +347,17 @@ public sealed class DiagnosticStoreTests : IDisposable
         var info = Info();
         var request = store.Begin(info)!;
         for (var index = 0; index < 600; index++) Send(request);
+        await store.FlushAsync();
+        var total = Scalar($"SELECT COALESCE(SUM(payload_bytes), 0) FROM diagnostic_events WHERE date = '{DiagnosticStore.DateText(info.Date)}';");
         await store.QueryAsync(Query());
-        var initial = Interlocked.Read(ref readBytes);
-        Assert.True(initial > 100_000);
+        Assert.Equal(total, Interlocked.Read(ref readBytes));
         await store.QueryAsync(Query());
-        Assert.Equal(initial, Interlocked.Read(ref readBytes));
+        Assert.Equal(total, Interlocked.Read(ref readBytes));
         Send(request, retryCount: 99);
         var updated = Assert.Single((await store.QueryAsync(Query())).Items);
-        var increment = Interlocked.Read(ref readBytes) - initial;
-        Assert.InRange(increment, 1, 2048);
+        var increment = Interlocked.Read(ref readBytes) - total;
+        var lastPayload = Scalar("SELECT payload_bytes FROM diagnostic_events ORDER BY id DESC LIMIT 1;");
+        Assert.Equal(lastPayload, increment);
         Assert.Equal(99UL, updated.RetryCount);
         var beforeDetail = Interlocked.Read(ref readBytes);
         var detail = await store.ReadDetailAsync(info.Date, info.RequestId, 200);
@@ -265,22 +367,19 @@ public sealed class DiagnosticStoreTests : IDisposable
     }
 
     [Fact]
-    public async Task StartupRetainsExactlyTodayAndPreviousSixDaysAndLeavesUnrelatedFilesAlone()
+    public async Task StartupRetainsExactlyTodayAndPreviousSixDaysAndDeletesOlderRows()
     {
         for (var ago = 0; ago < 9; ago++)
         {
             var date = Query().Date.AddDays(-ago);
-            var session = Guid.NewGuid().ToString("N");
             var info = Info() with { Date = date, StartedAt = _clock.GetUtcNow().AddDays(-ago) };
-            File.WriteAllText(Path.Combine(_directory, $"{date:yyyy-MM-dd}-{session}.jsonl"), JsonSerializer.Serialize(
-                new DiagnosticEvent(session, info.RequestId, date, 1, info, new DiagnosticEntry(DiagnosticEventKind.Started, 0)), Json) + "\n");
+            SeedEvent(Guid.NewGuid().ToString("N"), info.RequestId, date, 1, new DiagnosticEntry(DiagnosticEventKind.Started, 0), info);
         }
-        var unrelated = Path.Combine(_directory, "unrelated.jsonl");
-        File.WriteAllText(unrelated, "unchanged");
         using var store = Store();
         await store.FlushAsync();
-        Assert.Equal(8, Files().Length);
-        Assert.Equal("unchanged", File.ReadAllText(unrelated));
+        Assert.Equal(7, Scalar("SELECT COUNT(*) FROM diagnostic_events;"));
+        Assert.Equal(1, Scalar($"SELECT COUNT(*) FROM diagnostic_events WHERE date = '{DiagnosticStore.DateText(Query().Date.AddDays(-6))}';"));
+        Assert.Equal(0, Scalar($"SELECT COUNT(*) FROM diagnostic_events WHERE date < '{DiagnosticStore.DateText(Query().Date.AddDays(-6))}';"));
         Assert.Single((await store.QueryAsync(Query() with { Date = Query().Date.AddDays(-6) })).Items);
         Assert.Empty((await store.QueryAsync(Query() with { Date = Query().Date.AddDays(-7) })).Items);
         Assert.Null(store.Begin(Info() with { Date = Query().Date.AddDays(-7) }));
@@ -288,7 +387,7 @@ public sealed class DiagnosticStoreTests : IDisposable
     }
 
     [Fact]
-    public async Task CrossingMidnightKeepsAcceptanceDayAndExpiredActiveRequestCannotRecreateOldFile()
+    public async Task CrossingMidnightKeepsAcceptanceDayAndExpiredActiveRequestCannotRecreateOldRows()
     {
         _clock.Set(new DateTimeOffset(2026, 10, 3, 23, 59, 30, TimeSpan.Zero));
         using var store = Store();
@@ -301,11 +400,10 @@ public sealed class DiagnosticStoreTests : IDisposable
         await store.FlushAsync();
         Assert.Single((await store.QueryAsync(Query() with { Date = info.Date })).Items);
         Assert.Empty((await store.QueryAsync(Query())).Items);
-        Assert.StartsWith("2026-10-03-", Path.GetFileName(Assert.Single(Files())));
         _clock.Advance(TimeSpan.FromDays(6));
         Send(request, retryCount: 3);
         await store.FlushAsync();
-        Assert.Empty(Files());
+        Assert.Equal(0, Scalar($"SELECT COUNT(*) FROM diagnostic_events WHERE date = '{DiagnosticStore.DateText(info.Date)}';"));
         Assert.Empty((await store.QueryAsync(Query() with { Date = info.Date })).Items);
         Assert.Equal(0, store.LiveCountForTest);
     }
@@ -315,21 +413,22 @@ public sealed class DiagnosticStoreTests : IDisposable
     {
         var clock = new TestClock(new DateTimeOffset(2026, 10, 3, 18, 0, 0, TimeSpan.Zero),
             TimeZoneInfo.CreateCustomTimeZone("Test+8", TimeSpan.FromHours(8), "Test+8", "Test+8"));
-        using var store = new DiagnosticStore(_directory, clock);
+        using var store = new DiagnosticStore(Data(), clock);
         Assert.Equal(new DateOnly(2026, 10, 4), store.Today);
         await store.FlushAsync();
     }
 
     [Fact]
-    public async Task QueueOverflowDoesNotWaitForWriterAndPersistsSafeIncompleteMarker()
+    public async Task QueueOverflowDoesNotWaitForWriterAndPersistsSafeIncompleteMark()
     {
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var info = Info();
-        using (var store = Store(new DiagnosticStoreOptions
+        var data = Data();
+        using (var store = new DiagnosticStore(data, _clock, new DiagnosticStoreOptions
         {
             QueueCapacity = 2,
-            OpenWriteForTest = path => new BlockingStream(path, entered, release.Task),
+            WriteForTest = BlockingWrite(data, entered, release.Task),
         }))
         {
             var request = store.Begin(info)!;
@@ -350,23 +449,28 @@ public sealed class DiagnosticStoreTests : IDisposable
             Assert.Equal(8UL, summary.RetryCount);
             Assert.True(summary.Incomplete);
         }
-        Assert.Contains("\"control\":\"incomplete\"", File.ReadAllText(Assert.Single(Files())));
+        Assert.Equal(1, Scalar("SELECT COUNT(*) FROM diagnostic_marks;"));
         using var restored = Store();
         Assert.True(Assert.Single((await restored.QueryAsync(Query())).Items).Incomplete);
     }
 
     [Fact]
-    public async Task EventByteLimitAndDailyLimitIncludeControlRecordsAcrossSessions()
+    public async Task EventByteLimitAndDailyLimitIncludeAllSessions()
     {
         using (var store = Store(new DiagnosticStoreOptions { MaxEventBytes = 256 }))
         {
-            Complete(store.Begin(Info())!);
+            // 单条事件上限按清洗后的落库字节判定：长供应商名（64）+ 长 Key 名（64）+ 长模型（128）确定超过 256。
+            var longName = new string('a', 64);
+            var longModel = new string('b', 128);
+            var request = store.Begin(Info())!;
+            Send(request, new DiagnosticTarget("provider-a", longName, "key-a", longName, longModel));
+            Complete(request);
             var page = await store.QueryAsync(Query());
             Assert.Equal(DiagnosticStore.IncompleteWarning, page.Warning);
             Assert.True(Assert.Single(page.Items).Incomplete);
-            Assert.All(ReadShared(Assert.Single(Files())).Split('\n', StringSplitOptions.RemoveEmptyEntries), line => Assert.True(Encoding.UTF8.GetByteCount(line) + 1 <= 256));
+            Assert.InRange(Scalar("SELECT COALESCE(MAX(payload_bytes), 0) FROM diagnostic_events;"), 1, 256);
+            Assert.Equal(0, Scalar($"SELECT COUNT(*) FROM diagnostic_events WHERE entry_json LIKE '%{longModel}%';"));
         }
-        foreach (var file in Files()) File.Delete(file);
         for (var session = 0; session < 2; session++)
         {
             using var store = Store(new DiagnosticStoreOptions { MaxDailyBytes = 2048 });
@@ -375,9 +479,9 @@ public sealed class DiagnosticStoreTests : IDisposable
             Complete(request);
             await store.FlushAsync();
             Assert.Equal(DiagnosticStore.IncompleteWarning, store.Warning);
-            Assert.True(Files().Sum(path => new FileInfo(path).Length) <= 2048);
+            Assert.InRange(Scalar("SELECT COALESCE(SUM(payload_bytes), 0) FROM diagnostic_events;"), 1, 2048);
         }
-        Assert.Contains(Files(), path => File.ReadAllText(path).Contains("\"control\":\"incomplete\"", StringComparison.Ordinal));
+        Assert.InRange(Scalar("SELECT COUNT(*) FROM diagnostic_marks;"), 1, 3);
     }
 
     [Fact]
@@ -385,7 +489,7 @@ public sealed class DiagnosticStoreTests : IDisposable
     {
         var blockedDirectory = Path.Combine(_directory, "private-path-secret");
         File.WriteAllText(blockedDirectory, "file-blocks-directory");
-        using var store = new DiagnosticStore(blockedDirectory, _clock);
+        using var store = new DiagnosticStore(new DataDatabase(blockedDirectory), _clock);
         var request = store.Begin(Info())!;
         Complete(request);
         await store.FlushAsync().WaitAsync(TimeSpan.FromSeconds(5));
@@ -421,7 +525,8 @@ public sealed class DiagnosticStoreTests : IDisposable
     {
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        using var store = Store(new DiagnosticStoreOptions { QueueCapacity = 1, OpenWriteForTest = path => new BlockingStream(path, entered, release.Task) });
+        var data = Data();
+        using var store = new DiagnosticStore(data, _clock, new DiagnosticStoreOptions { QueueCapacity = 1, WriteForTest = BlockingWrite(data, entered, release.Task) });
         var info = Info();
         var request = store.Begin(info)!;
         await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
@@ -463,10 +568,10 @@ public sealed class DiagnosticStoreTests : IDisposable
 
     [Theory]
     [InlineData("gap")]
-    [InlineData("bad-line")]
+    [InlineData("bad-json")]
     [InlineData("partial")]
     [InlineData("oversized")]
-    [InlineData("version")]
+    [InlineData("kind")]
     public async Task CorruptHistoryIsIncompleteButObservedSuccessIsNotReclassifiedAsFailure(string corruption)
     {
         using (var writer = Store())
@@ -475,17 +580,14 @@ public sealed class DiagnosticStoreTests : IDisposable
             Send(request);
             Complete(request);
         }
-        var file = Assert.Single(Files());
-        var lines = File.ReadAllLines(file).ToList();
         switch (corruption)
         {
-            case "gap": lines.RemoveAt(1); break;
-            case "bad-line": lines.Insert(1, "{broken-json"); break;
-            case "partial": lines.Add("{\"version\":1"); break;
-            case "oversized": lines.Insert(1, new string('x', 5000)); break;
-            case "version": lines[1] = lines[1].Replace("\"version\":1", "\"version\":99", StringComparison.Ordinal); break;
+            case "gap": Exec("DELETE FROM diagnostic_events WHERE sequence = 2;"); break;
+            case "bad-json": Exec("UPDATE diagnostic_events SET entry_json = '{broken-json' WHERE sequence = 2;"); break;
+            case "partial": Exec("DELETE FROM diagnostic_events WHERE sequence = 5;"); break;
+            case "oversized": Exec("UPDATE diagnostic_events SET payload_bytes = 5000 WHERE sequence = 2;"); break;
+            case "kind": Exec("UPDATE diagnostic_events SET kind = 'bogus' WHERE sequence = 2;"); break;
         }
-        File.WriteAllText(file, string.Join('\n', lines) + (corruption == "partial" ? "" : "\n"));
         using var store = Store();
         var page = await store.QueryAsync(Query());
         var summary = Assert.Single(page.Items);
@@ -497,14 +599,14 @@ public sealed class DiagnosticStoreTests : IDisposable
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
-    public async Task DuplicateRecordedEventIsIdempotentAndDoesNotMakeCompleteHistoryIncomplete(bool adjacent)
+    public async Task DuplicateEventRowsAreIgnoredOrRejectedAndKeepCompleteHistory(bool ignoreDuplicates)
     {
         var info = Info();
         using (var writer = Store()) { var request = writer.Begin(info)!; Send(request); Complete(request); }
-        var file = Assert.Single(Files());
-        var lines = File.ReadAllLines(file).ToList();
-        lines.Insert(adjacent ? 2 : lines.Count, lines[1]);
-        File.WriteAllLines(file, lines);
+        var insert = ignoreDuplicates ? "INSERT OR IGNORE" : "INSERT";
+        var statement = $"{insert} INTO diagnostic_events (session_id, request_id, date, sequence, kind, entry_json, request_json, payload_bytes, created_at_ms) SELECT session_id, request_id, date, sequence, kind, entry_json, request_json, payload_bytes, created_at_ms FROM diagnostic_events WHERE sequence = 2;";
+        if (ignoreDuplicates) Exec(statement);
+        else Assert.Throws<SqliteException>(() => Exec(statement));
         using var store = Store();
         var summary = Assert.Single((await store.QueryAsync(Query())).Items);
         Assert.Equal(1UL, summary.SendCount);
@@ -513,7 +615,7 @@ public sealed class DiagnosticStoreTests : IDisposable
     }
 
     [Fact]
-    public async Task PrivacyIsAppliedBeforePersistenceAndAgainWhenReadingUntrustedFiles()
+    public async Task PrivacyIsAppliedBeforePersistenceAndAgainWhenReadingUntrustedRows()
     {
         var info = Info() with { Endpoint = "https://secret.invalid/private/v1/responses?token=secret-query" };
         using (var writer = Store())
@@ -526,15 +628,14 @@ public sealed class DiagnosticStoreTests : IDisposable
             });
             Complete(request);
         }
-        var file = Assert.Single(Files());
-        var saved = File.ReadAllText(file);
+        var saved = StoredText();
         Assert.DoesNotContain("secret.invalid", saved);
         Assert.DoesNotContain("secret-query", saved);
         Assert.DoesNotContain("sk-provider-secret", saved);
         Assert.DoesNotContain("sess-model-secret", saved);
         Assert.DoesNotContain("sk-error-secret", saved);
         Assert.DoesNotContain("eyj-secret-header", saved);
-        File.WriteAllText(file, saved.Replace("历史账号", "sk-disk-secret", StringComparison.Ordinal).Replace("[已隐藏]", "sk-disk-secret", StringComparison.Ordinal));
+        Exec("UPDATE diagnostic_events SET entry_json = replace(entry_json, '历史账号', 'sk-disk-secret');");
         using var store = Store();
         var detail = await store.ReadDetailAsync(info.Date, info.RequestId);
         Assert.DoesNotContain("sk-disk-secret", JsonSerializer.Serialize(detail, Json));
@@ -547,11 +648,12 @@ public sealed class DiagnosticStoreTests : IDisposable
     public async Task TimerFlushesWithoutQueryAndConfiguredEventBatchFlushes(int eventCount)
     {
         var flushed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        using var store = Store(new DiagnosticStoreOptions { FlushEventCount = 4, OpenWriteForTest = path => new FlushSignalStream(path, flushed) });
+        var data = Data();
+        using var store = new DiagnosticStore(data, _clock, new DiagnosticStoreOptions { FlushEventCount = 4, WriteForTest = SignalingWrite(data, flushed) });
         var request = store.Begin(Info())!;
         for (var index = 1; index < eventCount; index++) Send(request);
         await flushed.Task.WaitAsync(TimeSpan.FromSeconds(3));
-        Assert.NotEmpty(ReadShared(Assert.Single(Files())));
+        Assert.InRange(Scalar("SELECT COUNT(*) FROM diagnostic_events;"), 1, 4);
     }
 
     [Fact]
@@ -559,7 +661,8 @@ public sealed class DiagnosticStoreTests : IDisposable
     {
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var store = Store(new DiagnosticStoreOptions { OpenWriteForTest = path => new BlockingStream(path, entered, release.Task, honorCancellation: false) });
+        var data = Data();
+        var store = new DiagnosticStore(data, _clock, new DiagnosticStoreOptions { WriteForTest = BlockingWrite(data, entered, release.Task) });
         var info = Info();
         var request = store.Begin(info)!;
         await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
@@ -601,76 +704,79 @@ public sealed class DiagnosticStoreTests : IDisposable
     }
 
     [Fact]
-    public async Task CompleteFinalJsonWithoutNewlineStillRestoresItsObservedFinish()
-    {
-        using (var writer = Store()) Complete(writer.Begin(Info())!);
-        var path = Assert.Single(Files());
-        File.WriteAllText(path, File.ReadAllText(path).TrimEnd('\n'));
-        using var store = Store();
-        var item = Assert.Single((await store.QueryAsync(Query())).Items);
-        Assert.True(item.Finished);
-        Assert.False(item.Incomplete);
-        Assert.Equal(4, item.TotalSeconds);
-    }
-
-    [Fact]
-    public async Task RequestMetadataMayBeOmittedAfterTheStartedEvent()
+    public async Task RequestMetadataIsStoredOnFirstEventOnlyAndRestoreKeepsObservedFinish()
     {
         var info = Info();
         using (var writer = Store()) { var request = writer.Begin(info)!; Send(request); Complete(request); }
-        var path = Assert.Single(Files());
-        var lines = File.ReadAllLines(path).ToArray();
-        for (var index = 1; index < lines.Length; index++)
-        {
-            var json = System.Text.Json.Nodes.JsonNode.Parse(lines[index])!.AsObject();
-            json.Remove("request");
-            lines[index] = json.ToJsonString();
-        }
-        File.WriteAllLines(path, lines);
+        Assert.Equal(1, Scalar("SELECT COUNT(*) FROM diagnostic_events WHERE request_json IS NOT NULL;"));
+        Assert.Equal(5, Scalar("SELECT COUNT(*) FROM diagnostic_events;"));
         using var store = Store();
         var item = Assert.Single((await store.QueryAsync(Query())).Items);
         Assert.False(item.Incomplete);
         Assert.Equal(DiagnosticOutcome.Success, item.Outcome);
+        Assert.True(item.Finished);
+        Assert.Equal(4, item.TotalSeconds);
         Assert.Equal(5, (await store.ReadDetailAsync(info.Date, info.RequestId)).Events.Count);
     }
 
     [Fact]
-    public async Task PartialFailedWriteIsSeparatedBeforeRecoveryAndCannotExceedCapacity()
+    public async Task CommitFailureDropsBatchMarksIncompleteAndLaterWritesSucceed()
     {
-        var failOnce = 0;
-        using (var writer = Store(new DiagnosticStoreOptions
+        var failCommits = 0;
+        var data = Data();
+        using (var store = new DiagnosticStore(data, _clock, new DiagnosticStoreOptions
         {
-            MaxDailyBytes = 4096,
-            OpenWriteForTest = path => Interlocked.Exchange(ref failOnce, 1) == 0
-                ? new PartialFailureStream(path)
-                : new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete, 1, FileOptions.Asynchronous),
+            WriteForTest = action =>
+            {
+                if (Volatile.Read(ref failCommits) == 1)
+                {
+                    Interlocked.Exchange(ref failCommits, 2);
+                    throw new IOException("private-exception-must-not-escape");
+                }
+                using var connection = data.Database.Connect();
+                action(connection);
+                return Task.CompletedTask;
+            },
         }))
         {
-            var request = writer.Begin(Info())!;
+            await store.FlushAsync();
+            var info = Info();
+            var request = store.Begin(info)!;
             Send(request);
             Complete(request);
-            await writer.FlushAsync();
-            Assert.Equal(DiagnosticStore.IncompleteWarning, writer.Warning);
-            Assert.True(Files().Sum(path => new FileInfo(path).Length) <= 4096);
+            Volatile.Write(ref failCommits, 1);
+            await store.FlushAsync();
+            Assert.Equal(DiagnosticStore.IncompleteWarning, store.Warning);
+            Assert.Equal(0, Scalar("SELECT COUNT(*) FROM diagnostic_events;"));
+            Assert.Equal(1, Scalar("SELECT COUNT(*) FROM diagnostic_marks;"));
+            Volatile.Write(ref failCommits, 2);
+            Complete(store.Begin(Info())!);
+            await store.FlushAsync();
+            Assert.True(Scalar("SELECT COUNT(*) FROM diagnostic_events;") > 0);
         }
-        using var restored = Store();
-        var result = Assert.Single((await restored.QueryAsync(Query())).Items);
-        Assert.Equal(DiagnosticOutcome.Success, result.Outcome);
-        Assert.True(result.Incomplete);
     }
 
     [Fact]
-    public async Task FailedRetentionDeletionWarnsButExpiredRecordsRemainExcluded()
+    public async Task FailedRetentionDeletionWarnsButExpiredRowsStayExcluded()
     {
-        if (!OperatingSystem.IsWindows()) return;
         var expired = Query().Date.AddDays(-7);
-        var path = Path.Combine(_directory, $"{expired:yyyy-MM-dd}-{Guid.NewGuid():N}.jsonl");
-        File.WriteAllText(path, "expired");
-        using var held = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
-        using var store = Store();
+        var info = Info() with { Date = expired, StartedAt = _clock.GetUtcNow().AddDays(-7) };
+        SeedEvent(Guid.NewGuid().ToString("N"), info.RequestId, expired, 1, new DiagnosticEntry(DiagnosticEventKind.Started, 0), info);
+        var failOnce = 0;
+        var data = Data();
+        using var store = new DiagnosticStore(data, _clock, new DiagnosticStoreOptions
+        {
+            WriteForTest = action =>
+            {
+                if (Interlocked.Exchange(ref failOnce, 1) == 0) throw new IOException("retention deletion failure");
+                using var connection = data.Database.Connect();
+                action(connection);
+                return Task.CompletedTask;
+            },
+        });
         await store.FlushAsync();
-        Assert.True(File.Exists(path));
         Assert.Equal(DiagnosticStore.IncompleteWarning, store.Warning);
+        Assert.Equal(1, Scalar($"SELECT COUNT(*) FROM diagnostic_events WHERE date = '{DiagnosticStore.DateText(expired)}';"));
         Assert.Empty((await store.QueryAsync(Query() with { Date = expired })).Items);
     }
 
@@ -740,36 +846,5 @@ public sealed class DiagnosticStoreTests : IDisposable
         public override TimeZoneInfo LocalTimeZone => zone ?? TimeZoneInfo.Utc;
         public void Advance(TimeSpan elapsed) => Interlocked.Add(ref _ticks, elapsed.Ticks);
         public void Set(DateTimeOffset time) => Interlocked.Exchange(ref _ticks, time.UtcTicks);
-    }
-
-    private sealed class BlockingStream(string path, TaskCompletionSource entered, Task release, bool honorCancellation = true)
-        : FileStream(path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete, 1, FileOptions.Asynchronous)
-    {
-        public override async ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
-        {
-            entered.TrySetResult();
-            await release.WaitAsync(honorCancellation ? cancellationToken : CancellationToken.None);
-            await base.WriteAsync(buffer, cancellationToken);
-        }
-    }
-
-    private sealed class PartialFailureStream(string path)
-        : FileStream(path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete, 1, FileOptions.Asynchronous)
-    {
-        public override async ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
-        {
-            await base.WriteAsync(buffer[..Math.Min(buffer.Length, 10)], cancellationToken);
-            throw new IOException("private-exception-must-not-escape");
-        }
-    }
-
-    private sealed class FlushSignalStream(string path, TaskCompletionSource flushed)
-        : FileStream(path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete, 1, FileOptions.Asynchronous)
-    {
-        public override async Task FlushAsync(CancellationToken cancellationToken)
-        {
-            await base.FlushAsync(cancellationToken);
-            flushed.TrySetResult();
-        }
     }
 }

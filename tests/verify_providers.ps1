@@ -7,6 +7,7 @@ if ($VerifyTrayPointer -and -not $UseCurrentDesktop) { throw 'Tray pointer check
 # M3 供应商界面验收。默认私有桌面；所有配置和凭据仅为测试数据，不读写真实客户端配置。
 # 显式选择当前桌面时才截图，避免 PrintWindow 在私有桌面返回白图而误认为视觉验收成功。
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'runtime_files.ps1')
 $root = Split-Path -Parent $PSScriptRoot
 $ExePath = (Resolve-Path -LiteralPath $ExePath).ProviderPath
 $runtime = Join-Path ([IO.Path]::GetTempPath()) ('RetryProxyM3-' + [guid]::NewGuid().ToString('N'))
@@ -189,7 +190,7 @@ function Capture([string]$Name) {
 try {
  New-Item -ItemType Directory -Path (Join-Path $root '.tmp') -Force | Out-Null
  New-Item -ItemType Directory -Path $runtime | Out-Null
- Get-ChildItem -LiteralPath (Split-Path -Parent $ExePath) -File | Copy-Item -Destination $runtime
+ Copy-RetryProxyRuntime -ExePath $ExePath -DestinationDirectory $runtime
  New-Item -ItemType Directory -Path (Join-Path $runtime 'User') | Out-Null
  Copy-Item -LiteralPath (Join-Path $root 'src\RetryProxy.App\User\I18n') -Destination (Join-Path $runtime 'User\I18n') -Recurse
  $env:CLAUDE_CONFIG_DIR=Join-Path $runtime 'claude'

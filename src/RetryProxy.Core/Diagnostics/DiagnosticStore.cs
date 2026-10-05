@@ -2,13 +2,15 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Globalization;
-using System.IO;
 using System.Linq;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
+using Microsoft.Data.Sqlite;
+using RetryProxy.Core.Storage;
 
 namespace RetryProxy.Core.Diagnostics;
 
@@ -21,16 +23,15 @@ public sealed class DiagnosticStoreOptions
     public int FlushEventCount { get; init; } = 256;
     public TimeSpan FlushInterval { get; init; } = TimeSpan.FromSeconds(1);
     public int MaxLiveRequests { get; init; } = 4096;
-    internal Func<string, Stream>? OpenWriteForTest { get; init; }
+    internal Func<Action<SqliteConnection>, Task>? WriteForTest { get; init; }
     internal Action<long>? BytesReadForTest { get; init; }
 }
 
-/// <summary>独立、尽力而为的诊断旁路；采集线程不做文件操作或等待队列容量。</summary>
+/// <summary>独立、尽力而为的诊断旁路；采集线程只做序列化与入队，落库由后台批量事务完成（logs\data.db 的 diagnostic_events）。</summary>
 public sealed partial class DiagnosticStore : IDiagnosticRepository
 {
     public const string IncompleteWarning = "诊断记录不完整，不影响请求转发";
     private const int ControlReserveBytes = 256;
-    private const int MaxFilesPerDay = 4096;
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -40,7 +41,7 @@ public sealed partial class DiagnosticStore : IDiagnosticRepository
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
     };
 
-    private readonly string _directory;
+    private readonly DataDatabase _data;
     private readonly TimeProvider _time;
     private readonly DiagnosticStoreOptions _options;
     private readonly string _session = Guid.NewGuid().ToString("N");
@@ -52,16 +53,16 @@ public sealed partial class DiagnosticStore : IDiagnosticRepository
     private readonly Dictionary<string, RequestHandle> _live = new(StringComparer.Ordinal);
     private readonly Queue<string> _liveOrder = new();
     private readonly ConcurrentDictionary<DateOnly, byte> _damagedDates = new();
-    private readonly ConcurrentDictionary<string, long> _publishedLengths = new(StringComparer.OrdinalIgnoreCase);
-    private readonly Dictionary<DateOnly, WriterDay> _writerDays = new();
+    // 只由写循环线程访问：每个日期已计入容量的 payload_bytes 合计。
+    private readonly Dictionary<DateOnly, long> _dayPayload = new();
     private readonly HashSet<DateOnly> _markedDates = [];
     private int _disposed;
     private int _warning;
     private int _notificationScheduled;
 
-    public DiagnosticStore(string directory, TimeProvider? timeProvider = null, DiagnosticStoreOptions? options = null)
+    public DiagnosticStore(DataDatabase data, TimeProvider? timeProvider = null, DiagnosticStoreOptions? options = null)
     {
-        _directory = directory;
+        _data = data;
         _time = timeProvider ?? TimeProvider.System;
         var supplied = options ?? new DiagnosticStoreOptions();
         _options = new DiagnosticStoreOptions
@@ -73,7 +74,7 @@ public sealed partial class DiagnosticStore : IDiagnosticRepository
             FlushInterval = supplied.FlushInterval > TimeSpan.Zero && supplied.FlushInterval < TimeSpan.FromSeconds(1)
                 ? supplied.FlushInterval : TimeSpan.FromSeconds(1),
             MaxLiveRequests = Math.Clamp(supplied.MaxLiveRequests, 1, 4096),
-            OpenWriteForTest = supplied.OpenWriteForTest,
+            WriteForTest = supplied.WriteForTest,
             BytesReadForTest = supplied.BytesReadForTest,
         };
         _queue = Channel.CreateBounded<WriteItem>(new BoundedChannelOptions(_options.QueueCapacity)
@@ -96,8 +97,11 @@ public sealed partial class DiagnosticStore : IDiagnosticRepository
         var today = Today;
         return date <= today && date.DayNumber >= today.DayNumber - 6;
     }
-    private static string DateText(DateOnly date) => date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
-    private string JournalPath(DateOnly date) => Path.Combine(_directory, $"{DateText(date)}-{_session}.jsonl");
+
+    internal static string DateText(DateOnly date) => date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+
+    /// <summary>kind 列的写法与 entry_json 里的枚举名一致（camelCase）。</summary>
+    internal static string KindText(DiagnosticEventKind kind) => JsonNamingPolicy.CamelCase.ConvertName(kind.ToString());
 
     public IDiagnosticRequest? Begin(DiagnosticRequestInfo request)
     {
@@ -127,8 +131,21 @@ public sealed partial class DiagnosticStore : IDiagnosticRepository
     private void Enqueue(RequestHandle handle, DiagnosticEvent value)
     {
         if (!Retained(value.Date) || Volatile.Read(ref _disposed) != 0) return;
-        var bytes = JsonSerializer.SerializeToUtf8Bytes(value, JsonOptions);
-        if (bytes.Length + 1 > _options.MaxEventBytes || !_queue.Writer.TryWrite(new WriteItem(bytes, value.Date, null)))
+        try
+        {
+            // 首行携带请求元数据，其余事件省略（与旧格式"后续行可省略 request"的恢复语义一致）。
+            var entry = JsonSerializer.Serialize(value.Entry, JsonOptions);
+            var info = value.Sequence == 1 && value.Request is not null ? JsonSerializer.Serialize(value.Request, JsonOptions) : null;
+            var payload = Encoding.UTF8.GetByteCount(entry) + (info is null ? 0 : Encoding.UTF8.GetByteCount(info));
+            var row = new PendingRow(_session, value.RequestId, value.Date, value.Sequence, KindText(value.Entry.Kind), entry, info, payload,
+                _time.GetUtcNow().ToUnixTimeMilliseconds());
+            if (payload > _options.MaxEventBytes || !_queue.Writer.TryWrite(new WriteItem(row, value.Date, null)))
+            {
+                handle.State.Incomplete = true;
+                Damage(value.Date);
+            }
+        }
+        catch
         {
             handle.State.Incomplete = true;
             Damage(value.Date);
@@ -200,14 +217,14 @@ public sealed partial class DiagnosticStore : IDiagnosticRepository
     {
         var cleanupDate = DateOnly.MinValue;
         var lastFlush = _time.GetTimestamp();
-        var pending = 0;
+        var pending = new List<PendingRow>();
         try
         {
             while (true)
             {
                 if (cleanupDate != Today)
                 {
-                    Cleanup();
+                    await CleanupAsync().ConfigureAwait(false);
                     cleanupDate = Today;
                     NotifyChanged();
                 }
@@ -216,145 +233,159 @@ public sealed partial class DiagnosticStore : IDiagnosticRepository
                 {
                     if (item.Completion is not null)
                     {
-                        await WriteControlsAsync().ConfigureAwait(false);
-                        await FlushStreamsAsync().ConfigureAwait(false);
-                        pending = 0;
+                        await CommitAsync(pending).ConfigureAwait(false);
+                        await WriteMarksAsync().ConfigureAwait(false);
                         lastFlush = _time.GetTimestamp();
                         item.Completion.TrySetResult();
                     }
-                    else if (Retained(item.Date))
+                    else if (item.Row is { } row && Retained(row.Date) && Accept(row))
                     {
-                        await AppendAsync(item.Date, item.Bytes!, control: false).ConfigureAwait(false);
-                        pending++;
-                        if (pending >= _options.FlushEventCount)
+                        pending.Add(row);
+                        if (pending.Count >= _options.FlushEventCount)
                         {
-                            await FlushStreamsAsync().ConfigureAwait(false);
-                            pending = 0;
+                            await CommitAsync(pending).ConfigureAwait(false);
                             lastFlush = _time.GetTimestamp();
                         }
                     }
                 }
-                await WriteControlsAsync().ConfigureAwait(false);
-                if (pending > 0 && (pending >= _options.FlushEventCount || _time.GetElapsedTime(lastFlush) >= _options.FlushInterval))
+                await WriteMarksAsync().ConfigureAwait(false);
+                if (pending.Count > 0 && _time.GetElapsedTime(lastFlush) >= _options.FlushInterval)
                 {
-                    await FlushStreamsAsync().ConfigureAwait(false);
-                    pending = 0;
+                    await CommitAsync(pending).ConfigureAwait(false);
                     lastFlush = _time.GetTimestamp();
                 }
-                if (_queue.Reader.Completion.IsCompleted) break;
                 if (_queue.Reader.TryPeek(out _)) continue;
-                // 每秒刷盘，同时在下一本地自然日第一次唤醒时复核七天留存。
+                if (_queue.Reader.Completion.IsCompleted) break;
+                // 每秒刷一批，同时在下一本地自然日第一次唤醒时复核七天留存。
                 var untilMidnight = TimeSpan.FromDays(1) - _time.GetLocalNow().TimeOfDay;
                 var delay = untilMidnight < _options.FlushInterval ? untilMidnight : _options.FlushInterval;
                 await _wake.WaitAsync(delay, _stop.Token).ConfigureAwait(false);
             }
-            await WriteControlsAsync().ConfigureAwait(false);
-            await FlushStreamsAsync().ConfigureAwait(false);
+            await CommitAsync(pending).ConfigureAwait(false);
+            await WriteMarksAsync().ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (_stop.IsCancellationRequested) { SetWarning(); }
         catch { SetWarning(); }
         finally
         {
             _queue.Writer.TryComplete();
-            foreach (var day in _writerDays.Values) CloseStream(day);
             while (_queue.Reader.TryRead(out var item)) item.Completion?.TrySetResult();
         }
     }
 
-    private async Task AppendAsync(DateOnly date, byte[] bytes, bool control)
+    /// <summary>单日容量按库中 payload_bytes 汇总控制；超过上限的事件丢弃并标记损坏。</summary>
+    private bool Accept(PendingRow row)
     {
         try
         {
-            if (!Retained(date)) return;
-            var day = GetWriterDay(date);
-            var reserve = control ? 0 : ControlReserveBytes;
-            if (day.Bytes + bytes.Length + 1 + reserve > _options.MaxDailyBytes)
+            if (!_dayPayload.TryGetValue(row.Date, out var used))
             {
-                if (!control) Damage(date);
-                return;
+                using var connection = _data.Database.Connect();
+                using var command = connection.CreateCommand();
+                command.CommandText = "SELECT COALESCE(SUM(payload_bytes), 0) FROM diagnostic_events WHERE date = $date;";
+                command.Parameters.AddWithValue("$date", DateText(row.Date));
+                used = Convert.ToInt64(command.ExecuteScalar(), CultureInfo.InvariantCulture);
+                _dayPayload[row.Date] = used;
             }
-            if (day.Stream is null)
+            if (used + row.PayloadBytes > _options.MaxDailyBytes)
             {
-                Directory.CreateDirectory(_directory);
-                day.Stream = _options.OpenWriteForTest?.Invoke(day.Path) ?? new FileStream(day.Path,
-                    FileMode.Append, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete,
-                    1, FileOptions.Asynchronous);
-                // 一次失败写入可能留下半行；下一条控制/事件从新行开始，恢复端会标记残行。
-                if (day.NeedsSeparator)
-                {
-                    if (day.Bytes + bytes.Length + 2 + reserve > _options.MaxDailyBytes) return;
-                    await day.Stream.WriteAsync(new byte[] { (byte)'\n' }, _stop.Token).ConfigureAwait(false);
-                    day.Bytes++;
-                    day.Length++;
-                    day.NeedsSeparator = false;
-                }
+                Damage(row.Date);
+                return false;
             }
-            var line = new byte[bytes.Length + 1];
-            bytes.CopyTo(line, 0);
-            line[^1] = (byte)'\n';
-            await day.Stream.WriteAsync(line, _stop.Token).ConfigureAwait(false);
-            day.Bytes += line.Length;
-            day.Length += line.Length;
-            _publishedLengths[day.Path] = day.Stream.CanSeek ? day.Stream.Length : day.Length;
-            if (control) _markedDates.Add(date);
+            _dayPayload[row.Date] = used + row.PayloadBytes;
+            return true;
+        }
+        catch
+        {
+            Damage(row.Date);
+            return false;
+        }
+    }
+
+    private async Task CommitAsync(List<PendingRow> pending)
+    {
+        if (pending.Count == 0) return;
+        var rows = pending.ToArray();
+        pending.Clear();
+        try
+        {
+            await WriteAsync(connection => InsertRows(connection, rows)).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (_stop.IsCancellationRequested) { throw; }
         catch
         {
-            if (_writerDays.TryGetValue(date, out var day))
+            // 批次整体失败：丢弃并标记损坏；已计入的日容量回退，下次按库中实际字节重新汇总。
+            foreach (var date in rows.Select(row => row.Date).Distinct())
             {
-                CloseStream(day);
-                day.NeedsSeparator = true;
-                // 失败写入的实际字节同样计入每天上限，下次重开时重新统计。
-                _writerDays.Remove(date);
+                _dayPayload.Remove(date);
+                Damage(date);
             }
-            Damage(date);
         }
     }
 
-    private WriterDay GetWriterDay(DateOnly date)
+    private Task WriteAsync(Action<SqliteConnection> action) =>
+        _options.WriteForTest is { } custom ? custom(action) : _data.Writer.ExecuteAsync(action, _stop.Token);
+
+    private static void InsertRows(SqliteConnection connection, IReadOnlyList<PendingRow> rows)
     {
-        if (_writerDays.TryGetValue(date, out var day)) return day;
-        Directory.CreateDirectory(_directory);
-        var bytes = 0L;
-        var count = 0;
-        foreach (var path in Directory.EnumerateFiles(_directory, $"{DateText(date)}-*.jsonl"))
+        using var transaction = connection.BeginTransaction();
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            INSERT OR IGNORE INTO diagnostic_events
+                (session_id, request_id, date, sequence, kind, entry_json, request_json, payload_bytes, created_at_ms)
+            VALUES ($session, $request, $date, $sequence, $kind, $entry, $requestJson, $payload, $created);
+            """;
+        var session = command.Parameters.Add("$session", SqliteType.Text);
+        var request = command.Parameters.Add("$request", SqliteType.Text);
+        var date = command.Parameters.Add("$date", SqliteType.Text);
+        var sequence = command.Parameters.Add("$sequence", SqliteType.Integer);
+        var kind = command.Parameters.Add("$kind", SqliteType.Text);
+        var entry = command.Parameters.Add("$entry", SqliteType.Text);
+        var requestJson = command.Parameters.Add("$requestJson", SqliteType.Text);
+        var payload = command.Parameters.Add("$payload", SqliteType.Integer);
+        var created = command.Parameters.Add("$created", SqliteType.Integer);
+        foreach (var row in rows)
         {
-            if (++count > MaxFilesPerDay) throw new IOException();
-            bytes = checked(bytes + new FileInfo(path).Length);
+            session.Value = row.Session;
+            request.Value = row.RequestId;
+            date.Value = DateText(row.Date);
+            sequence.Value = row.Sequence;
+            kind.Value = row.Kind;
+            entry.Value = row.EntryJson;
+            requestJson.Value = (object?)row.RequestJson ?? DBNull.Value;
+            payload.Value = row.PayloadBytes;
+            created.Value = row.CreatedAtMs;
+            command.ExecuteNonQuery();
         }
-        var ownPath = JournalPath(date);
-        var length = File.Exists(ownPath) ? new FileInfo(ownPath).Length : 0;
-        var published = _publishedLengths.TryGetValue(ownPath, out var previousLength) ? previousLength : 0;
-        day = new WriterDay(ownPath, bytes, length) { NeedsSeparator = length > published };
-        _writerDays.Add(date, day);
-        return day;
+        transaction.Commit();
     }
 
-    private async Task WriteControlsAsync()
+    /// <summary>把"该会话该天记录不完整"落库（幂等）；重启后的重放据此继续标记。</summary>
+    private async Task WriteMarksAsync()
     {
         foreach (var date in _damagedDates.Keys)
         {
             if (!Retained(date) || _markedDates.Contains(date)) continue;
-            var bytes = JsonSerializer.SerializeToUtf8Bytes(new ControlRecord(1, "incomplete", _session, date), JsonOptions);
-            await AppendAsync(date, bytes, control: true).ConfigureAwait(false);
-        }
-    }
-
-    private async Task FlushStreamsAsync()
-    {
-        foreach (var pair in _writerDays.ToArray())
-        {
+            var text = DateText(date);
             try
             {
-                if (pair.Value.Stream is not null) await pair.Value.Stream.FlushAsync(_stop.Token).ConfigureAwait(false);
+                await WriteAsync(connection =>
+                {
+                    using var command = connection.CreateCommand();
+                    command.CommandText = "INSERT INTO diagnostic_marks (session_id, date) VALUES ($session, $date) ON CONFLICT(session_id, date) DO NOTHING;";
+                    command.Parameters.AddWithValue("$session", _session);
+                    command.Parameters.AddWithValue("$date", text);
+                    command.ExecuteNonQuery();
+                }).ConfigureAwait(false);
+                _markedDates.Add(date);
             }
             catch (OperationCanceledException) when (_stop.IsCancellationRequested) { throw; }
-            catch { CloseStream(pair.Value); Damage(pair.Key); }
+            catch { SetWarning(); }
         }
     }
 
-    private void Cleanup()
+    private async Task CleanupAsync()
     {
         try
         {
@@ -363,17 +394,9 @@ public sealed partial class DiagnosticStore : IDiagnosticRepository
                 try { if (_cache is not null && !Retained(_cache.Date)) _cache = null; }
                 finally { _queryGate.Release(); }
             }
-            foreach (var date in _writerDays.Keys.Where(date => !Retained(date)).ToArray())
-            {
-                CloseStream(_writerDays[date]);
-                _writerDays.Remove(date);
-            }
-            foreach (var date in _damagedDates.Keys.Where(date => !Retained(date))) _damagedDates.TryRemove(date, out _);
+            foreach (var date in _damagedDates.Keys.Where(date => !Retained(date)).ToArray()) _damagedDates.TryRemove(date, out _);
             _markedDates.RemoveWhere(date => !Retained(date));
-            foreach (var path in _publishedLengths.Keys)
-            {
-                if (TryFileIdentity(path, out var date, out _) && !Retained(date)) _publishedLengths.TryRemove(path, out _);
-            }
+            foreach (var date in _dayPayload.Keys.Where(date => !Retained(date)).ToArray()) _dayPayload.Remove(date);
             lock (_liveGate)
             {
                 foreach (var key in _live.Where(pair => !Retained(pair.Value.Request.Date)).Select(pair => pair.Key).ToArray()) _live.Remove(key);
@@ -382,34 +405,17 @@ public sealed partial class DiagnosticStore : IDiagnosticRepository
                 _liveOrder.Clear();
                 foreach (var key in keys) _liveOrder.Enqueue(key);
             }
-            if (!Directory.Exists(_directory)) return;
-            foreach (var path in Directory.EnumerateFiles(_directory, "*.jsonl"))
+            var cutoff = DateText(Today.AddDays(-6));
+            await WriteAsync(connection =>
             {
-                if (!TryFileIdentity(path, out var date, out _) || Retained(date)) continue;
-                try { File.Delete(path); _publishedLengths.TryRemove(path, out _); }
-                catch { SetWarning(); }
-            }
+                using var command = connection.CreateCommand();
+                command.CommandText = "DELETE FROM diagnostic_events WHERE date < $cutoff; DELETE FROM diagnostic_marks WHERE date < $cutoff;";
+                command.Parameters.AddWithValue("$cutoff", cutoff);
+                command.ExecuteNonQuery();
+            }).ConfigureAwait(false);
         }
+        catch (OperationCanceledException) when (_stop.IsCancellationRequested) { SetWarning(); }
         catch { SetWarning(); }
-    }
-
-    private static bool TryFileIdentity(string path, out DateOnly date, out string session)
-    {
-        var name = Path.GetFileNameWithoutExtension(path);
-        date = default;
-        session = string.Empty;
-        if (name.Length != 43 || name[10] != '-' ||
-            !DateOnly.TryParseExact(name[..10], "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out date) ||
-            !Guid.TryParseExact(name[11..], "N", out _)) return false;
-        session = name[11..];
-        return true;
-    }
-
-    private void CloseStream(WriterDay day)
-    {
-        try { day.Stream?.Dispose(); }
-        catch { SetWarning(); }
-        day.Stream = null;
     }
 
     public void Dispose()
@@ -419,22 +425,16 @@ public sealed partial class DiagnosticStore : IDiagnosticRepository
         Wake();
         try
         {
-            // 所有文件关闭和清理仍由后台执行；调用者最多等两秒。
+            // 剩余批次落库与标记仍由后台执行；调用者最多等两秒。
             if (!_writer.Wait(TimeSpan.FromSeconds(2))) { SetWarning(); _stop.Cancel(); }
         }
         catch { SetWarning(); }
     }
 
-    private sealed record WriteItem(byte[]? Bytes, DateOnly Date, TaskCompletionSource? Completion);
-    private sealed record ControlRecord(int Version, string Control, string SessionId, DateOnly Date);
-    private sealed class WriterDay(string path, long bytes, long length)
-    {
-        internal readonly string Path = path;
-        internal long Bytes = bytes;
-        internal long Length = length;
-        internal Stream? Stream;
-        internal bool NeedsSeparator;
-    }
+    private sealed record WriteItem(PendingRow? Row, DateOnly Date, TaskCompletionSource? Completion);
+
+    private sealed record PendingRow(string Session, string RequestId, DateOnly Date, long Sequence, string Kind,
+        string EntryJson, string? RequestJson, long PayloadBytes, long CreatedAtMs);
 
     private sealed class RequestHandle(DiagnosticStore owner, DiagnosticRequestInfo request) : IDiagnosticRequest
     {

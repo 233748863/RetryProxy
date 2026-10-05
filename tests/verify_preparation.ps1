@@ -5,6 +5,7 @@
 )
 # 在私有桌面和临时目录验收独立准备，全部请求只到本机测试上游。
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'runtime_files.ps1')
 $ExePath = (Resolve-Path -LiteralPath $ExePath).ProviderPath
 $tempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\')
 $runtime = Join-Path $tempRoot ('RetryProxyM4-' + [Guid]::NewGuid().ToString('N'))
@@ -227,7 +228,7 @@ function Add-Preparation([string]$Minutes, [string]$Effort) {
 
 try {
     New-Item -ItemType Directory -Path $runtime | Out-Null
-    Get-ChildItem -LiteralPath (Split-Path -Parent $ExePath) -File | Where-Object { $_.Name -match '\.(exe|dll)$|\.(deps|runtimeconfig)\.json$' } | Copy-Item -Destination $runtime
+    Copy-RetryProxyRuntime -ExePath $ExePath -DestinationDirectory $runtime
     $translations = Join-Path (Split-Path -Parent $ExePath) 'User\I18n'
     if (Test-Path -LiteralPath $translations) {
         New-Item -ItemType Directory -Path (Join-Path $runtime 'User') | Out-Null
@@ -517,6 +518,7 @@ try {
     $log = Get-Content -LiteralPath (Join-Path $runtime 'logs\retry-proxy.log') -Raw
     if ($log.Contains('sk-prepare-fixture')) { throw 'Preparation logged its API key' }
     if (Test-Path -LiteralPath (Join-Path $runtime 'User\config.json')) { throw 'Preparation persisted temporary settings' }
+    if (Test-Path -LiteralPath (Join-Path $runtime 'User\config.db')) { throw 'Preparation persisted temporary settings' }
     if ([IO.File]::ReadAllText((Join-Path $env:CLAUDE_CONFIG_DIR 'settings.json')) -cne '{}' -or
         [IO.File]::ReadAllText((Join-Path $env:CODEX_HOME 'config.toml')) -cne '') { throw '独立准备改动了隔离客户端配置' }
     Write-Host "准备抽屉验收通过：窗口稳定、双任务独立启停、完成后保活及日志筛选。WithChannels=$($WithChannels.IsPresent), CompactWindow=$($CompactWindow.IsPresent)"

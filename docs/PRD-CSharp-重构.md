@@ -1,5 +1,7 @@
 # LLM Retry Proxy C# 重构 PRD
 
+2026-10-05 12:06 存储更新：SQLite 迁库已获当次授权并正式发布，配置迁移、双端口、客户端接管与正式窗口复核通过；最新发布及完整证据见《PRD-数据存储迁移》§9，开发与隔离验收记录保留在 §8。
+
 版本：v1.0 草案　日期：2026-09-21
 来源：`D:\API-Proxy`（Rust 2.0.0 现行实现）+ `D:\better-genshin-impact`（BetterGI 0.65.1，WPF UI 框架底子）
 
@@ -41,10 +43,10 @@
 | # | 事项 | 决策 / 假设 | 说明 |
 |---|---|---|---|
 | D1 | 许可证 | **已确认（2026-09-22）**：新项目采用 GPL-3.0。照搬 BetterGI 源码，保留原版权声明；`View\Behavior\ClipboardInterceptor.cs` 文件头的 MAA 再许可声明必须保留。仓库根目录放 `LICENSE`（GPL-3.0）。 | 用户已接受。 |
-| D2 | 项目目录与命名 | **已确认**：目录 `D:\RetryProxy`，解决方案 `RetryProxy.sln`，工程 `RetryProxy.App`（WPF）、`RetryProxy.Core`（后端类库）、`RetryProxy.Tests`（xUnit）。AssemblyName `RetryProxy`，窗口标题 `LLM Retry Proxy`。 | |
+| D2 | 项目目录与命名 | **已确认**：目录 `D:\RetryProxy`，解决方案 `RetryProxy.sln`，工程 `RetryProxy.App`（WPF）、`RetryProxy.Core`（后端类库）、`RetryProxy.Tests`（跨平台 Core 用例）、`RetryProxy.App.Tests`（Windows 应用层回归）。AssemblyName `RetryProxy`，窗口标题 `LLM Retry Proxy`。 | |
 | D3 | 目标框架 | `net9.0-windows10.0.22621.0`（本机已装 SDK 9.0.305 / 10.0.201；WPF-UI 4.3 支持 net8/net9）。 | BetterGI 原为 net8；升到 net9 只改 TFM。 |
-| D4 | 发布形态 | **已确认**：框架依赖（`SelfContained=false`）+ `PublishSingleFile=true` + win-x64，产物 `dist\RetryProxy.exe`（约 10 MB）。运行需要 .NET 9 Desktop Runtime 与 ASP.NET Core Runtime（Kestrel 依赖 `Microsoft.AspNetCore.App`）。 | 首次启动缺运行时时，.NET 宿主会弹出下载提示；README 写明安装 "ASP.NET Core Runtime 9 (Hosting Bundle)" 或分别安装两个运行时。 |
-| D5 | 配置存储 | **已确认：完全沿用 BetterGI 方式**，`{exe 目录}\User\config.json`，System.Text.Json 缩进输出，`ConfigService` 读失败时把坏文件备份到 `User\backup\` 后用默认值重建；`AllConfig` 任一属性变更即整体落盘（200 ms 防抖）。代理配置（`ProxyConfig`：providers/routes/selected_route_id/schema_version）作为 `AllConfig.Proxy` 子对象存放，界面偏好（主题、语言、托盘行为、窗口尺寸）作为 `AllConfig.Common` 等同级子对象。 | 与 Rust 版**不再共用**配置。首次启动若 `config.json` 不存在而注册表 `HKCU\Software\LLM Retry Proxy\ConfigJson` 存在，则读取并迁移一次（走同一套 schema 6 迁移逻辑），写入 config.json 后不再回写注册表；日志记录 `已从注册表导入旧配置`。`RETRY_PROXY_CONFIG_JSON` 环境变量注入仍保留供测试使用，此时保存为空操作。**schema、读失败处理与写入方式已被《PRD-供应商管理》§8 取代（2026-09-29）**：schema 7、迁移前备份、原子写、读失败不再用默认值重建落盘。 |
+| D4 | 发布形态 | **已确认**：框架依赖（`SelfContained=false`）+ `PublishSingleFile=true` + win-x64，产物 `dist\RetryProxy.exe`（SQLite 原生库内嵌自提取）。运行需要 .NET 9 Desktop Runtime 与 ASP.NET Core Runtime（Kestrel 依赖 `Microsoft.AspNetCore.App`）。 | 首次启动缺运行时时，.NET 宿主会弹出下载提示；README 写明安装 "ASP.NET Core Runtime 9 (Hosting Bundle)" 或分别安装两个运行时。 |
+| D5 | 配置存储 | **2026-10-04 按《PRD-数据存储迁移》变更**：`{exe 目录}/User/config.db`，四节点 JSON 保持现有格式，一个 SQLite 事务保存；200 ms 防抖不变。 | 配置 schema 7 与库结构版本分离。旧 `config.json` 先备份再一次性导入，成功后改名 `.migrated.bak`；注册表导入目标改为数据库。读失败备份故障现场并阻写，禁止默认值覆盖。删除与接管前导出 JSON 备份，保留 5 份。注入模式不创建或写配置库、不写客户端配置。 |
 | D6 | HTTP 服务端 | 每条通道一个独立 Kestrel `WebApplication`，绑定 `127.0.0.1:port`；停用即硬停（不做优雅关闭），与 Rust 语义一致。 | 用 `<FrameworkReference Include="Microsoft.AspNetCore.App"/>`。不用 HttpListener（http.sys 无法精细控制流式与 499）。 |
 | D7 | HTTP 客户端 | 每通道一个 `HttpClient`（`SocketsHttpHandler`：禁重定向、ConnectTimeout=单次超时、自定义 `IWebProxy` 复刻 `system_proxy.rs` 规则、TLS 走 SChannel）。连续无数据超时用逐段读取 + `CancellationTokenSource` 实现。**客户端个数与连接超时已被《PRD-供应商管理》§9 取代（2026-09-29）**：每通道按 http / https 各一个 `HttpClient`，连接超时在连接回调里按当前快照计时，改参数后新连接立即生效。 | .NET 无原生 read-timeout。 |
 | D8 | 页面结构 | **已被《PRD-供应商管理》§5.1–§5.6 取代（2026-09-29）**：供应商默认页、统计合并、四页共享客户端、右侧抽屉，以下为旧规格。 **已确认（2026-09-22，用户明确"首页要和参考项目一致"；同日拍板落点）**：NavigationView 六页：**首页**（照搬 BetterGI 首页：横幅 + 一张「代理服务，启动！」折叠卡，卡内含服务商/通道的新增/编辑/删除按钮，见 5.2）、**运行状态**（新增：通道计数与全部启停、状态胶囊、保活状态、统计瓦片、缓存摘要、请求明细、策略行）、**运行日志**（新增：日志面板独占一页）、**缓存明细**（原独立窗口改为页面，只从左侧导航进入）、**设置**（语言 + 「开机自动启动」折叠组）、**关于**。 | 首页视觉与 BetterGI 一致优先于沿用 Rust 工作流。M0 已按此实现首页/设置页并截图验证；运行状态、运行日志两页在 M5 实现。 |
@@ -203,7 +205,7 @@ D:\RetryProxy\
 - 类型：`ClientType{Codex,Claude}`（序列化 `codex/claude`）、`ProviderEndpoint{name,base_url}`、`ProxyRoute`（15 字段，默认值：port 18080、max_retries 6、timeout 300、generation 300、total 600、base_delay 0.5、max_delay 4.0、keepalive_idle 3.0、context_limit 50000）、`ProxyConfig`（顶层镜像字段 + providers + routes + selected_route_id + schema_version 6 + runtime_overrides）。数据结构已被《PRD-供应商管理》§8 取代（2026-09-29）：schema 7，服务商带 ID、客户端、Key 与模型，通道以 current_provider_id / current_key_id / local_token 取代 provider_name，每个客户端一条通道。
 - 校验规则全套（端口 1–65535、超时 0<x≤86400、退避 0≤base≤3600、max≥base、名称/地址/ID/端口重复、服务商引用存在、URL 无用户信息与 query）。错误文案逐字沿用。
 - 迁移：`schema_version<6` 推断 client_type（名称含 claude 或端口 18081）；provider 级保活字段继承到 route；单地址旧格式生成 `legacy-default / 默认通道`；`total_timeout` 缺省取 `max(600, timeout)`。
-- 存储：`User\config.json` 的 `Proxy` 子对象，System.Text.Json 缩进输出，键顺序固定；首次启动无 config.json 时从注册表 `ConfigJson` 一次性导入（D5）；`RETRY_PROXY_CONFIG_JSON` 环境变量注入测试配置且保存为空操作。
+- 存储：`User/config.db` 的 `proxy` / `common` / `other` / `preparations` 四行，System.Text.Json 格式与代理键序不变，同事务提交；旧配置与注册表一次性导入、备份与禁写语义见 D5 和《PRD-数据存储迁移》§2.1。
 - 内置默认配置（anyrouter.top / sotamodel.net，两条通道 18080 Codex、18081 Claude Code）。已被《PRD-供应商管理》§8 取代（2026-09-29）：不再预置服务商，只建两条通道。
 - 环境变量覆盖 8 项，仅作用当前选中通道，不写回。
 
@@ -259,10 +261,10 @@ D:\RetryProxy\
 - 整体精简（2026-10-02 14:21 已发布）：请求、重试、网络错误、保活、准备、切换及服务启停统一缩短固定措辞，来源/任务/请求编号保留；`上游 HTTP` 简写为 `HTTP`，用量合并为 `输入/输出 N/M token`，缓存写 `缓存 P%（读 N / 写 M）`，耗时写 `首字 X秒 / 总 Y秒`。重试失败的本次耗时标为 `本次`，累计成功标为 `（重试 N 次）`；每 20 次的节流不变。保留错误码、系统错误码、异常链、上游 ID、最后事件及转发/重试状态，网络诊断不输出原始异常文本；缓存页长标签不变。准备状态日志去掉正文中重复的任务名，通知仍保留完整名称。
 
 ### 6.7 每日统计（Core/Metrics）
-- 目录 `logs\daily-statistics\{SHA256(route_id) hex}\{YYYY-MM-DD}.jsonl`，头行 + 请求行 schema v1 逐字段一致。
-- 幂等更新（retry 仅 attempt 递增计数；outcome 只设一次）、dirty 重试、残行截断、损坏行计数与警告文案。
+- 存储：`logs/data.db` 的 `daily_requests` 与 `daily_imports`，按通道、日期、请求 ID 幂等保存；统计永久保留，7 天趋势按 SQL 聚合。旧 JSONL 文件保留但不再读写，不导入历史，详见《PRD-数据存储迁移》§2.2。
+- 幂等更新（retry 仅 attempt 递增计数；outcome 只设一次）、dirty 重试与警告语义保持。写入失败按事务回滚，保留 dirty 等待下次重试；不再使用文件残行截断或行号游标。
 - 午夜切换：跨日携带处理中请求，新一天计入 total。
-- 首日无任何 jsonl 时从 `retry-proxy.log(.1-.3)` 恢复（解析规则见规格 §7.5）。2026-10-02 补齐精简格式：兼容新旧 HTTP、模型、输入/输出、缓存读写与缓存标识，识别 `第 N 次` 和省略“将在”的明确重试提示并去重；仍只计保留的明确重试提示，不从累计摘要或尝试序号推算已轮转、节流或跨日的次数，日常准确统计继续以 jsonl 为准。
+- 该通道在数据库没有任何统计记录时从 `retry-proxy.log(.1-.3)` 恢复（解析规则见规格 §7.5）。2026-10-02 补齐精简格式：兼容新旧 HTTP、模型、输入/输出、缓存读写与缓存标识，识别 `第 N 次` 和省略“将在”的明确重试提示并去重；仍只计保留的明确重试提示，不从累计摘要或尝试序号推算已轮转、节流或跨日的次数，日常准确统计以数据库为准，导入记录与完成标记同事务写入，重启不重复导入。
 - `/_retry/health` JSON 结构（`status`、`metrics.*`、`cache`、`gpt_cache`、两个命中率）完全一致。
 - **Claude 命中率口径（2026-10-04 用户确认）**：上游没报缓存写入时，总输入按 `未缓存输入 + 缓存读取` 计算，命中率为上限值；缺未缓存输入或缓存读取时仍不计算。写入用量继续显示未获取，不填 0。起因：AnyRouter 的 anthropic 格式回复（模型报 `anthropic/claude-fable-5.1`）不带 `cache_creation_input_tokens`，OpenRouter 系中转站普遍如此（其官方文档该字段为 null）；按旧规则「三项齐全才计算」，Claude 通道日志没有百分比、统计页缓存子标签全是未获取、最近 20 次全部未计入。改动只落在 `CacheInputAccountingRules.TotalInputTokens` 一处，日志百分比、统计页命中率、走势图、按模型与按 Key 拆分同时生效；写入字段名候选补 `/cache_creation_tokens`、`/cache_write_tokens`。缓存页「统计范围」的 Claude 说明改为「…上游没报缓存写入时按前两项相加，命中率为上限值。缺未缓存输入或缓存读取时不计算命中率。…」，写入说明改为「…未获取的写入用量不计入写入合计，命中率的总输入按未缓存输入 + 缓存读取计算。」。用例：新增 `MetricsTests.ClaudeTotalInputWithoutReportedWriteUsesInputPlusRead`、`ResponseStatsTests.ClaudeCacheRateUsesInputPlusReadWhenUpstreamOmitsWrite`，改写 `PromptCacheIntegrationTests.ClaudeCacheCountsMissingWriteCreationOnlyAndFailedReplies` 与 `LegacyLogRestoreTests.ClaudeUsageWithoutReportedWriteUsesInputPlusRead`（原断言「三项齐全才合并」），总数 1258 全部通过。此口径与 Rust 原版有意不同，分析报告 A/B 保留 Rust 原描述。2026-10-04 16:20 已发布到 `dist`（正式实例 PID 24240 → 11924），Release 1258 项与四套隔离验收通过；发布后实机核验 18081 缓存命中率 96.78%、今日有效 550 次 / 未计入 0 次，请求行出现 `缓存 99.4%（读 346697）`。
 
@@ -339,7 +341,7 @@ D:\RetryProxy\
 | 性能 | 空闲主线程 CPU < 2%；日志 2000 行渲染不卡顿；流式转发零拷贝（`PipeReader`/`Stream.CopyToAsync` 分块 ≥ 16 KiB）。 |
 | 内存 | 常驻 < 150 MB（WPF 基线）；错误/前缀暂存严格 1 MiB 上限。 |
 | 安全 | **已被《PRD-供应商管理》§7、§8 取代（2026-10-01）**：供应商 Key、直连客户端配置和备份含明文 Key；普通本机通道统一注入当前 Key，不以入站口令作门槛，当前无 Key 本地返回 403，本机其他程序可使用当前 Key 的边界已获用户确认。接管口令继续用于识别受管理配置，后台独立准备代理仍严格校验口令；Host / Origin 限制保留，日志、统计、异常和健康检查不得包含 Key 或口令。旧规格：API Key 只驻留内存；日志/统计/配置不含 Key、请求正文、会话编号；标识过滤规则同 Rust。**例外（2026-09-28 用户确认）**：一键准备“手动配置供应商”的 API Key 随任务明文保存在 `config.json` 的 `preparations` 节点，重启后可直接开始；日志仍不含 Key。 |
-| 兼容 | jsonl v1、日志格式、`/_retry/health` 与 Rust 2.0.0 完全互换；配置 schema 6 语义一致但存储位置不同（config.json），仅支持从注册表单向导入。 |
+| 兼容 | 日志格式与 `/_retry/health` 结构保持；配置 schema 6 单向迁移到 schema 7。配置、统计、诊断已按《PRD-数据存储迁移》迁入 SQLite，终止 Rust JSONL 互读；旧文件保留，不导入历史统计与诊断。 |
 | 可测 | Core 不依赖 WPF；随机数、时钟、CLI 命令可注入。 |
 | 稳定 | 未处理异常走 `ExceptionReport`；通道异常不影响其他通道。 |
 
@@ -350,8 +352,8 @@ D:\RetryProxy\
 1. **单元/集成测试**：`rust/tests` 四个文件共约 70 个用例逐一移植为 xUnit（名称保持英文原名便于对照），全部通过；`config.rs`、`prompt_cache.rs`、`response_stats.rs`、`keepalive.rs`、`ui.rs` 中的单元测试按模块移植。
 2. **`verify_rust_exe.ps1`** 十项检查点全部通过（改 EXE 名与窗口类名；托盘验证改为 WPF-UI NotifyIcon 的窗口类）。
 3. **`verify_keepalive_exe.ps1`** 四种模式（默认 / Automatic / Interrupt / RetryPreparation / CancelPreparation）通过（UIAutomation 定位元素改为 WPF AutomationId）。
-4. **配置导入**：Rust 版写入的注册表配置，在 C# 版首次启动（无 config.json）时被完整导入，服务商、通道、选中通道一致；之后 C# 版只读写 config.json。
-5. **统计互换**：Rust 版产生的当日 jsonl 由 C# 版恢复后 `/_retry/health` 输出一致。
+4. **配置导入**：旧 `config.json` 与 Rust 注册表配置单向导入 `User/config.db`，验证 schema 迁移、四节点保真、备份失败中止、成功后旧文件改名，以及注入模式不建库。
+5. **统计恢复**：按《PRD-数据存储迁移》取代 Rust JSONL 互换验收；验证 SQLite 同日重启恢复、两次重启 health 对照、首日从运行日志恢复一次及旧 JSONL 文件不变。
 6. **文案对照**：附录 C 列出的全部用户可见字符串在 C# 版中逐字存在（脚本 grep 校验）。
 7. **界面**：五页可导航、深浅主题切换、托盘隐藏/还原、缓存独立窗口居中与跨显示器、窗口异常位置自动恢复。
 

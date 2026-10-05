@@ -12,8 +12,9 @@ namespace RetryProxy.Core.Diagnostics;
 public sealed partial class DiagnosticStore
 {
     private readonly SemaphoreSlim _queryGate = new(1, 1);
-    // 仅缓存一个选定日期；总输入受每天 64 MiB 限制，事件只保留文件偏移。
+    // 仅缓存一个选定日期；总输入受每天 64 MiB 限制，事件只保留归并状态与重放游标。
     private DayCache? _cache;
+    private const int ReadBatchSize = 256;
     internal int CachedDateCountForTest => _cache is null ? 0 : 1;
 
     private bool RetainedForQuery(DateOnly date)
@@ -81,25 +82,26 @@ public sealed partial class DiagnosticStore
                 if (row is null) return new DiagnosticDetail(null, [], false, Warning);
                 var size = Math.Clamp(pageSize, 1, 100);
                 offset = Math.Max(0, offset);
-                if (!_cache!.Requests.TryGetValue(new RequestKey(row.Session, row.Summary.Request.RequestId), out var state))
-                    return new DiagnosticDetail(row.Summary, [], false, Warning);
-                var locations = state.Locations.Skip(offset).Take(size).ToArray();
-                var events = new List<DiagnosticEvent>(locations.Length);
+                List<EventRow> rows;
+                try
+                {
+                    rows = ReadDetailRows(date, row.Session, row.Summary.Request.RequestId, offset, size + 1);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+                catch
+                {
+                    SetWarning();
+                    return new DiagnosticDetail(row.Summary with { Incomplete = true }, [], false, Warning);
+                }
+                var events = new List<DiagnosticEvent>(Math.Min(rows.Count, size));
                 var incomplete = false;
-                foreach (var location in locations)
+                foreach (var item in rows.Take(size))
                 {
                     cancellationToken.ThrowIfCancellationRequested();
+                    _options.BytesReadForTest?.Invoke(item.PayloadBytes);
                     try
                     {
-                        await using var file = OpenRead(location.Path);
-                        file.Position = location.Offset;
-                        var bytes = new byte[location.Length];
-                        await file.ReadExactlyAsync(bytes, cancellationToken).ConfigureAwait(false);
-                        _options.BytesReadForTest?.Invoke(bytes.Length);
-                        var value = ReadEvent(bytes, date, row.Session);
-                        if (value is null || value.RequestId != row.Summary.Request.RequestId || value.Sequence != location.Sequence)
-                            throw new InvalidDataException();
-                        events.Add(value);
+                        events.Add(ReadRowEvent(date, row.Session, row.Summary.Request.RequestId, item));
                     }
                     catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
                     catch { SetWarning(); incomplete = true; }
@@ -110,150 +112,171 @@ public sealed partial class DiagnosticStore
                     return new DiagnosticDetail(null, [], false, Warning);
                 }
                 return new DiagnosticDetail(row.Summary with { Incomplete = row.Summary.Incomplete || incomplete },
-                    events, state.Locations.Count - offset > size, Warning);
+                    events, rows.Count > size, Warning);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
             catch { SetWarning(); return new DiagnosticDetail(null, [], false, Warning); }
             finally { _queryGate.Release(); }
         }, cancellationToken);
 
+    /// <summary>按行号游标增量重放当日事件（追加表只增不改），并合并当天的"不完整"标记。</summary>
     private async Task RefreshAsync(DateOnly date, CancellationToken token)
     {
         if (_cache?.Date != date) _cache = new DayCache(date);
         var cache = _cache;
-        if (!Directory.Exists(_directory)) return;
-        var files = new Dictionary<string, (string Session, long Length)>(StringComparer.OrdinalIgnoreCase);
-        var remaining = _options.MaxDailyBytes;
-        foreach (var path in Directory.EnumerateFiles(_directory, $"{DateText(date)}-*.jsonl"))
-        {
-            token.ThrowIfCancellationRequested();
-            if (!TryFileIdentity(path, out var fileDate, out var session) || fileDate != date) continue;
-            if (files.Count >= MaxFilesPerDay) { SetWarning(); break; }
-            var length = new FileInfo(path).Length;
-            // 只读取本写入器已完整写出的字节，避免把一次并发写入误报为残行。
-            if (session == _session && _publishedLengths.TryGetValue(path, out var published)) length = Math.Min(length, published);
-            if (length > remaining) { length = remaining; SetWarning(); cache.IncompleteSessions.Add(session); }
-            remaining -= length;
-            files.Add(path, (session, length));
-        }
-        if (cache.Files.Any(pair => !files.TryGetValue(pair.Key, out var file) || file.Length < pair.Value.Offset))
-        {
-            SetWarning();
-            _cache = cache = new DayCache(date);
-        }
-        foreach (var pair in files)
-        {
-            token.ThrowIfCancellationRequested();
-            if (!cache.Files.TryGetValue(pair.Key, out var cursor))
-            {
-                cursor = new FileCursor(pair.Key, pair.Value.Session);
-                cache.Files.Add(pair.Key, cursor);
-            }
-            if (pair.Value.Length > cursor.Offset) await ReadIncrementAsync(cache, cursor, pair.Value.Length, token).ConfigureAwait(false);
-            if (cursor.Incomplete) cache.IncompleteSessions.Add(cursor.Session);
-        }
-    }
-
-    private async Task ReadIncrementAsync(DayCache cache, FileCursor cursor, long length, CancellationToken token)
-    {
+        // 标记每轮重查：行数极少，损坏会话即使在缓存建立之后才被标记也能反映出来。
         try
         {
-            await using var file = OpenRead(cursor.Path);
-            file.Position = cursor.Offset;
-            var buffer = new byte[16 * 1024];
-            var line = new byte[_options.MaxEventBytes];
-            var used = 0;
-            var overlong = false;
-            var lineStart = cursor.Offset;
-            while (file.Position < length)
-            {
-                token.ThrowIfCancellationRequested();
-                var before = file.Position;
-                var read = await file.ReadAsync(buffer.AsMemory(0, (int)Math.Min(buffer.Length, length - before)), token).ConfigureAwait(false);
-                if (read == 0) break;
-                _options.BytesReadForTest?.Invoke(read);
-                for (var index = 0; index < read; index++)
-                {
-                    token.ThrowIfCancellationRequested();
-                    var value = buffer[index];
-                    if (value == '\n')
-                    {
-                        if (overlong || used == 0) BadLine(cursor);
-                        else ApplyLine(cache, cursor, line.AsSpan(0, used), lineStart);
-                        cursor.Offset = before + index + 1;
-                        lineStart = cursor.Offset;
-                        used = 0;
-                        overlong = false;
-                    }
-                    else if (used < line.Length - 1) line[used++] = value;
-                    else overlong = true;
-                }
-            }
-            if (used != 0 || overlong)
-            {
-                // 旧会话的完整末行即使缺换行也可恢复；半条 JSON 仍只标记缺失。
-                if (overlong) BadLine(cursor);
-                else ApplyLine(cache, cursor, line.AsSpan(0, used), lineStart);
-                cursor.Offset = length;
-            }
+            using var connection = _data.Database.Connect();
+            using var command = connection.CreateCommand();
+            command.CommandText = "SELECT session_id FROM diagnostic_marks WHERE date = $date;";
+            command.Parameters.AddWithValue("$date", DateText(date));
+            using var reader = command.ExecuteReader();
+            while (reader.Read()) cache.IncompleteSessions.Add(reader.GetString(0));
         }
-        catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
-        catch { BadLine(cursor); }
-    }
+        catch { SetWarning(); }
 
-    private void ApplyLine(DayCache cache, FileCursor cursor, ReadOnlySpan<byte> bytes, long offset)
-    {
-        try
+        while (true)
         {
-            var value = ReadEvent(bytes, cache.Date, cursor.Session);
-            if (value is null)
+            token.ThrowIfCancellationRequested();
+            List<EventRow> batch;
+            try
             {
-                var control = JsonSerializer.Deserialize<ControlRecord>(bytes, JsonOptions);
-                if (control is not { Version: 1, Control: "incomplete" } || control.Date != cache.Date || control.SessionId != cursor.Session)
-                    throw new InvalidDataException();
-                BadLine(cursor);
+                batch = ReadBatch(date, cache.Cursor);
+            }
+            catch
+            {
+                SetWarning();
                 return;
             }
-            var key = new RequestKey(value.SessionId, value.RequestId);
+            foreach (var row in batch)
+            {
+                token.ThrowIfCancellationRequested();
+                // 读预算用尽或日期在读取期间过期都尽早停下。
+                if (!Retained(date)) return;
+                if (cache.PayloadBytes + row.PayloadBytes > _options.MaxDailyBytes)
+                {
+                    TruncateRemaining(cache, date, row.Id);
+                    return;
+                }
+                cache.PayloadBytes += row.PayloadBytes;
+                _options.BytesReadForTest?.Invoke(row.PayloadBytes);
+                ApplyRow(cache, row);
+                cache.Cursor = row.Id;
+            }
+            if (batch.Count < ReadBatchSize) return;
+        }
+    }
+
+    private List<EventRow> ReadBatch(DateOnly date, long afterId)
+    {
+        using var connection = _data.Database.Connect();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT id, session_id, request_id, sequence, kind, entry_json, request_json, payload_bytes
+            FROM diagnostic_events WHERE date = $date AND id > $after ORDER BY id LIMIT $limit;
+            """;
+        command.Parameters.AddWithValue("$date", DateText(date));
+        command.Parameters.AddWithValue("$after", afterId);
+        command.Parameters.AddWithValue("$limit", ReadBatchSize);
+        return ReadRows(command);
+    }
+
+    private List<EventRow> ReadDetailRows(DateOnly date, string session, string requestId, int offset, int limit)
+    {
+        using var connection = _data.Database.Connect();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT id, session_id, request_id, sequence, kind, entry_json, request_json, payload_bytes
+            FROM diagnostic_events
+            WHERE date = $date AND session_id = $session AND request_id = $request
+            ORDER BY sequence LIMIT $limit OFFSET $offset;
+            """;
+        command.Parameters.AddWithValue("$date", DateText(date));
+        command.Parameters.AddWithValue("$session", session);
+        command.Parameters.AddWithValue("$request", requestId);
+        command.Parameters.AddWithValue("$limit", limit);
+        command.Parameters.AddWithValue("$offset", offset);
+        return ReadRows(command);
+    }
+
+    private static List<EventRow> ReadRows(Microsoft.Data.Sqlite.SqliteCommand command)
+    {
+        var rows = new List<EventRow>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            rows.Add(new EventRow(reader.GetInt64(0), reader.GetString(1), reader.GetString(2), reader.GetInt64(3),
+                reader.GetString(4), reader.GetString(5), reader.IsDBNull(6) ? null : reader.GetString(6), reader.GetInt64(7)));
+        }
+        return rows;
+    }
+
+    /// <summary>读预算用尽：把未读到的会话标记为不完整（对应旧实现"文件被截断"的语义）。</summary>
+    private void TruncateRemaining(DayCache cache, DateOnly date, long fromId)
+    {
+        SetWarning();
+        try
+        {
+            using var connection = _data.Database.Connect();
+            using var command = connection.CreateCommand();
+            command.CommandText = "SELECT DISTINCT session_id FROM diagnostic_events WHERE date = $date AND id >= $after;";
+            command.Parameters.AddWithValue("$date", DateText(date));
+            command.Parameters.AddWithValue("$after", fromId);
+            using var reader = command.ExecuteReader();
+            while (reader.Read()) cache.IncompleteSessions.Add(reader.GetString(0));
+        }
+        catch { SetWarning(); }
+    }
+
+    private void ApplyRow(DayCache cache, EventRow row)
+    {
+        try
+        {
+            var value = ReadRowEvent(cache.Date, row.Session, row.RequestId, row);
+            var key = new RequestKey(row.Session, row.RequestId);
             if (!cache.Requests.TryGetValue(key, out var state))
             {
-                // 每个合法事件的固定身份字段至少占 64 字节；防御手工构造的异常文件。
+                // 每个合法请求的首行必须携带元数据；同时防御手工构造的异常库。
                 if (value.Request is null || cache.Requests.Count >= _options.MaxDailyBytes / 64) throw new InvalidDataException();
-                state = new SummaryState(value.Request, value.SessionId);
+                state = new SummaryState(value.Request, row.Session);
                 cache.Requests.Add(key, state);
             }
             if (value.Request is not null && state.Request != value.Request) { state.Incomplete = true; SetWarning(); }
-            if (value.Sequence <= state.LastSequence && state.Locations.Exists(location => location.Sequence == value.Sequence)) return;
             if (!state.Apply(value)) return;
-            state.Locations.Add(new EventLocation(cursor.Path, offset, bytes.Length, value.Sequence));
             if (value.Entry.Kind == DiagnosticEventKind.SendStarted && value.Entry.Target is not null) state.Targets.Add(value.Entry.Target);
             if (state.Incomplete) SetWarning();
         }
-        catch { BadLine(cursor); }
+        catch
+        {
+            cache.IncompleteSessions.Add(row.Session);
+            SetWarning();
+        }
     }
 
-    private static DiagnosticEvent? ReadEvent(ReadOnlySpan<byte> bytes, DateOnly date, string session)
+    private DiagnosticEvent ReadRowEvent(DateOnly date, string session, string requestId, EventRow row)
     {
-        var value = JsonSerializer.Deserialize<DiagnosticEvent>(bytes, JsonOptions);
-        if (value?.Entry is null) return null;
-        if (value.Version != 1 || value.Date != date || value.SessionId != session || value.Sequence <= 0 ||
-            !Guid.TryParse(value.RequestId, out _) || !Enum.IsDefined(value.Entry.Kind) ||
-            (value.Request is null && value.Entry.Kind == DiagnosticEventKind.Started) ||
-            (value.Request is not null && (value.Request.RequestId != value.RequestId || value.Request.Date != date || !Enum.IsDefined(value.Request.Client))) ||
-            (value.Entry.Outcome.HasValue && !Enum.IsDefined(value.Entry.Outcome.Value)) ||
-            (value.Entry.Delivery.HasValue && !Enum.IsDefined(value.Entry.Delivery.Value))) throw new InvalidDataException();
-        // 磁盘内容同样不可信，查询返回前再次经过公共白名单。
-        return value with { Request = value.Request is null ? null : DiagnosticSafety.Sanitize(value.Request), Entry = DiagnosticSafety.Sanitize(value.Entry) };
+        if (row.PayloadBytes > _options.MaxEventBytes || row.Sequence <= 0 || row.Session != session ||
+            !string.Equals(row.RequestId, requestId, StringComparison.Ordinal) ||
+            !Guid.TryParse(row.RequestId, out _) || !Guid.TryParseExact(row.Session, "N", out _)) throw new InvalidDataException();
+        var entry = JsonSerializer.Deserialize<DiagnosticEntry>(row.EntryJson, JsonOptions);
+        if (entry is null || !Enum.IsDefined(entry.Kind) || KindText(entry.Kind) != row.Kind ||
+            (entry.Outcome.HasValue && !Enum.IsDefined(entry.Outcome.Value)) ||
+            (entry.Delivery.HasValue && !Enum.IsDefined(entry.Delivery.Value))) throw new InvalidDataException();
+        DiagnosticRequestInfo? request = null;
+        if (row.RequestJson is not null)
+        {
+            request = JsonSerializer.Deserialize<DiagnosticRequestInfo>(row.RequestJson, JsonOptions);
+            if (request is null || request.RequestId != row.RequestId || request.Date != date || !Enum.IsDefined(request.Client))
+                throw new InvalidDataException();
+        }
+        // 库内容同样不可信，查询返回前再次经过公共白名单。
+        return new DiagnosticEvent(row.Session, row.RequestId, date, row.Sequence,
+            request is null ? null : DiagnosticSafety.Sanitize(request), DiagnosticSafety.Sanitize(entry));
     }
 
-    private void BadLine(FileCursor cursor)
-    {
-        cursor.Incomplete = true;
-        SetWarning();
-    }
-
-    private static FileStream OpenRead(string path) => new(path, FileMode.Open, FileAccess.Read,
-        FileShare.ReadWrite | FileShare.Delete, 16 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
+    private sealed record EventRow(long Id, string Session, string RequestId, long Sequence, string Kind,
+        string EntryJson, string? RequestJson, long PayloadBytes);
 
     private List<QueryRow> SnapshotRows(DateOnly date, ClientType? client, CancellationToken token)
     {

@@ -5,6 +5,7 @@ param(
 )
 # M4：真实程序、窗口与退出流程；程序和两个客户端均复制到临时目录，用独立测试互斥。
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'runtime_files.ps1')
 $root = Split-Path -Parent $PSScriptRoot
 $runtime = Join-Path ([IO.Path]::GetTempPath()) ('RetryProxyM4-' + [guid]::NewGuid().ToString('N'))
 $names = @('RETRY_PROXY_CONFIG_JSON','RETRY_PROXY_UI_TEST_ROOT','CLAUDE_CONFIG_DIR','CODEX_HOME','RETRY_PROXY_CLAUDE_CLI','RETRY_PROXY_CODEX_CLI')
@@ -127,7 +128,7 @@ keep = "unchanged"
  @{proxy=$proxy;commonConfig=@{clientSetupCompleted=$false;exitToTray=$false;isFirstRun=$false};otherConfig=@{uiCultureInfoName='zh-Hans'}}|ConvertTo-Json -Depth 15|Set-Content -LiteralPath (Join-Path $runtime 'User/config.json') -Encoding utf8
  Copy-Item -LiteralPath (Join-Path $root 'src/RetryProxy.App/User/I18n') -Destination (Join-Path $runtime 'User/I18n') -Recurse
  $ExePath=(Resolve-Path -LiteralPath $ExePath).ProviderPath
- Get-ChildItem -LiteralPath (Split-Path -Parent $ExePath) -File|Copy-Item -Destination $runtime
+ Copy-RetryProxyRuntime -ExePath $ExePath -DestinationDirectory $runtime
  Start-App
  Wait-For { $null -ne (Find-Control 'ImportName_claude') } 'Import step missing'
  Capture 'm4-setup-import'

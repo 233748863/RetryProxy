@@ -12,6 +12,7 @@ using System.Linq;
 using System.Windows;
 using System.Windows.Media;
 
+using RetryProxy.Helpers.Ui;
 namespace RetryProxy.ViewModel.Pages;
 
 /// <summary>走势图一个槽位；Request 为 null 表示空槽。</summary>
@@ -273,13 +274,6 @@ public partial class CachePageViewModel : ViewModel
             return;
         }
 
-        try
-        {
-            Clipboard.SetText(requestId);
-        }
-        catch (Exception)
-        {
-            Workspace.Notice = $"请求编号：{requestId}";
-        }
+        ClipboardSafe.SetText(requestId, ok => { if (!ok) Workspace.Notice = $"请求编号：{requestId}"; });
     }
 }

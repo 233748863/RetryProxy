@@ -5,6 +5,7 @@ param(
 )
 # 独立临时配置验证实际按钮、深浅变化及重启持久化，不操作正在使用的实例。
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'runtime_files.ps1')
 $root = Split-Path -Parent $PSScriptRoot
 if (!$OutputDirectory) { $OutputDirectory = Join-Path $root ('.tmp/appearance-' + [guid]::NewGuid().ToString('N')) }
 $runtime = Join-Path ([IO.Path]::GetTempPath()) ('RetryProxyM4-' + [guid]::NewGuid().ToString('N'))
@@ -54,12 +55,27 @@ function Navigate([string]$Name) {
     if ($Name -eq '软件设置') { Wait-For { $null -ne (Find-Control 'SwitchAppearance') } '未打开软件设置页' }
     else { Wait-For { $null -ne (Find-Control 'ProxyState') } '未打开供应商页' }
 }
+$configDbReaderScript = @'
+import sqlite3, sys
+connection = sqlite3.connect(sys.argv[1], timeout=5)
+try:
+    row = connection.execute("SELECT value FROM config WHERE key = ?", (sys.argv[2],)).fetchone()
+finally:
+    connection.close()
+sys.stdout.write('' if row is None else row[0])
+'@
+function Read-ConfigDb([string]$Key) {
+    $db = Join-Path $runtime 'User/config.db'
+    if (!(Test-Path -LiteralPath $db)) { throw '配置库尚未创建' }
+    $reader = Join-Path $runtime 'read-config-db.py'
+    if (!(Test-Path -LiteralPath $reader)) { [IO.File]::WriteAllText($reader, $configDbReaderScript) }
+    $output = @(& python -X utf8 $reader $db $Key 2>&1)
+    if ($LASTEXITCODE -ne 0) { throw "读取配置库失败：$($output -join ' ')" }
+    return ($output -join "`n")
+}
 function Theme {
-    # 允许应用原子替换配置，避免测试轮询反过来阻止保存。
-    $stream = [IO.FileStream]::new((Join-Path $runtime 'User/config.json'),[IO.FileMode]::Open,[IO.FileAccess]::Read,([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
-    $reader = [IO.StreamReader]::new($stream)
-    try { return ($reader.ReadToEnd() | ConvertFrom-Json).commonConfig.currentThemeType }
-    finally { $reader.Dispose() }
+    # 主题存在配置库 common 行；SQLite 读写互不阻塞，无需旧文件时代的共享句柄。
+    return (Read-ConfigDb 'common' | ConvertFrom-Json).currentThemeType
 }
 function Capture([string]$Name) {
     Focus-App; Start-Sleep -Milliseconds 350
@@ -111,7 +127,7 @@ try {
     @{proxy=$proxy;commonConfig=@{clientSetupCompleted=$true;isFirstRun=$false;exitToTray=$false;startMinimized=$false;currentThemeType=0};otherConfig=@{uiCultureInfoName='zh-Hans'}} |
         ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $runtime 'User/config.json') -Encoding utf8
     Copy-Item -LiteralPath (Join-Path $root 'src/RetryProxy.App/User/I18n') -Destination (Join-Path $runtime 'User/I18n') -Recurse
-    Get-ChildItem -LiteralPath (Split-Path -Parent (Resolve-Path -LiteralPath $ExePath).ProviderPath) -File | Copy-Item -Destination $runtime
+    Copy-RetryProxyRuntime -ExePath $ExePath -DestinationDirectory $runtime
     Start-App
     Navigate '软件设置'
     $initial = Theme; $initialBrightness = Capture 'initial-dark'

@@ -255,6 +255,7 @@ public class WorkspaceTests
                 service.Stop(TimeSpan.FromSeconds(5));
             }
 
+            App.Dispose();
             Logger.Dispose();
             try
             {
@@ -569,6 +570,7 @@ public class WorkspaceTests
         Assert.Empty(app.Services);
         Assert.Null(app.OpenRouteEditor(0));
         Assert.Equal("请先新增服务商", app.Notice);
+        app.Dispose();
         Directory.Delete(directory, recursive: true);
     }
 
@@ -594,6 +596,7 @@ public class WorkspaceTests
         Assert.Empty(app.Config.RouteFor(ClientType.Codex)!.CurrentProviderId);
         Assert.Equal(app.Config.RouteFor(ClientType.Claude)!.Id, app.SelectedRoute);
         Assert.True(app.Services.ContainsKey(app.SelectedRoute));
+        app.Dispose();
         Directory.Delete(directory, recursive: true);
     }
 

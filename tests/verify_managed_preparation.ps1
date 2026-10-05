@@ -5,6 +5,7 @@ param(
 )
 # M5：使用真实临时配置验证多 Key 准备、退出恢复和删除联动；所有请求只到本机假上游。
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'runtime_files.ps1')
 $ExePath = (Resolve-Path -LiteralPath $ExePath).ProviderPath
 $tempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\')
 $runtime = Join-Path $tempRoot ('RetryProxyM4-' + [Guid]::NewGuid().ToString('N'))
@@ -134,7 +135,27 @@ function Select-Key([string]$KeyId) {
     if ($toggle.Current.ToggleState -ne [Windows.Automation.ToggleState]::On) { throw "Key 未保持勾选：$KeyId" }
 }
 
-function Read-Config { [IO.File]::ReadAllText($configPath) | ConvertFrom-Json }
+$configDbReaderScript = @'
+import sqlite3, sys, json
+connection = sqlite3.connect(sys.argv[1], timeout=5)
+try:
+    rows = connection.execute("SELECT key, value FROM config").fetchall()
+finally:
+    connection.close()
+result = {}
+for key, value in rows:
+    result[key] = json.loads(value)
+sys.stdout.write(json.dumps(result, ensure_ascii=False))
+'@
+function Read-Config {
+    $db = Join-Path $runtime 'User\config.db'
+    if (!(Test-Path -LiteralPath $db)) { throw '配置库不存在' }
+    $reader = Join-Path $runtime 'read-config-db.py'
+    if (!(Test-Path -LiteralPath $reader)) { [IO.File]::WriteAllText($reader, $configDbReaderScript) }
+    $output = @(& python -X utf8 $reader $db 2>&1)
+    if ($LASTEXITCODE -ne 0) { throw "读取配置库失败：$($output -join ' ')" }
+    return ($output -join "`n" | ConvertFrom-Json)
+}
 function Read-Events {
     if (Test-Path -LiteralPath $eventsPath) {
         foreach ($line in [IO.File]::ReadAllLines($eventsPath)) { if ($line.Trim()) { $line | ConvertFrom-Json } }
@@ -214,8 +235,7 @@ function Open-KeyMenu([string]$KeyId) {
 
 try {
     New-Item -ItemType Directory -Path $runtime, (Join-Path $runtime 'User') | Out-Null
-    Get-ChildItem -LiteralPath (Split-Path -Parent $ExePath) -File |
-        Where-Object { $_.Name -match '\.(exe|dll)$|\.(deps|runtimeconfig)\.json$' } | Copy-Item -Destination $runtime
+    Copy-RetryProxyRuntime -ExePath $ExePath -DestinationDirectory $runtime
     $translations = Join-Path (Split-Path -Parent $ExePath) 'User\I18n'
     if (-not (Test-Path -LiteralPath $translations)) { $translations = Join-Path $PSScriptRoot '..\src\RetryProxy.App\User\I18n' }
     Copy-Item -LiteralPath $translations -Destination (Join-Path $runtime 'User\I18n') -Recurse
@@ -364,6 +384,7 @@ try {
     Invoke-Control 'ProviderNavigation'
     Invoke-Control 'Fold_a'
     Wait-For { Test-KeyStatus 'a2' '已准备*' } '重启后供应商状态没有同步'
+    $beforeDelete = Read-Config
     Open-KeyMenu 'a2'
     Invoke-Control '删除' -ByName
     Invoke-Control '确认删除' -ByName
@@ -372,6 +393,17 @@ try {
         return @($saved.proxy.providers | Where-Object id -eq 'a' | ForEach-Object keys | Where-Object id -eq 'a2').Count -eq 0 -and
             @($saved.preparations | Where-Object keyId -eq 'a2').Count -eq 0
     } '删除运行中 Key 没有同时移除其准备任务'
+    # 删除实际走 ConfigService 导出，备份必须仍含被删除 Key 和关联任务。
+    $backupFiles = @(Get-ChildItem -LiteralPath (Join-Path $runtime 'User/backup') -Filter 'config_*.json.bak' | Sort-Object Name -Descending)
+    if ($backupFiles.Count -lt 1 -or $backupFiles.Count -gt 5) { throw '配置 JSON 备份数量不符合保留规则' }
+    $backup = [IO.File]::ReadAllText($backupFiles[0].FullName) | ConvertFrom-Json -Depth 20
+    foreach ($node in @('proxy','commonConfig','otherConfig','preparations')) {
+        if ($null -eq $backup.PSObject.Properties[$node]) { throw "删除前备份缺少配置节点：$node" }
+    }
+    $oldKey = @($beforeDelete.proxy.providers | Where-Object id -eq 'a' | ForEach-Object keys | Where-Object id -eq 'a2')[0]
+    $backupKey = @($backup.proxy.providers | Where-Object id -eq 'a' | ForEach-Object keys | Where-Object id -eq 'a2')
+    if ($backupKey.Count -ne 1 -or $backupKey[0].api_key -cne $oldKey.api_key) { throw '删除前 JSON 备份没有完整保留原 Key' }
+    if (@($backup.preparations | Where-Object keyId -eq 'a2').Count -ne 1) { throw '删除前 JSON 备份未保留关联准备任务' }
     if (@((Read-Config).preparations).Count -ne 2) { throw '删除一把 Key 误删其他准备任务' }
     Wait-For { Test-KeyStatus 'a3' '已准备*' } '删除第二把 Key 打断了第三把 Key'
     Invoke-Control 'PreparationNavigation'
@@ -389,7 +421,7 @@ try {
     }
     if (@(Read-Events | Where-Object { -not $_.valid }).Count -gt 0) { throw '假上游接收到错误认证或路径' }
     $passed = $true
-    Write-Host 'PASS：三 Key 批量准备、供应商状态同步、已有任务禁选、手动停止不恢复、运行任务重启恢复、删除 Key 联动与密钥隔离。'
+    Write-Host 'PASS：三 Key 批量准备、供应商状态同步、已有任务禁选、手动停止不恢复、运行任务重启恢复、删除 Key 联动、删除前 JSON 备份与密钥隔离。'
 }
 finally {
     if ($process) {

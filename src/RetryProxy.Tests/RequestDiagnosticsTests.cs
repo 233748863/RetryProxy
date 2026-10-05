@@ -9,9 +9,11 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Data.Sqlite;
 using RetryProxy.Core.Config;
 using RetryProxy.Core.Diagnostics;
 using RetryProxy.Core.KeepAlive;
+using RetryProxy.Core.Storage;
 using RetryProxy.Tests.Support;
 using Xunit;
 
@@ -470,7 +472,8 @@ public class RequestDiagnosticsTests
         {
             string requestId;
             DateOnly date;
-            using (var store = new DiagnosticStore(directory))
+            using (var data = new DataDatabase(directory))
+            using (var store = new DiagnosticStore(data))
             {
                 var hits = 0;
                 await using var fixture = await Start(context => Upstream.Json(context, Interlocked.Increment(ref hits) == 1 ? 429 : 200, "{}"), Configuration(1), store);
@@ -494,7 +497,8 @@ public class RequestDiagnosticsTests
                 Assert.Equal(1UL, summary.RetryCount);
                 requestId = summary.Request.RequestId;
             }
-            using var restored = new DiagnosticStore(directory);
+            using var restoredData = new DataDatabase(directory);
+            using var restored = new DiagnosticStore(restoredData);
             var details = await restored.ReadDetailAsync(date, requestId);
             Assert.NotNull(details.Summary);
             Assert.Equal(DiagnosticOutcome.Success, details.Summary.Outcome);
@@ -505,7 +509,11 @@ public class RequestDiagnosticsTests
             Assert.DoesNotContain(Secret, JsonSerializer.Serialize(details));
             Assert.DoesNotContain(LocalToken, JsonSerializer.Serialize(details));
         }
-        finally { if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true); }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
     }
 
     [Fact]

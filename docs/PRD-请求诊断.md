@@ -113,4 +113,4 @@
 
 正式发布于 2026-10-05 15:16：旧 PID 32372 正常退出并恢复两客户端当前 Key 直连后，只替换 `RetryProxy.exe`、`runtime-check.cmd`、`User/I18n/en.json`，新 PID 7416 的 18080/18081 健康、监听归属和自动接管通过。配置业务字段、客户端文件与首次接管原始备份保留，两库完整性、已有每日记录数量和旧统计/诊断文件内容及时间戳检查通过；没有再次迁库或恢复旧配置。正式列表已实测悬停、打开/关闭详情和焦点恢复，检查后保留在请求诊断页。
 
-发布包 60,866,528 字节，SHA-256 `7D7687663B5F8B48311E84A9CDA632636AA039BB9DD39E3FE86EB7A110F90164`。备份：`build/instance-backups/upgrade-20261005-151247/`；首次未停机备份：`build/instance-backups/upgrade-20261005-150103/`。证据目录 `.tmp/release-diagnostic-corners-20261005/` 包含红灯回归、首次失败与最终发布日志、源码清单、包校验、诊断窗口、代理/托盘回归、两次部署记录和正式窗口截图。源码提交状态待本轮推送后补记。
+发布包 60,866,528 字节，SHA-256 `7D7687663B5F8B48311E84A9CDA632636AA039BB9DD39E3FE86EB7A110F90164`。备份：`build/instance-backups/upgrade-20261005-151247/`；首次未停机备份：`build/instance-backups/upgrade-20261005-150103/`。证据目录 `.tmp/release-diagnostic-corners-20261005/` 包含红灯回归、首次失败与最终发布日志、源码清单、包校验、诊断窗口、代理/托盘回归、两次部署记录和正式窗口截图。源码提交 `404ea53` 已推送至 `feature/provider-client-takeover`，远端提交号已核验。

@@ -1,7 +1,7 @@
 using RetryProxy.View.Drawers;
 using System;
 using System.Collections.Generic;
-using System.ComponentModel;
+using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
@@ -28,6 +28,7 @@ public partial class DrawerHost : UserControl
     private Window? _window;
     private bool _transitioning;
     private bool _saving;
+    private bool _closing;
     private int _focusSuspensions;
     private bool _redirectingFocus;
 
@@ -46,7 +47,7 @@ public partial class DrawerHost : UserControl
     public async Task<bool> ShowAsync(DrawerPage page)
     {
         Dispatcher.VerifyAccess();
-        if (_transitioning || _saving)
+        if (_transitioning || _saving || _closing)
             throw new InvalidOperationException(DrawerText.T("抽屉正在切换，请稍后再试"));
         var entry = new Entry(page, Keyboard.FocusedElement, BodyScroll.VerticalOffset);
         _entries.Push(entry);
@@ -93,33 +94,53 @@ public partial class DrawerHost : UserControl
         }
     }
 
-    public async Task RequestCloseAsync()
+    public async Task RequestCloseAsync() => await TryCloseAsync(closeAll: false);
+
+    /// <summary>
+    /// 切页前一次确认并关闭全部层级。例如在供应商里编辑 Key 时，父子草稿一起检查；
+    /// 用户取消确认则不弹出任何一层，原输入、滚动位置与后台操作全部保留。
+    /// </summary>
+    public Task<bool> TryCloseAllAsync() => TryCloseAsync(closeAll: true);
+
+    private async Task<bool> TryCloseAsync(bool closeAll)
     {
         Dispatcher.VerifyAccess();
-        if (!IsOpen || _transitioning || _saving || _focusSuspensions > 0) return;
-        var page = _entries.Peek().Page;
-        if (page.IsBusy && !page.IsReadOnly) return;
-        if (!page.IsReadOnly && page.HasChanges)
+        if (!IsOpen) return true;
+        if (_transitioning || _saving || _closing || _focusSuspensions > 0) return false;
+        var entries = closeAll ? _entries.ToArray() : [_entries.Peek()];
+        if (entries.Any(entry => entry.Page.IsBusy && !entry.Page.IsReadOnly)) return false;
+        _closing = true;
+        RefreshChrome();
+        try
         {
-            try
+            if (entries.Any(entry => !entry.Page.IsReadOnly && entry.Page.HasChanges))
             {
-                if (ConfirmDiscardAsync is null || !await ConfirmDiscardAsync()) return;
+                try
+                {
+                    if (ConfirmDiscardAsync is null || !await ConfirmDiscardAsync()) return false;
+                }
+                catch (Exception)
+                {
+                    entries[0].Page.SetError("无法显示确认，请稍后重试");
+                    return false;
+                }
+                if (!IsOpen || !ReferenceEquals(_entries.Peek(), entries[0])) return false;
             }
-            catch (Exception)
-            {
-                page.SetError("无法显示确认，请稍后重试");
-                return;
-            }
-            if (!IsOpen || !ReferenceEquals(_entries.Peek().Page, page)) return;
+            await PopAsync(false, closeAll);
+            return true;
         }
-        await PopAsync(false);
+        finally
+        {
+            _closing = false;
+            RefreshChrome();
+        }
     }
 
     private async void CloseClicked(object sender, RoutedEventArgs e) => await RequestCloseAsync();
 
     private async void SaveClicked(object sender, RoutedEventArgs e)
     {
-        if (!IsOpen || _transitioning || _saving || _entries.Peek().Page.IsBusy) return;
+        if (!IsOpen || _transitioning || _saving || _closing || _focusSuspensions > 0 || _entries.Peek().Page.IsBusy) return;
         var page = _entries.Peek().Page;
         if (page.IsReadOnly) return;
         _saving = true;
@@ -143,20 +164,23 @@ public partial class DrawerHost : UserControl
         if (saved && IsOpen && ReferenceEquals(_entries.Peek().Page, page)) await PopAsync(true);
     }
 
-    private async Task PopAsync(bool saved)
+    private async Task PopAsync(bool saved, bool closeAll = false)
     {
-        var entry = _entries.Peek();
-        entry.Page.CancelPendingOperations();
+        var entries = closeAll ? _entries.ToArray() : [_entries.Peek()];
+        foreach (var entry in entries) entry.Page.CancelPendingOperations();
         await AnimateAsync(false);
-        if (_entries.Count == 0 || !ReferenceEquals(_entries.Peek(), entry)) return;
-        _entries.Pop();
-        entry.Page.StateChanged -= RefreshChrome;
+        if (_entries.Count == 0 || !ReferenceEquals(_entries.Peek(), entries[0])) return;
+        foreach (var entry in entries)
+        {
+            _entries.Pop();
+            entry.Page.StateChanged -= RefreshChrome;
+            entry.Page.Dispose();
+        }
         Body.Content = null;
-        entry.Page.Dispose();
         if (IsOpen)
         {
             Body.Content = _entries.Peek().Page;
-            BodyScroll.ScrollToVerticalOffset(entry.PreviousScroll);
+            BodyScroll.ScrollToVerticalOffset(entries[0].PreviousScroll);
             RefreshChrome();
             await AnimateAsync(true);
         }
@@ -165,8 +189,9 @@ public partial class DrawerHost : UserControl
             Visibility = Visibility.Collapsed;
             DetachWindow();
         }
-        RestoreFocus(entry.PreviousFocus);
-        entry.Completion.TrySetResult(saved);
+        // 整体关闭只恢复最外层的入口焦点，不重新展示即将被丢弃的父草稿。
+        RestoreFocus(entries[^1].PreviousFocus);
+        foreach (var entry in entries) entry.Completion.TrySetResult(saved);
     }
 
     private void RefreshChrome()
@@ -179,13 +204,14 @@ public partial class DrawerHost : UserControl
         CancelButton.Content = DrawerText.T(page.IsReadOnly ? "关闭" : "取消");
         CancelButton.Margin = page.IsReadOnly ? new Thickness(0) : new Thickness(0, 0, 8, 0);
         BackButton.Visibility = _entries.Count > 1 ? Visibility.Visible : Visibility.Collapsed;
-        var enabled = !_saving && !_transitioning;
+        var enabled = !_saving && !_transitioning && !_closing;
         SaveButton.IsEnabled = enabled && !page.IsBusy && !page.IsReadOnly;
         // 只读查询始终可关闭：PopAsync 会取消正在读取的任务。
         var canClose = enabled && (page.IsReadOnly || !page.IsBusy);
         CancelButton.IsEnabled = canClose;
         CloseButton.IsEnabled = canClose;
         BackButton.IsEnabled = canClose;
+        // 确认框自行遮挡正文；保留正文可用，确保返回父层时能恢复原输入焦点。
         Body.IsEnabled = !_saving && !_transitioning;
         ErrorText.Text = page.ErrorText;
         ErrorText.Visibility = string.IsNullOrEmpty(page.ErrorText) ? Visibility.Collapsed : Visibility.Visible;

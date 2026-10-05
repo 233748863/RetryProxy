@@ -439,6 +439,12 @@ public static class RequestDiagnosticWindow {
     Assert-Safe $overview '详情概况'; Assert-Safe $events '详情事件'
     Capture 'dark-retry-detail'
     Close-Detail $retry.id; Assert-Rows 1 'diag-retry-model'
+    Open-Detail $retry.id
+    Navigate '供应商' 'AddProvider'
+    Wait-For { $null -eq (Find-Control 'DiagnosticOverview') } '离开诊断页后只读详情仍显示'
+    Check ($null -eq (Find-Control '放弃修改' -ByName)) '只读详情切页直接关闭，不弹未保存确认'
+    Navigate '请求诊断' 'DiagnosticList'
+    Assert-Rows 1 'diag-retry-model'
     Set-Search ''; Assert-Rows 2
 
     Focus-App; (Find-Control 'DiagnosticSearch').SetFocus()

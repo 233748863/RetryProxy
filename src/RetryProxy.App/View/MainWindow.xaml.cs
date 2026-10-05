@@ -42,6 +42,7 @@ public partial class MainWindow : FluentWindow, INavigationWindow
     private readonly double _minVelocity = 0.3;
     private const double TargetFps = 60.0;
     private bool _navigationRefreshQueued;
+    private bool _closingDrawerForNavigation;
     private Type? _lastPageType;
 
     public MainWindowViewModel ViewModel { get; }
@@ -57,12 +58,15 @@ public partial class MainWindow : FluentWindow, INavigationWindow
         _windowRecovery = new WindowRecovery(this, proxyLogger);
 
         App.GetService<DrawerService>()!.SetHost(DrawerHost);
-        DrawerHost.AllowsOverlayFocus = target => SwitchToast.IsVisible && target is not null
-            && (ReferenceEquals(target, SwitchToast) || SwitchToast.IsAncestorOf(target));
+        DrawerHost.AllowsOverlayFocus = target => target is not null &&
+            ((SwitchToast.IsVisible && (ReferenceEquals(target, SwitchToast) || SwitchToast.IsAncestorOf(target)))
+             || RootNavigation.MenuItems.Cast<object>().Concat(RootNavigation.FooterMenuItems.Cast<object>())
+                 .OfType<NavigationViewItem>().Any(item => ReferenceEquals(target, item) || item.IsAncestorOf(target)));
         App.GetService<KeySwitchService>()!.Switched += OnKeySwitched;
         snackbarService.SetSnackbarPresenter(SnackbarPresenter);
         contentDialogService.SetDialogHost(RootContentDialogHost);
         navigationService.SetNavigationControl(RootNavigation);
+        RootNavigation.Navigating += OnNavigating;
         RootNavigation.Navigated += (_, e) =>
         {
             _lastPageType = e.Page?.GetType() ?? _lastPageType;
@@ -78,6 +82,20 @@ public partial class MainWindow : FluentWindow, INavigationWindow
             Activate();
             QueueNavigationRefresh();
         };
+    }
+
+    private async void OnNavigating(NavigationView sender, NavigatingCancelEventArgs e)
+    {
+        if (!DrawerHost.IsOpen) return;
+        // 导航事件同步取消，等所有草稿确认关闭后再切页。取消时页面与左侧选中项均不变。
+        e.Cancel = true;
+        if (_closingDrawerForNavigation || e.Page is null) return;
+        _closingDrawerForNavigation = true;
+        try
+        {
+            if (await DrawerHost.TryCloseAllAsync()) sender.Navigate(e.Page.GetType());
+        }
+        finally { _closingDrawerForNavigation = false; }
     }
 
     private void OnGlobalPreviewMouseWheel(object sender, MouseWheelEventArgs e)

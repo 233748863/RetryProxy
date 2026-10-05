@@ -75,6 +75,116 @@ function Find-Menu([string]$Name) {
  }
  return $null
 }
+function Click-Navigation([string]$Name,[switch]$Keyboard) {
+ # 使用实际导航项的鼠标/键盘入口，避免直接换内容绕过关闭保护。
+ $uia=[Windows.Automation.AutomationElement]::FromHandle($window)
+ $condition=[Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::NameProperty,$Name)
+ $item=@($uia.FindAll([Windows.Automation.TreeScope]::Descendants,$condition) |
+  Where-Object { $_.Current.ControlType -eq [Windows.Automation.ControlType]::DataItem -and !$_.Current.IsOffscreen })[0]
+ if(!$item){throw "找不到导航项：$Name"}
+ if($Keyboard -or !$UseCurrentDesktop) {
+  $item.SetFocus()
+  $null=[RetryProxyTrayVerification]::PostMessage($window,0x0100,[UIntPtr]13,[IntPtr]0x001C0001)
+  $null=[RetryProxyTrayVerification]::PostMessage($window,0x0101,[UIntPtr]13,[IntPtr]0xC01C0001)
+ } else {
+  $null=[M3Capture]::SetForegroundWindow($window)
+  Wait-For { [M3Capture]::GetForegroundWindow() -eq $window } '导航测试窗口未取得前台焦点'
+  $bounds=$item.Current.BoundingRectangle
+  $null=[M3Capture]::SetCursorPos([int]($bounds.Left+$bounds.Width/2),[int]($bounds.Top+$bounds.Height/2))
+  [M3Capture]::mouse_event(0x0002,0,0,0,[UIntPtr]::Zero)
+  [M3Capture]::mouse_event(0x0004,0,0,0,[UIntPtr]::Zero)
+ }
+ Start-Sleep -Milliseconds 500
+}
+function Cancel-Discard {
+ $uia=[Windows.Automation.AutomationElement]::FromHandle($window)
+ $condition=[Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::NameProperty,'取消')
+ $button=@($uia.FindAll([Windows.Automation.TreeScope]::Descendants,$condition) |
+  Where-Object { $_.Current.ControlType -eq [Windows.Automation.ControlType]::Button -and $_.Current.IsEnabled -and $_.Current.AutomationId -ne 'DrawerCancel' })[0]
+ if(!$button){throw '未找到放弃修改确认框的取消按钮'}
+ $button.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern).Invoke()
+ Wait-For { $null -eq (Find-Control '放弃修改' -Name) } '取消确认后对话框仍显示'
+}
+function Assert-DrawerClosed {
+ Wait-For { $null -eq (Find-Control 'DrawerCancel') } '切页后抽屉仍显示'
+ if(Find-Control '放弃修改' -Name){throw '未修改的抽屉不应弹出确认'}
+}
+function Check-DrawerNavigation {
+ # 所有左侧主菜单和页脚入口都必须在切页前关闭无修改的草稿。
+ foreach($target in @('统计','一键准备','请求诊断','运行日志','软件设置','关于')) {
+  Invoke-Control 'AddProvider'
+  Wait-For { $null -ne (Find-Control 'NameBox') } '新增供应商抽屉未打开'
+  Click-Navigation $target
+  Wait-For { $null -eq (Find-Control 'AddProvider') } "导航输入未切换页面：$target"
+  Assert-DrawerClosed
+  if(Find-Control 'AddProvider'){throw "未切换到目标页：$target"}
+  Click-Navigation '供应商'
+  Wait-For { $null -ne (Find-Control 'AddProvider') } '未返回供应商页'
+ }
+ Invoke-Control 'AddProvider'
+ Set-Field 'NameBox' '切页取消后保留的草稿'
+ Click-Navigation '统计'
+ Wait-For { $null -ne (Find-Control '放弃修改' -Name) } '切页未提示未保存修改'
+ if(!(Find-Control 'AddProvider') -or (Find-Control 'OverviewTotalRequests')){throw '确认前已经离开供应商页'}
+ Capture 'drawer-navigation-confirm'
+ Cancel-Discard
+ if((Find-Control 'NameBox').GetCurrentPattern([Windows.Automation.ValuePattern]::Pattern).Current.Value -ne '切页取消后保留的草稿'){throw '取消切页丢失输入'}
+ if(!(Find-Control 'AddProvider')){throw '取消切页后原页面未保留'}
+ Capture 'drawer-navigation-canceled'
+ # 保存校验失败后的草稿仍需确认，键盘切页遵守同一保护。
+ Invoke-Control 'DrawerSave'
+ Click-Navigation '软件设置' -Keyboard
+ Wait-For { $null -ne (Find-Control '放弃修改' -Name) } '保存失败后键盘切页未确认'
+ Invoke-Control '放弃修改' -Name
+ Assert-DrawerClosed
+ Capture 'drawer-navigation-discarded'
+ Click-Navigation '供应商'
+ Wait-For { $null -ne (Find-Control 'AddProvider') } '确认放弃后未能返回供应商页'
+ if(Find-Control '切页取消后保留的草稿' -Name){throw '放弃草稿被保存到供应商列表'}
+ # 父草稿有修改、子 Key 没修改时，整体确认；取消不能先退回父层。
+ Invoke-Control 'AddProvider'
+ Set-Field 'NameBox' '嵌套父草稿'
+ Invoke-Control '编辑' -Name
+ Wait-For { $null -ne (Find-Control 'SecretBox') } '嵌套 Key 未打开'
+ Click-Navigation '运行日志'
+ Wait-For { $null -ne (Find-Control '放弃修改' -Name) } '嵌套编辑遗漏父草稿修改'
+ Cancel-Discard
+ if(!(Find-Control 'SecretBox')){throw '取消切页后子抽屉已被关闭'}
+ if((Find-Control 'NameBox').GetCurrentPattern([Windows.Automation.ValuePattern]::Pattern).Current.Value -ne '默认'){throw '取消切页后子草稿输入变化'}
+ Click-Navigation '请求诊断'
+ Invoke-Control '放弃修改' -Name
+ Assert-DrawerClosed
+ Click-Navigation '供应商'
+ Wait-For { $null -ne (Find-Control 'AddProvider') } '嵌套放弃后未返回供应商页'
+ if(Find-Control '嵌套父草稿' -Name){throw '嵌套草稿被意外保存'}
+ # 代理设置和准备任务同样保护草稿，放弃不得写入配置。
+ Invoke-Control 'ProxySettings'
+ $original=(Find-Control 'ChannelRetries').GetCurrentPattern([Windows.Automation.ValuePattern]::Pattern).Current.Value
+ Set-Field 'ChannelRetries' '19'
+ Click-Navigation '一键准备'
+ Invoke-Control '放弃修改' -Name
+ Assert-DrawerClosed
+ Invoke-Control 'AddPreparation'
+ Wait-For { $null -ne (Find-Control 'PreparationDrawer') } '准备抽屉未打开'
+ Click-Navigation '供应商' -Keyboard
+ Assert-DrawerClosed
+ Wait-For { $null -ne (Find-Control 'ProxySettings') } '未返回供应商页'
+ Invoke-Control 'ProxySettings'
+ if((Find-Control 'ChannelRetries').GetCurrentPattern([Windows.Automation.ValuePattern]::Pattern).Current.Value -ne $original){throw '切页放弃仍改写代理设置'}
+ Invoke-Control 'DrawerCancel'
+ Click-Navigation '一键准备'
+ Invoke-Control 'AddPreparation'
+ Set-Field 'PreparationModel' '未保存的准备模型'
+ Click-Navigation '供应商'
+ Wait-For { $null -ne (Find-Control '放弃修改' -Name) } '准备草稿切页未确认'
+ Cancel-Discard
+ if((Find-Control 'PreparationModel').GetCurrentPattern([Windows.Automation.ValuePattern]::Pattern).Current.Value -ne '未保存的准备模型'){throw '准备草稿丢失'}
+ Click-Navigation '供应商'
+ Invoke-Control '放弃修改' -Name
+ Assert-DrawerClosed
+ Wait-For { $null -ne (Find-Control 'AddProvider') } '准备放弃后未返回供应商页'
+ Write-Host 'PASS: 全部左侧导航关闭、确认前保留原页、取消保留输入、嵌套整体放弃、保存失败、鼠标与键盘、代理与准备草稿保护。'
+}
 function Check-TrayPointer {
  # 用真实鼠标沿父条目中心横移；UIA 的 Expand/Invoke 会绕过原缺陷，不能代替此检查。
  $tray=[RetryProxyTrayVerification]::FindWindowByTitlePrefix($app.Id,'wpfui_th_')
@@ -240,6 +350,7 @@ try {
  Invoke-Control '供应商' -Name
  Wait-For { (Find-Control 'CurrentProviderKey').Current.Name -like '*Claude Fixture*' } 'Shared client selection was lost'
  Invoke-Control 'SelectCodex'
+ Check-DrawerNavigation
  Invoke-Control 'ProxySettings'
  Wait-For { $null -ne (Find-Control 'ChannelListenPort') } 'Settings drawer did not open'
  Capture 'm3-proxy-drawer'

@@ -1,5 +1,6 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using RetryProxy.Core.Config;
 using RetryProxy.Core.Metrics;
 using RetryProxy.Core.Service;
 using RetryProxy.Core.Workspace;
@@ -186,13 +187,19 @@ internal static class ClientPageText
     public static string CurrentProviderKey(ProxyWorkspace workspace)
     {
         var route = workspace.SelectedRouteRef();
-        var provider = route is null ? null : workspace.Config.ProviderById(route.CurrentProviderId);
+        return route is null ? Translate("未选择供应商") : ProviderKeyText(workspace, route);
+    }
+
+    /// <summary>单个通道的“供应商 · Key”文本；首页运行状态卡按通道逐行调用。</summary>
+    public static string ProviderKeyText(ProxyWorkspace workspace, ProxyRoute route)
+    {
+        var provider = workspace.Config.ProviderById(route.CurrentProviderId);
         if (provider is null)
         {
             return Translate("未选择供应商");
         }
 
-        var key = provider.KeyById(route!.CurrentKeyId);
+        var key = provider.KeyById(route.CurrentKeyId);
         return Translate("{0} · {1}", provider.Name, key?.Name ?? Translate("未选择 Key"));
     }
 }

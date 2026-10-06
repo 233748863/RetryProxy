@@ -352,6 +352,7 @@
   "撤销": "Undo",
   "搜索名称、地址、Key 名或备注": "Search name, URL, key name or notes",
   "当前：": "Current: ",
+  "{0}：": "{0}: ",
   "定位": "Locate",
   "保活": "Keep-alive",
   "还没有供应商": "No providers yet",

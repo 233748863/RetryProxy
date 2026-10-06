@@ -71,9 +71,14 @@ public sealed class HomePageTests
         var badge = card.Descendants(Ui + "InfoBadge").Single();
         Assert.Equal("{Binding StateSeverity}", (string?)badge.Attribute("Severity"));
         Assert.Equal("{Binding StateLabel}", (string?)badge.Attribute("Value"));
-        var providerKey = card.Descendants(Presentation + "TextBlock")
-            .Single(element => (string?)element.Attribute("AutomationProperties.AutomationId") == "HomeCurrentProviderKey");
-        Assert.Equal("{Binding CurrentProviderKey}", (string?)providerKey.Attribute("Text"));
+        var channels = card.Descendants(Presentation + "ItemsControl")
+            .Single(element => (string?)element.Attribute("AutomationProperties.AutomationId") == "HomeChannelList");
+        Assert.Equal("{Binding Channels}", (string?)channels.Attribute("ItemsSource"));
+        var channelRow = channels.Descendants(Presentation + "DataTemplate").Single()
+            .Descendants(Presentation + "TextBlock").ToArray();
+        Assert.Equal(2, channelRow.Length);
+        Assert.Equal("{Binding Label}", (string?)channelRow[0].Attribute("Text"));
+        Assert.Equal("{Binding ProviderKey}", (string?)channelRow[1].Attribute("Text"));
         var tiles = card.Descendants(Presentation + "UniformGrid").Single();
         Assert.Contains("AdaptiveUniformGridColumnsConverter", (string?)tiles.Attribute("Columns"));
         var tileIds = tiles.Descendants(Presentation + "TextBlock")

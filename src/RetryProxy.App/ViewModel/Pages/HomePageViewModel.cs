@@ -1,17 +1,20 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using RetryProxy.Core.Config;
 using RetryProxy.Core.Metrics;
 using RetryProxy.Core.Service;
 using RetryProxy.Core.Workspace;
 using RetryProxy.Service;
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using Wpf.Ui;
 using Wpf.Ui.Controls;
 
 namespace RetryProxy.ViewModel.Pages;
 
 /// <summary>
-/// 首页：横幅下方是运行状态卡（代理状态、当前供应商·Key、今日统计瓦片），
+/// 首页：横幅下方是运行状态卡（代理状态、各通道供应商·Key、今日合计统计瓦片），
 /// 数据与统计页同源，随 WorkspaceService.Refreshed 刷新；再往下是六个快捷入口。
 /// </summary>
 public partial class HomePageViewModel : ViewModel
@@ -28,7 +31,7 @@ public partial class HomePageViewModel : ViewModel
     private string _emptyHint = string.Empty;
 
     [ObservableProperty]
-    private string _currentProviderKey = string.Empty;
+    private IReadOnlyList<HomeChannelRow> _channels = Array.Empty<HomeChannelRow>();
 
     [ObservableProperty]
     private string _stateLabel = string.Empty;
@@ -89,12 +92,19 @@ public partial class HomePageViewModel : ViewModel
 
     private void Refresh()
     {
-        var route = Workspace.SelectedRouteRef();
-        HasChannel = route is not null;
+        var routes = Workspace.Config.Routes;
+        HasChannel = routes.Count > 0;
         EmptyHint = ClientPageText.Translate("当前客户端尚无通道，请前往供应商页配置");
-        CurrentProviderKey = ClientPageText.CurrentProviderKey(Workspace);
+        Channels = routes.Select(BuildChannelRow).ToList();
 
-        var state = route is null ? ServiceState.Stopped : Workspace.RouteState(route.Id);
+        // 状态徽标汇总全部通道：异常优先，其次过渡中，只要有通道在运行就显示运行中。
+        var states = routes.Select(route => Workspace.RouteState(route.Id)).ToList();
+        var state = states.Count == 0 ? ServiceState.Stopped
+            : states.Contains(ServiceState.Error) ? ServiceState.Error
+            : states.Contains(ServiceState.Starting) ? ServiceState.Starting
+            : states.Contains(ServiceState.Stopping) ? ServiceState.Stopping
+            : states.Contains(ServiceState.Running) ? ServiceState.Running
+            : ServiceState.Stopped;
         StateLabel = ClientPageText.Translate(UiText.StateLabel(state));
         StateSeverity = state switch
         {
@@ -104,15 +114,35 @@ public partial class HomePageViewModel : ViewModel
             _ => InfoBadgeSeverity.Informational,
         };
 
-        var snapshot = route is not null && Workspace.Services.TryGetValue(route.Id, out var service)
-            ? service.Metrics.Snapshot()
-            : new MetricsSnapshot();
-        TotalRequests = snapshot.TotalRequests.ToString();
-        SuccessfulRequests = snapshot.SuccessfulRequests.ToString();
-        RetryCount = snapshot.RetryCount.ToString();
-        FailedRequests = snapshot.FailedRequests.ToString();
-        ActiveRequests = snapshot.ActiveRequests.ToString();
-        SuccessRateText = FormatSuccessRate(snapshot.SuccessfulRequests, snapshot.FailedRequests);
+        // 今日统计按全部通道合计，展示代理整体处理量。
+        ulong total = 0, successful = 0, retry = 0, failed = 0, active = 0;
+        foreach (var route in routes)
+        {
+            if (!Workspace.Services.TryGetValue(route.Id, out var service))
+            {
+                continue;
+            }
+
+            var snapshot = service.Metrics.Snapshot();
+            total += snapshot.TotalRequests;
+            successful += snapshot.SuccessfulRequests;
+            retry += snapshot.RetryCount;
+            failed += snapshot.FailedRequests;
+            active += snapshot.ActiveRequests;
+        }
+
+        TotalRequests = total.ToString();
+        SuccessfulRequests = successful.ToString();
+        RetryCount = retry.ToString();
+        FailedRequests = failed.ToString();
+        ActiveRequests = active.ToString();
+        SuccessRateText = FormatSuccessRate(successful, failed);
         SuccessRateHelp = ClientPageText.Translate("最终成功率：成功 ÷（成功 + 失败）；处理中的请求不计入。");
     }
+
+    private HomeChannelRow BuildChannelRow(ProxyRoute route) =>
+        new(ClientPageText.Translate("{0}：", route.Name), ClientPageText.ProviderKeyText(Workspace, route));
 }
+
+/// <summary>运行状态卡中的单个通道行：通道名称标签 + 当前供应商 · Key。</summary>
+public sealed record HomeChannelRow(string Label, string ProviderKey);

@@ -102,7 +102,7 @@
                 </Border>
             </Border>
 
-            <!--  运行状态：代理状态、当前供应商·Key 与今日统计，打开首页即可掌握运行情况  -->
+            <!--  运行状态：代理状态、各通道供应商·Key 与今日合计统计，打开首页即可掌握运行情况  -->
             <ui:Card AutomationProperties.AutomationId="HomeStatusCard"
                      Margin="0,0,0,20"
                      Padding="14,10">
@@ -117,25 +117,32 @@
                                       Severity="{Binding StateSeverity}"
                                       Value="{Binding StateLabel}" />
                     </Grid>
-                    <Grid Margin="0,0,0,10"
-                          Visibility="{Binding HasChannel, Converter={StaticResource BooleanToVisibilityConverter}}">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="*" />
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0"
-                                   VerticalAlignment="Center"
-                                   FontSize="11"
-                                   Foreground="{DynamicResource TextFillColorTertiaryBrush}"
-                                   Text="{i18n:T 当前：}" />
-                        <TextBlock Grid.Column="1"
-                                   Margin="4,0,0,0"
-                                   VerticalAlignment="Center"
-                                   AutomationProperties.AutomationId="HomeCurrentProviderKey"
-                                   Text="{Binding CurrentProviderKey}"
-                                   TextTrimming="CharacterEllipsis"
-                                   ToolTip="{Binding CurrentProviderKey}" />
-                    </Grid>
+                    <ItemsControl Margin="0,0,0,10"
+                                  AutomationProperties.AutomationId="HomeChannelList"
+                                  ItemsSource="{Binding Channels}"
+                                  Visibility="{Binding HasChannel, Converter={StaticResource BooleanToVisibilityConverter}}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Grid Margin="0,0,0,2">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0"
+                                               VerticalAlignment="Center"
+                                               FontSize="11"
+                                               Foreground="{DynamicResource TextFillColorTertiaryBrush}"
+                                               Text="{Binding Label}" />
+                                    <TextBlock Grid.Column="1"
+                                               Margin="4,0,0,0"
+                                               VerticalAlignment="Center"
+                                               Text="{Binding ProviderKey}"
+                                               TextTrimming="CharacterEllipsis"
+                                               ToolTip="{Binding ProviderKey}" />
+                                </Grid>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
                     <TextBlock Margin="0,0,0,10"
                                FontSize="11"
                                Foreground="{DynamicResource TextFillColorTertiaryBrush}"

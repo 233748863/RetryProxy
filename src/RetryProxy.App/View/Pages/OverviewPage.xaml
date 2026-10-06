@@ -109,7 +109,7 @@
             </Grid.ColumnDefinitions>
 
             <!--  今日缓存摘要  -->
-            <ui:Card Grid.Column="0" Margin="0,0,6,0" Padding="14">
+            <ui:Card Grid.Column="0" Margin="0,0,6,0" Padding="14" VerticalAlignment="Stretch" VerticalContentAlignment="Top">
                 <StackPanel>
                     <TextBlock Style="{StaticResource CardTitle}" Text="{i18n:T 今日缓存命中}" />
                     <StackPanel Orientation="Horizontal" ToolTip="{Binding RateHelp}">
@@ -140,13 +140,13 @@
             </ui:Card>
 
             <!--  最近 7 天  -->
-            <ui:Card Grid.Column="1" Margin="6,0,0,0" Padding="14">
+            <ui:Card Grid.Column="1" Margin="6,0,0,0" Padding="14" VerticalAlignment="Stretch" VerticalContentAlignment="Top">
                 <StackPanel>
                     <TextBlock Style="{StaticResource CardTitle}" Text="{i18n:T 最近 7 天}" />
                     <TextBlock Style="{StaticResource MutedText}"
                                Text="{Binding TrendSummary}"
                                ToolTip="{Binding RateHelp}" />
-                    <Grid Height="86" Margin="0,8,0,0">
+                    <Grid Height="98" Margin="0,8,0,0">
                         <ItemsControl ItemsSource="{Binding Trend}">
                             <ItemsControl.ItemsPanel>
                                 <ItemsPanelTemplate>
@@ -206,7 +206,7 @@
             </Grid.ColumnDefinitions>
 
             <!--  按模型拆分  -->
-            <ui:Card Grid.Column="0" Margin="0,0,6,0" Padding="14">
+            <ui:Card Grid.Column="0" Margin="0,0,6,0" Padding="14" VerticalAlignment="Stretch" VerticalContentAlignment="Top">
                 <StackPanel>
                     <TextBlock Style="{StaticResource CardTitle}" Text="{i18n:T 按模型拆分}" />
                     <Grid Margin="0,0,0,4">
@@ -259,7 +259,7 @@
             </ui:Card>
 
             <!--  按 Key 拆分  -->
-            <ui:Card Grid.Column="1" Margin="6,0,0,0" Padding="14">
+            <ui:Card Grid.Column="1" Margin="6,0,0,0" Padding="14" VerticalAlignment="Stretch" VerticalContentAlignment="Top">
                 <StackPanel>
                     <TextBlock Style="{StaticResource CardTitle}" Text="{i18n:T 按 Key 拆分}" />
                     <Grid Margin="0,0,0,4">

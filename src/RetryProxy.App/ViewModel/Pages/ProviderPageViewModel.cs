@@ -14,6 +14,7 @@ using System.Diagnostics;
 using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
+using Wpf.Ui.Controls;
 
 using RetryProxy.Helpers.Ui;
 namespace RetryProxy.ViewModel.Pages;
@@ -46,7 +47,14 @@ public partial class ProviderPageViewModel : ViewModel
     [ObservableProperty] private bool _canStart;
     [ObservableProperty] private string _address = string.Empty;
     [ObservableProperty] private string _currentKey = string.Empty;
-    [ObservableProperty] private string _today = string.Empty;
+    // 今日统计拆成独立片段，界面按“成功/重试/失败”分别着色，与首页统计瓦片同一套语义色。
+    [ObservableProperty] private string _channelText = string.Empty;
+    [ObservableProperty] private string _todayTotalText = string.Empty;
+    [ObservableProperty] private string _todaySuccessText = string.Empty;
+    [ObservableProperty] private string _todayRetryText = string.Empty;
+    [ObservableProperty] private string _todayFailedText = string.Empty;
+    // 运行状态严重度：供应商页状态圆点与状态文字按此着色，取值与首页、统计页一致。
+    [ObservableProperty] private InfoBadgeSeverity _stateSeverity = InfoBadgeSeverity.Informational;
     [ObservableProperty] private bool _keepAliveEnabled;
     [ObservableProperty] private string _keepAliveHint = string.Empty;
     [ObservableProperty] private string? _keepAliveHintToolTip;
@@ -91,6 +99,13 @@ public partial class ProviderPageViewModel : ViewModel
         StateReason = provider is null ? T("请先添加供应商和 Key")
             : state == ServiceState.Error ? Workspace.Services.GetValueOrDefault(route!.Id)?.StartupError ?? T("代理启动失败")
             : state == ServiceState.Stopped ? T("代理已手动停止或尚未启动") : string.Empty;
+        StateSeverity = state switch
+        {
+            ServiceState.Running => InfoBadgeSeverity.Success,
+            ServiceState.Starting or ServiceState.Stopping => InfoBadgeSeverity.Caution,
+            ServiceState.Error => InfoBadgeSeverity.Critical,
+            _ => InfoBadgeSeverity.Informational,
+        };
         CanStart = provider is not null && state is ServiceState.Stopped or ServiceState.Error;
         var localUrl = route?.LocalUrl ?? string.Empty;
         if (route is not null && provider is not null)
@@ -110,9 +125,11 @@ public partial class ProviderPageViewModel : ViewModel
         CanTakeOver = !ClientConfigPaths.WritesBlocked && key is not null;
         ClientActionText = T(connection.Status is ClientConnectionStatus.Modified or ClientConnectionStatus.Unavailable ? "重新接管" : "一键接管");
         var metrics = route is not null && Workspace.Services.TryGetValue(route.Id, out var service) ? service.Metrics.Snapshot() : new MetricsSnapshot();
-        Today = string.Format(T("通道 {0}/{1} 在运行 · 今日 {2} · 成功 {3} · 重试 {4} · 失败 {5}"),
-            Workspace.RunningCount(), Workspace.Config.Routes.Count,
-            metrics.TotalRequests, metrics.SuccessfulRequests, metrics.RetryCount, metrics.FailedRequests);
+        ChannelText = string.Format(T("通道 {0}/{1} 在运行"), Workspace.RunningCount(), Workspace.Config.Routes.Count);
+        TodayTotalText = string.Format(T("今日 {0}"), metrics.TotalRequests);
+        TodaySuccessText = string.Format(T("成功 {0}"), metrics.SuccessfulRequests);
+        TodayRetryText = string.Format(T("重试 {0}"), metrics.RetryCount);
+        TodayFailedText = string.Format(T("失败 {0}"), metrics.FailedRequests);
         KeepAliveHint = route is null ? string.Empty : Workspace.KeepAliveHint(route);
         var watchdog = route is not null && Workspace.RouteKeepAlives.TryGetValue(route.Id, out var alive) ? alive.Snapshot() : null;
         KeepAliveHintToolTip = watchdog?.PreparationLastError is { } reason
@@ -333,6 +350,9 @@ public partial class ProviderKeyRowViewModel : ObservableObject
     [ObservableProperty] private string _preparationHint = string.Empty;
     [ObservableProperty] private string _preparationAction = string.Empty;
     [ObservableProperty] private bool _preparationFailed;
+    // 已准备/准备中单独标记，Key 行状态文字据此着色（已准备绿、准备中强调色、失败红）。
+    [ObservableProperty] private bool _preparationReady;
+    [ObservableProperty] private bool _preparationRunning;
     private bool _canPrepare = true;
     public string Marker => IsCurrent ? "●" : "○";
     public string SwitchText => ProviderPageViewModel.T(IsCurrent ? "使用中" : "切换");
@@ -373,6 +393,8 @@ public partial class ProviderKeyRowViewModel : ObservableObject
         PreparationState = PreparationStatusText.Status(task, forKey: true);
         PreparationHint = task is null ? string.Empty : task.LastError ?? PreparationStatusText.Statistics(task);
         PreparationFailed = task is { CanStart: true, LastError: not null };
+        PreparationReady = task is { IsReady: true };
+        PreparationRunning = task is { IsPreparing: true };
         PreparationAction = ProviderPageViewModel.T(task?.CanStop == true ? "停止" : "准备");
         var canPrepare = task is null || task.CanStart || task.CanStop;
         if (_canPrepare == canPrepare) return;

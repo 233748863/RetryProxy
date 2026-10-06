@@ -33,8 +33,43 @@
             <ui:Card Padding="12" Margin="0,0,0,14">
                 <StackPanel>
                     <WrapPanel>
-                        <TextBlock Text="●" Margin="0,0,6,0" VerticalAlignment="Center" />
-                        <TextBlock Text="{Binding StateText}" VerticalAlignment="Center" FontWeight="SemiBold" AutomationProperties.AutomationId="ProxyState" />
+                        <!--  状态圆点与状态文字按运行状态着色：运行中绿、启动/停止中黄、错误红、已停止灰  -->
+                        <TextBlock Text="●" Margin="0,0,6,0" VerticalAlignment="Center">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="Foreground" Value="{DynamicResource TextFillColorTertiaryBrush}" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding StateSeverity}" Value="Success">
+                                            <Setter Property="Foreground" Value="{DynamicResource SystemFillColorSuccessBrush}" />
+                                        </DataTrigger>
+                                        <DataTrigger Binding="{Binding StateSeverity}" Value="Caution">
+                                            <Setter Property="Foreground" Value="{DynamicResource SystemFillColorCautionBrush}" />
+                                        </DataTrigger>
+                                        <DataTrigger Binding="{Binding StateSeverity}" Value="Critical">
+                                            <Setter Property="Foreground" Value="{DynamicResource SystemFillColorCriticalBrush}" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+                        <TextBlock Text="{Binding StateText}" VerticalAlignment="Center" FontWeight="SemiBold" AutomationProperties.AutomationId="ProxyState">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding StateSeverity}" Value="Success">
+                                            <Setter Property="Foreground" Value="{DynamicResource SystemFillColorSuccessBrush}" />
+                                        </DataTrigger>
+                                        <DataTrigger Binding="{Binding StateSeverity}" Value="Caution">
+                                            <Setter Property="Foreground" Value="{DynamicResource SystemFillColorCautionBrush}" />
+                                        </DataTrigger>
+                                        <DataTrigger Binding="{Binding StateSeverity}" Value="Critical">
+                                            <Setter Property="Foreground" Value="{DynamicResource SystemFillColorCriticalBrush}" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
                         <TextBlock Text="{Binding Address}" Margin="10,0,6,0" VerticalAlignment="Center" FontFamily="Consolas" AutomationProperties.AutomationId="ProviderLocalUrl" />
                         <ui:Button Content="{i18n:T 复制}" Padding="7,3" Command="{Binding CopyAddressCommand}" />
                         <ui:Button Content="{i18n:T 启动}" Margin="8,0,0,0" Padding="7,3" Command="{Binding StartProxyCommand}" AutomationProperties.AutomationId="StartProxy"
@@ -47,7 +82,12 @@
                         <ui:Button Content="{i18n:T 定位}" Margin="8,0,0,0" Padding="7,3" Command="{Binding LocateCommand}" IsEnabled="{Binding HasCurrentProvider}" />
                     </WrapPanel>
                     <WrapPanel Margin="0,8,0,0">
-                        <TextBlock Text="{Binding Today}" VerticalAlignment="Center" Style="{StaticResource SecondaryText}" Margin="0,0,12,0" />
+                        <!--  今日统计按语义着色：成功绿、重试强调色、失败红，与首页统计瓦片同一套颜色  -->
+                        <TextBlock Text="{Binding ChannelText}" VerticalAlignment="Center" Style="{StaticResource SecondaryText}" Margin="0,0,12,0" />
+                        <TextBlock Text="{Binding TodayTotalText}" VerticalAlignment="Center" FontWeight="SemiBold" Margin="0,0,12,0" />
+                        <TextBlock Text="{Binding TodaySuccessText}" VerticalAlignment="Center" Foreground="{DynamicResource SystemFillColorSuccessBrush}" Margin="0,0,12,0" />
+                        <TextBlock Text="{Binding TodayRetryText}" VerticalAlignment="Center" Foreground="{DynamicResource AccentTextFillColorPrimaryBrush}" Margin="0,0,12,0" />
+                        <TextBlock Text="{Binding TodayFailedText}" VerticalAlignment="Center" Foreground="{DynamicResource SystemFillColorCriticalBrush}" Margin="0,0,12,0" />
                         <ui:ToggleSwitch Content="{i18n:T 保活}" IsChecked="{Binding KeepAliveEnabled, Mode=TwoWay}" AutomationProperties.AutomationId="ChannelKeepAlive" />
                         <ui:Button Content="{i18n:T 代理设置}" Command="{Binding ProxySettingsCommand}" Margin="12,0,0,0" Padding="8,4" AutomationProperties.AutomationId="ProxySettings" />
                     </WrapPanel>
@@ -75,7 +115,19 @@
             <ItemsControl x:Name="ProviderList" ItemsSource="{Binding Providers}">
                 <ItemsControl.ItemTemplate><DataTemplate>
                     <Border Style="{StaticResource ProviderCard}" AllowDrop="True" Drop="OnProviderDrop" DragOver="OnDragOver" AutomationProperties.AutomationId="{Binding Id}">
-                        <StackPanel>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <!--  当前供应商：左侧强调色竖条，与卡片强调色边框一起标识“正在使用”  -->
+                            <Border Grid.Column="0"
+                                    Width="3"
+                                    Margin="0,0,10,0"
+                                    Background="{DynamicResource AccentFillColorDefaultBrush}"
+                                    CornerRadius="2"
+                                    Visibility="{Binding IsCurrent, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                            <StackPanel Grid.Column="1">
                             <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                                 <TextBlock Text="≡" FontSize="22" Margin="0,0,10,0" VerticalAlignment="Center" Cursor="SizeAll" ToolTip="{i18n:T 拖动排序}"
                                            PreviewMouseLeftButtonDown="OnDragStart" MouseMove="OnProviderDrag" />
@@ -101,20 +153,52 @@
                                     <ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/>
                                 </Grid.ColumnDefinitions>
                                     <TextBlock Text="{Binding Marker}" Margin="2,0,10,0" VerticalAlignment="Center" Cursor="SizeAll" ToolTip="{i18n:T 拖动排序}"
-                                               PreviewMouseLeftButtonDown="OnDragStart" MouseMove="OnKeyDrag" />
+                                               PreviewMouseLeftButtonDown="OnDragStart" MouseMove="OnKeyDrag">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Foreground" Value="{DynamicResource TextFillColorTertiaryBrush}" />
+                                                <Style.Triggers>
+                                                    <!--  当前 Key 的圆点用强调色，和“使用中”按钮一起指出正在生效的 Key  -->
+                                                    <DataTrigger Binding="{Binding IsCurrent}" Value="True">
+                                                        <Setter Property="Foreground" Value="{DynamicResource AccentTextFillColorPrimaryBrush}" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
                                     <StackPanel Grid.Column="1" Margin="0,0,8,0" VerticalAlignment="Center">
                                         <TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis" ToolTip="{Binding Name}" />
                                         <TextBlock Text="{Binding MaskedKey}" FontFamily="Consolas" Style="{StaticResource SecondaryText}" />
                                         <TextBlock Text="{Binding PreparationState}" ToolTip="{Binding PreparationHint}" TextWrapping="Wrap"
                                                    AutomationProperties.AutomationId="{Binding PreparationStatusId}">
+                                            <!--  准备状态着色：已准备绿、准备中强调色、准备失败红，未准备保持次要灰  -->
                                             <TextBlock.Style><Style TargetType="TextBlock" BasedOn="{StaticResource SecondaryText}">
-                                                <Style.Triggers><DataTrigger Binding="{Binding PreparationFailed}" Value="True">
-                                                    <Setter Property="Foreground" Value="{DynamicResource SystemFillColorCriticalBrush}" />
-                                                </DataTrigger></Style.Triggers>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding PreparationRunning}" Value="True">
+                                                        <Setter Property="Foreground" Value="{DynamicResource AccentTextFillColorPrimaryBrush}" />
+                                                    </DataTrigger>
+                                                    <DataTrigger Binding="{Binding PreparationReady}" Value="True">
+                                                        <Setter Property="Foreground" Value="{DynamicResource SystemFillColorSuccessBrush}" />
+                                                    </DataTrigger>
+                                                    <DataTrigger Binding="{Binding PreparationFailed}" Value="True">
+                                                        <Setter Property="Foreground" Value="{DynamicResource SystemFillColorCriticalBrush}" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
                                             </Style></TextBlock.Style>
                                         </TextBlock>
                                     </StackPanel>
-                                    <ui:Button Grid.Column="2" Content="{Binding SwitchText}" Command="{Binding SwitchCommand}" VerticalAlignment="Center" Padding="10,4" AutomationProperties.AutomationId="{Binding Id}" />
+                                    <ui:Button Grid.Column="2" Content="{Binding SwitchText}" Command="{Binding SwitchCommand}" VerticalAlignment="Center" Padding="10,4" AutomationProperties.AutomationId="{Binding Id}">
+                                        <ui:Button.Style>
+                                            <Style TargetType="ui:Button" BasedOn="{StaticResource {x:Type ui:Button}}">
+                                                <Style.Triggers>
+                                                    <!--  正在使用的 Key 用强调色填充，区别于可切换的普通按钮  -->
+                                                    <DataTrigger Binding="{Binding IsCurrent}" Value="True">
+                                                        <Setter Property="Appearance" Value="Primary" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </ui:Button.Style>
+                                    </ui:Button>
                                     <ui:Button Grid.Column="3" Content="{Binding PreparationAction}" Command="{Binding PrepareCommand}" Margin="6,0,0,0" VerticalAlignment="Center" Padding="8,4" AutomationProperties.AutomationId="{Binding PrepareId}" />
                                     <ui:Button Grid.Column="4" Content="⋯" Margin="6,0,0,0" Click="OnMenuClick" VerticalAlignment="Center" Padding="8,3" AutomationProperties.Name="{i18n:T Key 操作}">
                                         <ui:Button.ContextMenu><ContextMenu DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">
@@ -131,7 +215,8 @@
                                 <TextBlock Text="{Binding FoldSummary}" Margin="10,0,0,0" VerticalAlignment="Center" Style="{StaticResource SecondaryText}" AutomationProperties.AutomationId="{Binding FoldSummaryId}" />
                                 <ui:Button Content="{Binding FoldActionText}" Command="{Binding FoldCommand}" Margin="8,0,0,0" Padding="8,4" Visibility="{Binding CanFold, Converter={StaticResource BooleanToVisibilityConverter}}" AutomationProperties.AutomationId="{Binding FoldId}" />
                             </WrapPanel>
-                        </StackPanel>
+                            </StackPanel>
+                        </Grid>
                     </Border>
                 </DataTemplate></ItemsControl.ItemTemplate>
             </ItemsControl>

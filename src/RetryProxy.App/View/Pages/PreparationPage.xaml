@@ -52,7 +52,12 @@
             <Border Style="{StaticResource PreparationCard}"
                     Visibility="{Binding HasTasks, Converter={StaticResource BooleanToVisibilityRevertConverter}}">
                 <StackPanel Margin="0,12">
-                    <ui:SymbolIcon Margin="0,0,0,8" FontSize="24" Symbol="PlayCircle24" />
+                    <!--  空态图标沿用首页快捷卡片的“强调色图标 + 底色圆”样式  -->
+                    <Border Width="48" Height="48" Margin="0,0,0,10" HorizontalAlignment="Center"
+                            Background="{DynamicResource ControlFillColorSecondaryBrush}" CornerRadius="24">
+                        <ui:SymbolIcon HorizontalAlignment="Center" VerticalAlignment="Center" FontSize="24" Symbol="PlayCircle24"
+                                       Foreground="{DynamicResource AccentTextFillColorPrimaryBrush}" />
+                    </Border>
                     <TextBlock HorizontalAlignment="Center" Style="{StaticResource BodyStrongTextBlockStyle}"
                                Text="{i18n:T 当前客户端尚未添加准备任务}" />
                     <TextBlock Margin="0,6,0,0"
@@ -102,15 +107,52 @@
                                                     <Grid Grid.Column="1" Margin="0,0,8,0" VerticalAlignment="Center" ToolTip="{Binding Hint}">
                                                         <Grid.ColumnDefinitions>
                                                             <ColumnDefinition Width="Auto" />
+                                                            <ColumnDefinition Width="Auto" />
                                                             <ColumnDefinition Width="*" />
                                                         </Grid.ColumnDefinitions>
-                                                        <ui:ProgressRing Width="12" Height="12" Margin="0,0,4,0"
+                                                        <!--  状态圆点：已准备绿、准备中强调色、失败红、其余保持灰色  -->
+                                                        <Border Width="8" Height="8" Margin="0,0,6,0" VerticalAlignment="Center" CornerRadius="4">
+                                                            <Border.Style>
+                                                                <Style TargetType="Border">
+                                                                    <Setter Property="Background" Value="{DynamicResource TextFillColorTertiaryBrush}" />
+                                                                    <Style.Triggers>
+                                                                        <DataTrigger Binding="{Binding IsPreparing}" Value="True">
+                                                                            <Setter Property="Background" Value="{DynamicResource AccentFillColorDefaultBrush}" />
+                                                                        </DataTrigger>
+                                                                        <DataTrigger Binding="{Binding IsReady}" Value="True">
+                                                                            <Setter Property="Background" Value="{DynamicResource SystemFillColorSuccessBrush}" />
+                                                                        </DataTrigger>
+                                                                        <DataTrigger Binding="{Binding HasError}" Value="True">
+                                                                            <Setter Property="Background" Value="{DynamicResource SystemFillColorCriticalBrush}" />
+                                                                        </DataTrigger>
+                                                                    </Style.Triggers>
+                                                                </Style>
+                                                            </Border.Style>
+                                                        </Border>
+                                                        <ui:ProgressRing Grid.Column="1" Width="12" Height="12" Margin="0,0,4,0"
                                                                          IsIndeterminate="{Binding IsPreparing}"
                                                                          Visibility="{Binding IsPreparing, Converter={StaticResource BooleanToVisibilityConverter}}" />
-                                                        <TextBlock Grid.Column="1" Style="{StaticResource CaptionTextBlockStyle}"
+                                                        <!--  状态文字同色：已准备绿、准备中强调色、失败红  -->
+                                                        <TextBlock Grid.Column="2"
                                                                    Text="{Binding Status}" TextTrimming="CharacterEllipsis"
                                                                    AutomationProperties.AutomationId="{Binding StatusAutomationId}"
-                                                                   AutomationProperties.HelpText="{Binding Hint}" />
+                                                                   AutomationProperties.HelpText="{Binding Hint}">
+                                                            <TextBlock.Style>
+                                                                <Style TargetType="TextBlock" BasedOn="{StaticResource CaptionTextBlockStyle}">
+                                                                    <Style.Triggers>
+                                                                        <DataTrigger Binding="{Binding IsPreparing}" Value="True">
+                                                                            <Setter Property="Foreground" Value="{DynamicResource AccentTextFillColorPrimaryBrush}" />
+                                                                        </DataTrigger>
+                                                                        <DataTrigger Binding="{Binding IsReady}" Value="True">
+                                                                            <Setter Property="Foreground" Value="{DynamicResource SystemFillColorSuccessBrush}" />
+                                                                        </DataTrigger>
+                                                                        <DataTrigger Binding="{Binding HasError}" Value="True">
+                                                                            <Setter Property="Foreground" Value="{DynamicResource SystemFillColorCriticalBrush}" />
+                                                                        </DataTrigger>
+                                                                    </Style.Triggers>
+                                                                </Style>
+                                                            </TextBlock.Style>
+                                                        </TextBlock>
                                                     </Grid>
                                                     <TextBlock Grid.Column="2" Margin="0,0,8,0" VerticalAlignment="Center"
                                                                Style="{StaticResource CaptionTextBlockStyle}"

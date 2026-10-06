@@ -111,7 +111,49 @@
                                 <TextBlock Grid.Column="1" Style="{StaticResource DiagnosticCell}" Text="{Binding Model}" ToolTip="{Binding Model}" />
                                 <TextBlock Grid.Column="2" Style="{StaticResource DiagnosticCell}" Text="{Binding Target}" ToolTip="{Binding Target}" />
                                 <StackPanel Grid.Column="3" Margin="0,0,8,0" VerticalAlignment="Center">
-                                    <TextBlock Text="{Binding Result}" TextWrapping="Wrap" />
+                                    <!--  结果圆点与结果文字按结果着色：成功绿、失败红、处理中黄、结束状态未记录灰  -->
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Border Grid.Column="0" Width="8" Height="8" Margin="0,0,6,0" VerticalAlignment="Center" CornerRadius="4">
+                                            <Border.Style>
+                                                <Style TargetType="Border">
+                                                    <Setter Property="Background" Value="{DynamicResource TextFillColorTertiaryBrush}" />
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding Outcome}" Value="Success">
+                                                            <Setter Property="Background" Value="{DynamicResource SystemFillColorSuccessBrush}" />
+                                                        </DataTrigger>
+                                                        <DataTrigger Binding="{Binding Outcome}" Value="Failure">
+                                                            <Setter Property="Background" Value="{DynamicResource SystemFillColorCriticalBrush}" />
+                                                        </DataTrigger>
+                                                        <DataTrigger Binding="{Binding Outcome}" Value="Pending">
+                                                            <Setter Property="Background" Value="{DynamicResource SystemFillColorCautionBrush}" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Border.Style>
+                                        </Border>
+                                        <TextBlock Grid.Column="1" Text="{Binding Result}" TextWrapping="Wrap" FontWeight="SemiBold">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}" />
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding Outcome}" Value="Success">
+                                                            <Setter Property="Foreground" Value="{DynamicResource SystemFillColorSuccessBrush}" />
+                                                        </DataTrigger>
+                                                        <DataTrigger Binding="{Binding Outcome}" Value="Failure">
+                                                            <Setter Property="Foreground" Value="{DynamicResource SystemFillColorCriticalBrush}" />
+                                                        </DataTrigger>
+                                                        <DataTrigger Binding="{Binding Outcome}" Value="Pending">
+                                                            <Setter Property="Foreground" Value="{DynamicResource SystemFillColorCautionBrush}" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+                                    </Grid>
                                     <TextBlock Margin="0,3,0,0" Text="{i18n:T 记录不完整}" FontSize="11" ToolTip="{Binding Completeness}"
                                                Foreground="{DynamicResource SystemFillColorCautionBrush}"
                                                Visibility="{Binding IsIncomplete, Converter={StaticResource BooleanToVisibilityConverter}}" />

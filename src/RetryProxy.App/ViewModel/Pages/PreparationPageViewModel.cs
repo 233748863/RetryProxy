@@ -208,6 +208,8 @@ public partial class PreparationTaskViewModel : ObservableObject
     [ObservableProperty] private bool _canStart;
     [ObservableProperty] private bool _canStop;
     [ObservableProperty] private bool _isPreparing;
+    // 已准备单独标记：任务行状态圆点与状态文字据此显示绿色，未准备/已停止保持默认色。
+    [ObservableProperty] private bool _isReady;
     [ObservableProperty] private bool _isManual;
     [ObservableProperty] private string _stopText = string.Empty;
 
@@ -225,6 +227,7 @@ public partial class PreparationTaskViewModel : ObservableObject
         var model = string.IsNullOrWhiteSpace(task.Model) ? ClientPageText.Translate("跟随 Key 模型") : task.Model;
         Settings = ClientPageText.Translate("{0} · {1} · {2} 分钟", model, effort, task.IdleMinutes);
         IsPreparing = task.IsPreparing;
+        IsReady = task.IsReady;
         Error = task.LastError is { } error ? DrawerText.Error(error) : string.Empty;
         HasError = Error.Length > 0;
         Status = PreparationStatusText.Status(task);

@@ -366,12 +366,15 @@ public partial class RequestDiagnosticRow : ObservableObject
     [ObservableProperty] private string _result = string.Empty;
     [ObservableProperty] private string _duration = string.Empty;
     [ObservableProperty] private string _completeness = string.Empty;
+    // 结果枚举单独暴露，界面按“成功/失败/处理中”给结果文字和状态圆点着色。
+    [ObservableProperty] private DiagnosticOutcome _outcome;
     public bool IsIncomplete => Summary.Incomplete;
     public override string ToString() => $"{Time} · {Model} · {Target} · {Result} · {Duration}";
 
     public void Refresh(DiagnosticSummary summary)
     {
         Summary = summary;
+        Outcome = summary.Outcome;
         var translate = I18nService.Instance.Translate;
         Time = summary.Request.StartedAt.ToString("HH:mm:ss", CultureInfo.InvariantCulture);
         Model = RequestDiagnosticText.Value(summary.LastTarget?.Model, translate);

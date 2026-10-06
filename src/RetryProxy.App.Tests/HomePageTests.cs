@@ -1,4 +1,5 @@
 using RetryProxy.View.Pages;
+using RetryProxy.ViewModel.Pages;
 using System;
 using System.Linq;
 using System.Xml.Linq;
@@ -52,11 +53,54 @@ public sealed class HomePageTests
         var document = Load("HomePage.xaml");
         Assert.Single(document.Descendants(Presentation + "Border"),
             element => (string?)element.Attribute("AutomationProperties.AutomationId") == "HomeBanner");
-        var grid = document.Descendants(Presentation + "UniformGrid").Single();
+        // 改版后运行状态卡里也有 UniformGrid，这里按“包含快捷卡片的网格”定位。
+        var grid = document.Descendants(Presentation + "UniformGrid")
+            .Single(element => element.Elements(Ui + "CardAction").Any());
         Assert.Contains("AdaptiveUniformGridColumnsConverter", (string?)grid.Attribute("Columns"));
         var cards = grid.Elements(Ui + "CardAction").ToArray();
         Assert.Equal(6, cards.Length);
         Assert.Equal(cards.Length, cards.Select(card => (string?)card.Attribute("CommandParameter")).Distinct().Count());
+    }
+
+    [Fact]
+    public void HomeStatusCardShowsStateProviderKeyAndTodayTiles()
+    {
+        var document = Load("HomePage.xaml");
+        var card = document.Descendants(Ui + "Card")
+            .Single(element => (string?)element.Attribute("AutomationProperties.AutomationId") == "HomeStatusCard");
+        var badge = card.Descendants(Ui + "InfoBadge").Single();
+        Assert.Equal("{Binding StateSeverity}", (string?)badge.Attribute("Severity"));
+        Assert.Equal("{Binding StateLabel}", (string?)badge.Attribute("Value"));
+        var providerKey = card.Descendants(Presentation + "TextBlock")
+            .Single(element => (string?)element.Attribute("AutomationProperties.AutomationId") == "HomeCurrentProviderKey");
+        Assert.Equal("{Binding CurrentProviderKey}", (string?)providerKey.Attribute("Text"));
+        var tiles = card.Descendants(Presentation + "UniformGrid").Single();
+        Assert.Contains("AdaptiveUniformGridColumnsConverter", (string?)tiles.Attribute("Columns"));
+        var tileIds = tiles.Descendants(Presentation + "TextBlock")
+            .Select(element => (string?)element.Attribute("AutomationProperties.AutomationId"))
+            .Where(id => id is not null)
+            .ToArray();
+        Assert.Equal(
+            new[]
+            {
+                "HomeTotalRequests",
+                "HomeSuccessfulRequests",
+                "HomeRetryCount",
+                "HomeFailedRequests",
+                "HomeActiveRequests",
+                "HomeSuccessRate",
+            },
+            tileIds);
+    }
+
+    [Theory]
+    [InlineData(0UL, 0UL, "—")]
+    [InlineData(10UL, 0UL, "100.00%")]
+    [InlineData(9UL, 1UL, "90.00%")]
+    [InlineData(1UL, 2UL, "33.33%")]
+    public void SuccessRateShowsFinalRatioOfCompletedRequests(ulong successful, ulong failed, string expected)
+    {
+        Assert.Equal(expected, HomePageViewModel.FormatSuccessRate(successful, failed));
     }
 
     private static XDocument Load(string name)

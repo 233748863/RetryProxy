@@ -9,7 +9,7 @@
       xmlns:views="clr-namespace:RetryProxy.View.Pages"
       Title="HomePage"
       d:DataContext="{d:DesignInstance Type=pages:HomePageViewModel}"
-      d:DesignHeight="550"
+      d:DesignHeight="700"
       d:DesignWidth="720"
       ui:Design.Background="{DynamicResource ApplicationBackgroundBrush}"
       ui:Design.Foreground="{DynamicResource TextFillColorPrimaryBrush}"
@@ -17,21 +17,31 @@
       Foreground="{DynamicResource TextFillColorPrimaryBrush}"
       mc:Ignorable="d">
     <Page.Resources>
+        <!--  快捷入口卡片：沿用原卡片交互，图标加底色圆、整体收紧，更接近 Fluent 应用启动器  -->
         <Style x:Key="ApplicationCard"
                BasedOn="{StaticResource {x:Type ui:CardAction}}"
                TargetType="ui:CardAction">
-            <Setter Property="Height" Value="136" />
+            <Setter Property="MinHeight" Value="120" />
             <Setter Property="Margin" Value="0,0,12,12" />
-            <Setter Property="Padding" Value="16" />
+            <Setter Property="Padding" Value="14,12" />
             <Setter Property="HorizontalContentAlignment" Value="Stretch" />
             <Setter Property="VerticalContentAlignment" Value="Center" />
             <Setter Property="IsChevronVisible" Value="False" />
             <Setter Property="Command" Value="{Binding NavigateCommand}" />
         </Style>
-        <Style x:Key="ApplicationIcon" TargetType="ui:SymbolIcon">
-            <Setter Property="FontSize" Value="32" />
-            <Setter Property="Margin" Value="0,0,0,12" />
+        <Style x:Key="ApplicationIconBadge" TargetType="Border">
+            <Setter Property="Width" Value="40" />
+            <Setter Property="Height" Value="40" />
+            <Setter Property="Margin" Value="0,0,0,10" />
             <Setter Property="HorizontalAlignment" Value="Center" />
+            <Setter Property="CornerRadius" Value="20" />
+            <Setter Property="Background" Value="{DynamicResource ControlFillColorSecondaryBrush}" />
+        </Style>
+        <Style x:Key="ApplicationIcon" TargetType="ui:SymbolIcon">
+            <Setter Property="FontSize" Value="20" />
+            <Setter Property="HorizontalAlignment" Value="Center" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+            <Setter Property="Foreground" Value="{DynamicResource AccentTextFillColorPrimaryBrush}" />
         </Style>
         <Style x:Key="ApplicationDescription" TargetType="ui:TextBlock">
             <Setter Property="FontTypography" Value="Caption" />
@@ -39,6 +49,29 @@
             <Setter Property="Margin" Value="0,4,0,0" />
             <Setter Property="TextAlignment" Value="Center" />
             <Setter Property="TextWrapping" Value="Wrap" />
+        </Style>
+        <!--  运行状态瓦片：与统计页概况的瓦片一致  -->
+        <Style x:Key="TileBorder" TargetType="Border">
+            <Setter Property="Background" Value="{DynamicResource ControlFillColorDefaultBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource ControlStrokeColorDefaultBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="7" />
+            <Setter Property="Padding" Value="4,8" />
+            <Setter Property="Margin" Value="0,0,8,8" />
+        </Style>
+        <Style x:Key="TileValue" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="18" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="HorizontalAlignment" Value="Center" />
+        </Style>
+        <Style x:Key="TileLabel" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="HorizontalAlignment" Value="Center" />
+            <Setter Property="Foreground" Value="{DynamicResource TextFillColorTertiaryBrush}" />
+        </Style>
+        <Style x:Key="CardTitle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="FontWeight" Value="SemiBold" />
         </Style>
     </Page.Resources>
 
@@ -69,6 +102,104 @@
                 </Border>
             </Border>
 
+            <!--  运行状态：代理状态、当前供应商·Key 与今日统计，打开首页即可掌握运行情况  -->
+            <ui:Card AutomationProperties.AutomationId="HomeStatusCard"
+                     Margin="0,0,0,20"
+                     Padding="14,10">
+                <StackPanel>
+                    <Grid Margin="0,0,0,8">
+                        <TextBlock Style="{StaticResource CardTitle}"
+                                   VerticalAlignment="Center"
+                                   Text="{i18n:T 运行状态}" />
+                        <ui:InfoBadge AutomationProperties.AutomationId="HomeStateBadge"
+                                      HorizontalAlignment="Right"
+                                      VerticalAlignment="Center"
+                                      Severity="{Binding StateSeverity}"
+                                      Value="{Binding StateLabel}" />
+                    </Grid>
+                    <Grid Margin="0,0,0,10"
+                          Visibility="{Binding HasChannel, Converter={StaticResource BooleanToVisibilityConverter}}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0"
+                                   VerticalAlignment="Center"
+                                   FontSize="11"
+                                   Foreground="{DynamicResource TextFillColorTertiaryBrush}"
+                                   Text="{i18n:T 当前：}" />
+                        <TextBlock Grid.Column="1"
+                                   Margin="4,0,0,0"
+                                   VerticalAlignment="Center"
+                                   AutomationProperties.AutomationId="HomeCurrentProviderKey"
+                                   Text="{Binding CurrentProviderKey}"
+                                   TextTrimming="CharacterEllipsis"
+                                   ToolTip="{Binding CurrentProviderKey}" />
+                    </Grid>
+                    <TextBlock Margin="0,0,0,10"
+                               FontSize="11"
+                               Foreground="{DynamicResource TextFillColorTertiaryBrush}"
+                               Text="{Binding EmptyHint}"
+                               TextWrapping="Wrap"
+                               Visibility="{Binding HasChannel, Converter={StaticResource BooleanToVisibilityRevertConverter}}" />
+                    <UniformGrid Margin="0,0,-8,-8"
+                                 Columns="{Binding ActualWidth, ElementName=HomeContent, Converter={StaticResource AdaptiveUniformGridColumnsConverter}, ConverterParameter='104,6'}">
+                        <Border Style="{StaticResource TileBorder}">
+                            <StackPanel>
+                                <TextBlock AutomationProperties.AutomationId="HomeTotalRequests"
+                                           Style="{StaticResource TileValue}"
+                                           Text="{Binding TotalRequests}" />
+                                <TextBlock Style="{StaticResource TileLabel}" Text="{i18n:T 今日请求}" />
+                            </StackPanel>
+                        </Border>
+                        <Border Style="{StaticResource TileBorder}">
+                            <StackPanel>
+                                <TextBlock AutomationProperties.AutomationId="HomeSuccessfulRequests"
+                                           Foreground="{DynamicResource SystemFillColorSuccessBrush}"
+                                           Style="{StaticResource TileValue}"
+                                           Text="{Binding SuccessfulRequests}" />
+                                <TextBlock Style="{StaticResource TileLabel}" Text="{i18n:T 成功}" />
+                            </StackPanel>
+                        </Border>
+                        <Border Style="{StaticResource TileBorder}">
+                            <StackPanel>
+                                <TextBlock AutomationProperties.AutomationId="HomeRetryCount"
+                                           Foreground="{DynamicResource AccentTextFillColorPrimaryBrush}"
+                                           Style="{StaticResource TileValue}"
+                                           Text="{Binding RetryCount}" />
+                                <TextBlock Style="{StaticResource TileLabel}" Text="{i18n:T 重试}" />
+                            </StackPanel>
+                        </Border>
+                        <Border Style="{StaticResource TileBorder}">
+                            <StackPanel>
+                                <TextBlock AutomationProperties.AutomationId="HomeFailedRequests"
+                                           Foreground="{DynamicResource SystemFillColorCriticalBrush}"
+                                           Style="{StaticResource TileValue}"
+                                           Text="{Binding FailedRequests}" />
+                                <TextBlock Style="{StaticResource TileLabel}" Text="{i18n:T 失败}" />
+                            </StackPanel>
+                        </Border>
+                        <Border Style="{StaticResource TileBorder}">
+                            <StackPanel>
+                                <TextBlock AutomationProperties.AutomationId="HomeActiveRequests"
+                                           Foreground="{DynamicResource SystemFillColorCautionBrush}"
+                                           Style="{StaticResource TileValue}"
+                                           Text="{Binding ActiveRequests}" />
+                                <TextBlock Style="{StaticResource TileLabel}" Text="{i18n:T 用户处理中}" />
+                            </StackPanel>
+                        </Border>
+                        <Border Style="{StaticResource TileBorder}" ToolTip="{Binding SuccessRateHelp}">
+                            <StackPanel>
+                                <TextBlock AutomationProperties.AutomationId="HomeSuccessRate"
+                                           Style="{StaticResource TileValue}"
+                                           Text="{Binding SuccessRateText}" />
+                                <TextBlock Style="{StaticResource TileLabel}" Text="{i18n:T 成功率}" />
+                            </StackPanel>
+                        </Border>
+                    </UniformGrid>
+                </StackPanel>
+            </ui:Card>
+
             <ui:TextBlock Margin="0,0,0,12" FontTypography="Subtitle" Text="{i18n:T 应用}" />
             <UniformGrid Margin="0,0,-12,-12"
                          Columns="{Binding ActualWidth, ElementName=HomeContent, Converter={StaticResource AdaptiveUniformGridColumnsConverter}, ConverterParameter='184,3'}">
@@ -78,7 +209,9 @@
                                CommandParameter="{x:Type views:ProviderPage}"
                                Style="{StaticResource ApplicationCard}">
                     <StackPanel>
-                        <ui:SymbolIcon Style="{StaticResource ApplicationIcon}" Symbol="Channel24" />
+                        <Border Style="{StaticResource ApplicationIconBadge}">
+                            <ui:SymbolIcon Style="{StaticResource ApplicationIcon}" Symbol="Channel24" />
+                        </Border>
                         <ui:TextBlock FontTypography="BodyStrong" Text="{i18n:T 供应商}" TextAlignment="Center" />
                         <ui:TextBlock Style="{StaticResource ApplicationDescription}" Text="{i18n:T 管理供应商、密钥与代理设置}" />
                     </StackPanel>
@@ -89,7 +222,9 @@
                                CommandParameter="{x:Type views:StatisticsPage}"
                                Style="{StaticResource ApplicationCard}">
                     <StackPanel>
-                        <ui:SymbolIcon Style="{StaticResource ApplicationIcon}" Symbol="Pulse24" />
+                        <Border Style="{StaticResource ApplicationIconBadge}">
+                            <ui:SymbolIcon Style="{StaticResource ApplicationIcon}" Symbol="Pulse24" />
+                        </Border>
                         <ui:TextBlock FontTypography="BodyStrong" Text="{i18n:T 统计}" TextAlignment="Center" />
                         <ui:TextBlock Style="{StaticResource ApplicationDescription}" Text="{i18n:T 查看请求统计与缓存用量}" />
                     </StackPanel>
@@ -100,7 +235,9 @@
                                CommandParameter="{x:Type views:PreparationPage}"
                                Style="{StaticResource ApplicationCard}">
                     <StackPanel>
-                        <ui:SymbolIcon Style="{StaticResource ApplicationIcon}" Symbol="PlayCircle24" />
+                        <Border Style="{StaticResource ApplicationIconBadge}">
+                            <ui:SymbolIcon Style="{StaticResource ApplicationIcon}" Symbol="PlayCircle24" />
+                        </Border>
                         <ui:TextBlock FontTypography="BodyStrong" Text="{i18n:T 一键准备}" TextAlignment="Center" />
                         <ui:TextBlock Style="{StaticResource ApplicationDescription}" Text="{i18n:T 独立准备客户端并持续保活}" />
                     </StackPanel>
@@ -111,7 +248,9 @@
                                CommandParameter="{x:Type views:RequestDiagnosticsPage}"
                                Style="{StaticResource ApplicationCard}">
                     <StackPanel>
-                        <ui:SymbolIcon Style="{StaticResource ApplicationIcon}" Symbol="Search24" />
+                        <Border Style="{StaticResource ApplicationIconBadge}">
+                            <ui:SymbolIcon Style="{StaticResource ApplicationIcon}" Symbol="Search24" />
+                        </Border>
                         <ui:TextBlock FontTypography="BodyStrong" Text="{i18n:T 请求诊断}" TextAlignment="Center" />
                         <ui:TextBlock Style="{StaticResource ApplicationDescription}" Text="{i18n:T 查看请求详情与重试过程}" />
                     </StackPanel>
@@ -122,7 +261,9 @@
                                CommandParameter="{x:Type views:LogPage}"
                                Style="{StaticResource ApplicationCard}">
                     <StackPanel>
-                        <ui:SymbolIcon Style="{StaticResource ApplicationIcon}" Symbol="DocumentText24" />
+                        <Border Style="{StaticResource ApplicationIconBadge}">
+                            <ui:SymbolIcon Style="{StaticResource ApplicationIcon}" Symbol="DocumentText24" />
+                        </Border>
                         <ui:TextBlock FontTypography="BodyStrong" Text="{i18n:T 运行日志}" TextAlignment="Center" />
                         <ui:TextBlock Style="{StaticResource ApplicationDescription}" Text="{i18n:T 按来源查看与筛选日志}" />
                     </StackPanel>
@@ -133,7 +274,9 @@
                                CommandParameter="{x:Type views:SettingsPage}"
                                Style="{StaticResource ApplicationCard}">
                     <StackPanel>
-                        <ui:SymbolIcon Style="{StaticResource ApplicationIcon}" Symbol="Settings24" />
+                        <Border Style="{StaticResource ApplicationIconBadge}">
+                            <ui:SymbolIcon Style="{StaticResource ApplicationIcon}" Symbol="Settings24" />
+                        </Border>
                         <ui:TextBlock FontTypography="BodyStrong" Text="{i18n:T 软件设置}" TextAlignment="Center" />
                         <ui:TextBlock Style="{StaticResource ApplicationDescription}" Text="{i18n:T 调整外观、语言与启动方式}" />
                     </StackPanel>

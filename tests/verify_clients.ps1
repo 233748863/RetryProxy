@@ -141,6 +141,7 @@ keep = "unchanged"
  Wait-For { $null -ne (Find-Control '完成' -Name) } 'Finish step missing'
  Capture 'm4-setup-complete'
  Invoke-Control '完成' -Name
+ Invoke-Control 'HomeProvidersCard'
  Wait-For { (Claude-Config).env.ANTHROPIC_AUTH_TOKEN -eq 'abcdef0123456789abcdef0123456789' } 'Claude takeover failed'
  $claude=Claude-Config
  if($claude.env.ANTHROPIC_MODEL -ne 'retry-proxy-main[1M]' -or $claude.env.UNRELATED -ne 'keep' -or $claude.apiKeyHelper){throw 'Claude merge or independent main model failed'}
@@ -179,6 +180,7 @@ keep = "unchanged"
  if([IO.File]::ReadAllText(($backups|Where-Object Name -eq 'settings.json').FullName) -cne $claudeOriginal){throw 'Claude original backup changed'}
  if([IO.File]::ReadAllText(($backups|Where-Object Name -eq 'config.toml').FullName) -cne $codexOriginal){throw 'Codex original backup changed'}
  Start-App
+ Invoke-Control 'HomeProvidersCard'
  Wait-For { (Claude-Config).env.ANTHROPIC_AUTH_TOKEN -eq 'abcdef0123456789abcdef0123456789' } 'Automatic takeover after restart failed'
  if(Find-Control 'ImportName_claude'){throw 'Wizard repeated after completed'}
  Invoke-Control 'SelectClaude'
@@ -195,6 +197,7 @@ keep = "unchanged"
  Stop-App
  if((Claude-Config).env.ANTHROPIC_BASE_URL -ne 'https://external.fixture.invalid'){throw 'Exit overwrote external change'}
  Start-App
+ Invoke-Control 'HomeProvidersCard'
  Wait-For { (Find-Control 'ProxyState').Current.Name -eq '运行中' } 'Third startup did not run'
  if((Codex-Text) -match '0123456789abcdef0123456789abcdef'){throw 'Canceled takeover was re-enabled on restart'}
  Stop-App

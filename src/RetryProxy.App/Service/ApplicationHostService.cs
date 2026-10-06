@@ -49,7 +49,7 @@ public class ApplicationHostService(IServiceProvider serviceProvider) : IHostedS
                 _navigationWindow.ShowWindow();
             }
 
-            _ = _navigationWindow.Navigate(typeof(ProviderPage));
+            _ = _navigationWindow.Navigate(typeof(HomePage));
             (serviceProvider.GetService(typeof(WorkspaceService)) as WorkspaceService)?.Start();
             if (serviceProvider.GetService(typeof(ClientTakeoverService)) is ClientTakeoverService clients)
                 await clients.ShowSetupAsync(onlyIfNeeded: true);

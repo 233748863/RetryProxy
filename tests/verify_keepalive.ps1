@@ -360,7 +360,8 @@ while ($null -ne $line) {
         catch { return $false }
     } '程序监听未启动' 30
     Wait-Condition { $app.Refresh(); $app.MainWindowHandle -ne 0 -and $app.MainWindowTitle -eq 'LLM Retry Proxy' } '程序窗口未创建'
-    Wait-Condition { $null -ne (Find-ById 'ProxySettings') } '默认供应商页未显示代理设置'
+    Invoke-ById 'HomeProvidersCard'
+    Wait-Condition { $null -ne (Find-ById 'ProxySettings') } '首页未能进入供应商页'
     Invoke-ById 'SelectCodex'
     Verify-IndependentChannelControls
     Write-Host '通道独立设置检查通过。'

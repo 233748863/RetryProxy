@@ -7,6 +7,8 @@
   </PropertyGroup>
   <ItemGroup>
     <EmbeddedResource Include="../RetryProxy.App/View/Pages/RequestDiagnosticsPage.xaml" LogicalName="RequestDiagnosticsPage.xaml" />
+    <EmbeddedResource Include="../RetryProxy.App/View/Pages/HomePage.xaml" LogicalName="HomePage.xaml" />
+    <EmbeddedResource Include="../RetryProxy.App/View/MainWindow.xaml" LogicalName="MainWindow.xaml" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
     <PackageReference Include="xunit" Version="2.9.2" />
     <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />

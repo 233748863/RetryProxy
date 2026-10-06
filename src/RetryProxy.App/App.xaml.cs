@@ -79,6 +79,7 @@ public partial class App : Application
             services.AddSingleton<NotifyIconViewModel>();
 
             // Pages
+            services.AddView<HomePage, HomePageViewModel>();
             services.AddView<ProviderPage, ProviderPageViewModel>();
             services.AddView<StatisticsPage, StatisticsPageViewModel>();
             services.AddSingleton<OverviewPageViewModel>();

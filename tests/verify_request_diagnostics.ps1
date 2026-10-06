@@ -193,7 +193,7 @@ function Start-App {
     $record.runs += @{pid=$app.Id;startedAt=$app.StartTime.ToString('o');exit='running'}
     Wait-For { $script:window=[RetryProxyTrayVerification]::FindWindow($app.Id,'LLM Retry Proxy',$null); $window -ne [IntPtr]::Zero } '测试主窗口未出现'
     foreach ($port in $ports.Values) { Wait-For { try { $null=Health $port; return $true } catch { return $false } } '隔离通道未启动' }
-    Wait-For { $null -ne (Find-Control 'SelectCodex') } '客户端选择器尚未加载'
+    Navigate '供应商' 'SelectCodex'
 }
 function Stop-App([switch]$SimulateCrash) {
     if ($SimulateCrash) { $app.Kill() }

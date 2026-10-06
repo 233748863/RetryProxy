@@ -109,9 +109,41 @@ function Assert-DrawerClosed {
  Wait-For { $null -eq (Find-Control 'DrawerCancel') } '切页后抽屉仍显示'
  if(Find-Control '放弃修改' -Name){throw '未修改的抽屉不应弹出确认'}
 }
+function Check-HomeNavigation {
+ # 真实点击首页卡片，再通过侧栏返回；覆盖默认页、全部入口及缓存后的再次导航。
+ Wait-For { $null -ne (Find-Control 'HomeProvidersCard') } '启动时未显示首页'
+ if(!(Find-Control 'HomeNavigation')){throw '首页标签缺失'}
+ Capture 'm3-home'
+ foreach($case in @(
+  @('HomeProvidersCard','CurrentProviderKey'),
+  @('HomeStatisticsCard','StatisticsTabOverview'),
+  @('HomePreparationCard','AddPreparation'),
+  @('HomeDiagnosticsCard','DiagnosticSearch'),
+  @('HomeLogsCard','LogRows'),
+  @('HomeSettingsCard','SwitchAppearance')
+ )) {
+  Invoke-Control $case[0]
+  Wait-For { $null -ne (Find-Control $case[1]) } "首页快捷入口未打开目标页：$($case[0])"
+  Click-Navigation '首页'
+  Wait-For { $null -ne (Find-Control 'HomeProvidersCard') } '侧栏未返回首页'
+ }
+ # 小窗口仍须能访问最后一张卡片，不能只验证控件存在。
+ $bounds=[RetryProxyTrayVerification]::Bounds($window)
+ [RetryProxyTrayVerification]::SetBounds($window,$bounds.Left,$bounds.Top,760,520)
+ Start-Sleep -Milliseconds 500
+ Capture 'm3-home-compact'
+ (Find-Control 'HomeSettingsCard').SetFocus()
+ Wait-For { !(Find-Control 'HomeSettingsCard').Current.IsOffscreen } '小窗口无法滚动到首页最后一张卡片'
+ Invoke-Control 'HomeSettingsCard'
+ Wait-For { $null -ne (Find-Control 'SwitchAppearance') } '小窗口首页入口无法打开设置'
+ [RetryProxyTrayVerification]::SetBounds($window,$bounds.Left,$bounds.Top,$bounds.Right-$bounds.Left,$bounds.Bottom-$bounds.Top)
+ Click-Navigation '首页'
+ Wait-For { $null -ne (Find-Control 'HomeProvidersCard') } '调整窗口后未返回首页'
+ Invoke-Control 'HomeProvidersCard'
+}
 function Check-DrawerNavigation {
  # 所有左侧主菜单和页脚入口都必须在切页前关闭无修改的草稿。
- foreach($target in @('统计','一键准备','请求诊断','运行日志','软件设置','关于')) {
+ foreach($target in @('首页','统计','一键准备','请求诊断','运行日志','软件设置','关于')) {
   Invoke-Control 'AddProvider'
   Wait-For { $null -ne (Find-Control 'NameBox') } '新增供应商抽屉未打开'
   Click-Navigation $target
@@ -123,9 +155,9 @@ function Check-DrawerNavigation {
  }
  Invoke-Control 'AddProvider'
  Set-Field 'NameBox' '切页取消后保留的草稿'
- Click-Navigation '统计'
+ Click-Navigation '首页'
  Wait-For { $null -ne (Find-Control '放弃修改' -Name) } '切页未提示未保存修改'
- if(!(Find-Control 'AddProvider') -or (Find-Control 'OverviewTotalRequests')){throw '确认前已经离开供应商页'}
+ if(!(Find-Control 'AddProvider') -or (Find-Control 'HomeProvidersCard')){throw '确认前已经离开供应商页'}
  Capture 'drawer-navigation-confirm'
  Cancel-Discard
  if((Find-Control 'NameBox').GetCurrentPattern([Windows.Automation.ValuePattern]::Pattern).Current.Value -ne '切页取消后保留的草稿'){throw '取消切页丢失输入'}
@@ -133,7 +165,7 @@ function Check-DrawerNavigation {
  Capture 'drawer-navigation-canceled'
  # 保存校验失败后的草稿仍需确认，键盘切页遵守同一保护。
  Invoke-Control 'DrawerSave'
- Click-Navigation '软件设置' -Keyboard
+ Click-Navigation '首页' -Keyboard
  Wait-For { $null -ne (Find-Control '放弃修改' -Name) } '保存失败后键盘切页未确认'
  Invoke-Control '放弃修改' -Name
  Assert-DrawerClosed
@@ -327,6 +359,7 @@ try {
  $app=if($UseCurrentDesktop){Start-Process -FilePath (Join-Path $runtime 'RetryProxy.exe') -WorkingDirectory $runtime -PassThru}
  else{[RetryProxyTrayVerification]::StartPrivateProcess((Join-Path $runtime 'RetryProxy.exe'),$runtime)}
  Wait-For { $script:window=[RetryProxyTrayVerification]::FindWindow($app.Id,'LLM Retry Proxy',$null); $window -ne [IntPtr]::Zero } 'Window not created'
+ Check-HomeNavigation
  Wait-For { $null -ne (Find-Control 'CurrentProviderKey') } 'Provider page not loaded'
  if((Find-Control 'CurrentProviderKey').Current.Name -notlike '*Key E*'){throw 'Current key missing'}
  if(!(Find-Control 'key-E')){throw 'Collapsed current Key E missing'}
@@ -394,7 +427,7 @@ try {
  Wait-For { $null -eq (Find-Control 'NameBox') } 'Provider draft did not save'
  if(!(Find-Control 'UI Fixture' -Name)){throw 'New provider card missing'}
  $passed = $true
- Write-Host 'PASS: provider page, folding, switch/undo, hidden tray switching, shared client selection, statistics, draft discard, validation, saved settings, compact drawer, nested key and provider creation.'
+ Write-Host 'PASS: home startup, all home shortcuts, compact home, drawer navigation to home, provider page, folding, switch/undo, hidden tray switching, shared client selection, statistics, draft discard, validation, saved settings, compact drawer, nested key and provider creation.'
 }
 catch {
  if($window -ne [IntPtr]::Zero){

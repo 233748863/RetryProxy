@@ -58,6 +58,10 @@
                 <behavior:AnimatedNavigationSelectionIndicatorBehavior />
             </b:Interaction.Behaviors>
             <ui:NavigationView.MenuItems>
+                <ui:NavigationViewItem Content="{i18n:T 首页}" AutomationProperties.AutomationId="HomeNavigation"
+                                       NavigationCacheMode="Enabled" TargetPageType="{x:Type pages:HomePage}">
+                    <ui:NavigationViewItem.Icon><ui:SymbolIcon Symbol="Home24" /></ui:NavigationViewItem.Icon>
+                </ui:NavigationViewItem>
                 <ui:NavigationViewItem Content="{i18n:T 供应商}" AutomationProperties.AutomationId="ProviderNavigation"
                                        NavigationCacheMode="Enabled" TargetPageType="{x:Type pages:ProviderPage}">
                     <ui:NavigationViewItem.Icon><ui:SymbolIcon Symbol="Channel24" /></ui:NavigationViewItem.Icon>

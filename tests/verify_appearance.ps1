@@ -52,8 +52,8 @@ function Navigate([string]$Name) {
     $ready.Item.SetFocus()
     $null = [RetryProxyTrayVerification]::PostMessage($window,0x0100,[UIntPtr]::new(13),[IntPtr]0x001C0001)
     $null = [RetryProxyTrayVerification]::PostMessage($window,0x0101,[UIntPtr]::new(13),[IntPtr]0xC01C0001)
-    if ($Name -eq '软件设置') { Wait-For { $null -ne (Find-Control 'SwitchAppearance') } '未打开软件设置页' }
-    else { Wait-For { $null -ne (Find-Control 'ProxyState') } '未打开供应商页' }
+    $marker = switch ($Name) { '首页' { 'HomeProvidersCard' }; '软件设置' { 'SwitchAppearance' }; default { 'ProxyState' } }
+    Wait-For { $null -ne (Find-Control $marker) } "未打开页面：$Name"
 }
 $configDbReaderScript = @'
 import sqlite3, sys
@@ -105,7 +105,8 @@ function Start-App {
     $script:app = Start-Process -FilePath (Join-Path $runtime 'RetryProxy.exe') -WorkingDirectory $runtime -PassThru
     $null = $app.Handle
     Wait-For { $script:window=[RetryProxyTrayVerification]::FindWindow($app.Id,'LLM Retry Proxy',$null); $window -ne [IntPtr]::Zero } '测试主窗口未出现'
-    Wait-For { $null -ne (Find-Control 'SelectCodex') } '测试页面尚未完成加载'
+    Wait-For { $null -ne (Find-Control 'HomeProvidersCard') } '启动时未显示首页'
+    Navigate '供应商'
 }
 function Stop-App {
     $null = [RetryProxyTrayVerification]::PostMessage($window,0x0010,[UIntPtr]::Zero,[IntPtr]::Zero)
@@ -131,6 +132,7 @@ try {
     Start-App
     Navigate '软件设置'
     $initial = Theme; $initialBrightness = Capture 'initial-dark'
+    Navigate '首页'; $null = Capture 'home-dark'; Navigate '软件设置'
     $steps = @(); $lightTheme = $null; $seenThemes = @($initial); $cycleClosed = $false
     for ($index=1; $index -le 6; $index++) {
         $theme = Switch-Theme
@@ -145,11 +147,13 @@ try {
     Navigate '供应商'; Navigate '软件设置'
     for ($index=0; $index -lt 6; $index++) { if ((Switch-Theme) -eq $lightTheme) { break } }
     if ((Theme) -ne $lightTheme) { throw '切页返回后外观按钮未切换到已验证的浅色主题' }
+    Navigate '首页'; $null = Capture 'home-light'
     Stop-App
     Start-App
     Navigate '软件设置'
     if ((Theme) -ne $lightTheme) { throw '重启后没有保留主题设置' }
     if ((Capture 'restarted-light') - $initialBrightness -lt 60) { throw '重启后的实际窗口未使用已保存的浅色外观' }
+    Navigate '首页'; $null = Capture 'home-restarted-light'
     Stop-App
     @{passed=$true;initialTheme=$initial;steps=$steps;restartTheme=$lightTheme;runtime=$runtime} |
         ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $OutputDirectory 'summary.json') -Encoding utf8

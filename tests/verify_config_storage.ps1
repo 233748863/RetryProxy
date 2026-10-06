@@ -77,7 +77,7 @@ function Start-App([string]$Directory,[string]$Injection='') {
 }
 function Wait-Window {
     Wait-For { $script:window=[RetryProxyTrayVerification]::FindWindow($app.Id,'LLM Retry Proxy',$null); $window -ne [IntPtr]::Zero } '主窗口未出现'
-    Wait-For { $null -ne (Find-Control 'SelectCodex') } '主页面未加载'
+    Wait-For { $null -ne (Find-Control 'HomeProvidersCard') } '启动时未显示首页'
 }
 function Stop-App([switch]$Force) {
     if ($app -and !$app.HasExited) {

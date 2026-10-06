@@ -308,8 +308,10 @@ try {
         $trayWindow = [RetryProxyTrayVerification]::FindWindowByTitlePrefix($process.Id, 'wpfui_th_')
         Wait-TrayCondition { [RetryProxyTrayVerification]::IsUsable($mainWindow) } 'Main window did not become usable'
 
-        # 默认供应商页；客户端选择跨页同步，概况和缓存共处统计页。
-        Wait-TrayCondition { $null -ne (Find-UiElement $mainWindow 'ProxySettings' -ById) } 'Startup did not open the Providers page'
+        # 默认首页通过快捷卡片进入供应商；概况和缓存仍共处统计页。
+        Wait-TrayCondition { $null -ne (Find-UiElement $mainWindow 'HomeProvidersCard' -ById) } '启动时未显示首页'
+        Invoke-UiElement $mainWindow 'HomeProvidersCard' -ById
+        Wait-TrayCondition { $null -ne (Find-UiElement $mainWindow 'ProxySettings' -ById) } '首页未能进入供应商页'
         Invoke-UiElement $mainWindow 'SelectCodex' -ById
         Wait-TrayCondition { $null -ne (Find-UiElement $mainWindow 'CurrentProviderKey' -ById) } 'Current provider and key are missing'
         Invoke-NavigationItem $mainWindow '统计'

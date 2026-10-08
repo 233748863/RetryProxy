@@ -31,6 +31,11 @@ public sealed class DiagnosticStoreOptions
 public sealed partial class DiagnosticStore : IDiagnosticRepository
 {
     public const string IncompleteWarning = "诊断记录不完整，不影响请求转发";
+    public const string UnattributedWarning = "当天有诊断记录缺失，无法定位到具体请求，不影响请求转发";
+    public const string ReadWarning = "读取诊断失败，请重新筛选或稍后重试";
+    public const string StorageWarning = "诊断记录暂时无法保存，不影响请求转发";
+    public const string CleanupWarning = "过期诊断记录清理失败，不影响请求转发";
+    internal const int MaxRequestMarksPerDate = 4096;
     private const int ControlReserveBytes = 256;
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -53,11 +58,15 @@ public sealed partial class DiagnosticStore : IDiagnosticRepository
     private readonly Dictionary<string, RequestHandle> _live = new(StringComparer.Ordinal);
     private readonly Queue<string> _liveOrder = new();
     private readonly ConcurrentDictionary<DateOnly, byte> _damagedDates = new();
+    private readonly object _damageGate = new();
+    private readonly HashSet<RequestDamageKey> _pendingRequestMarks = [];
     // 只由写循环线程访问：每个日期已计入容量的 payload_bytes 合计。
     private readonly Dictionary<DateOnly, long> _dayPayload = new();
     private readonly HashSet<DateOnly> _markedDates = [];
     private int _disposed;
     private int _warning;
+    private int _writerFailed;
+    private int _cleanupFailed;
     private int _notificationScheduled;
 
     public DiagnosticStore(DataDatabase data, TimeProvider? timeProvider = null, DiagnosticStoreOptions? options = null)
@@ -88,7 +97,10 @@ public sealed partial class DiagnosticStore : IDiagnosticRepository
 
     public event Action? Changed;
     public DateOnly Today => DateOnly.FromDateTime(_time.GetLocalNow().DateTime);
+    /// <summary>本轮运行曾发生异常的兼容状态；界面应使用查询结果中按范围计算的 Warning。</summary>
     public string? Warning => Volatile.Read(ref _warning) == 0 ? null : IncompleteWarning;
+    private string? BackgroundWarning => Volatile.Read(ref _writerFailed) != 0 ? StorageWarning
+        : Volatile.Read(ref _cleanupFailed) != 0 ? CleanupWarning : null;
     internal string SessionIdForTest => _session;
     internal int LiveCountForTest { get { lock (_liveGate) return _live.Count; } }
 
@@ -123,7 +135,8 @@ public sealed partial class DiagnosticStore : IDiagnosticRepository
         }
         catch
         {
-            SetWarning();
+            if (request is not null) Damage(request.Date);
+            else SetWarning();
             return null;
         }
     }
@@ -137,18 +150,16 @@ public sealed partial class DiagnosticStore : IDiagnosticRepository
             var entry = JsonSerializer.Serialize(value.Entry, JsonOptions);
             var info = value.Sequence == 1 && value.Request is not null ? JsonSerializer.Serialize(value.Request, JsonOptions) : null;
             var payload = Encoding.UTF8.GetByteCount(entry) + (info is null ? 0 : Encoding.UTF8.GetByteCount(info));
-            var row = new PendingRow(_session, value.RequestId, value.Date, value.Sequence, KindText(value.Entry.Kind), entry, info, payload,
+            var row = new PendingRow(handle, _session, value.RequestId, value.Date, value.Sequence, KindText(value.Entry.Kind), entry, info, payload,
                 _time.GetUtcNow().ToUnixTimeMilliseconds());
             if (payload > _options.MaxEventBytes || !_queue.Writer.TryWrite(new WriteItem(row, value.Date, null)))
             {
-                handle.State.Incomplete = true;
-                Damage(value.Date);
+                Damage(handle);
             }
         }
         catch
         {
-            handle.State.Incomplete = true;
-            Damage(value.Date);
+            Damage(handle);
         }
         Wake();
         NotifyChanged();
@@ -159,6 +170,24 @@ public sealed partial class DiagnosticStore : IDiagnosticRepository
         var added = Retained(date) && _damagedDates.TryAdd(date, 0);
         SetWarning();
         if (added) Wake();
+    }
+
+    private void Damage(RequestHandle handle)
+    {
+        handle.MarkIncomplete();
+        var date = handle.Request.Date;
+        if (!Retained(date)) return;
+        var key = new RequestDamageKey(date, handle.Request.RequestId);
+        lock (_damageGate)
+        {
+            // 控制标记同样有界；超过可定位的数量时保留当日遗漏提示，不牵连完整请求。
+            if (_pendingRequestMarks.Count < MaxRequestMarksPerDate || _pendingRequestMarks.Contains(key))
+                _pendingRequestMarks.Add(key);
+            else
+                Damage(date);
+        }
+        SetWarning();
+        Wake();
     }
 
     private void SetWarning()
@@ -264,13 +293,19 @@ public sealed partial class DiagnosticStore : IDiagnosticRepository
             await CommitAsync(pending).ConfigureAwait(false);
             await WriteMarksAsync().ConfigureAwait(false);
         }
-        catch (OperationCanceledException) when (_stop.IsCancellationRequested) { SetWarning(); }
-        catch { SetWarning(); }
+        catch (OperationCanceledException) when (_stop.IsCancellationRequested) { WriterFailed(); }
+        catch { WriterFailed(); }
         finally
         {
             _queue.Writer.TryComplete();
             while (_queue.Reader.TryRead(out var item)) item.Completion?.TrySetResult();
         }
+    }
+
+    private void WriterFailed()
+    {
+        Volatile.Write(ref _writerFailed, 1);
+        SetWarning();
     }
 
     /// <summary>单日容量按库中 payload_bytes 汇总控制；超过上限的事件丢弃并标记损坏。</summary>
@@ -289,7 +324,7 @@ public sealed partial class DiagnosticStore : IDiagnosticRepository
             }
             if (used + row.PayloadBytes > _options.MaxDailyBytes)
             {
-                Damage(row.Date);
+                Damage(row.Handle);
                 return false;
             }
             _dayPayload[row.Date] = used + row.PayloadBytes;
@@ -297,7 +332,7 @@ public sealed partial class DiagnosticStore : IDiagnosticRepository
         }
         catch
         {
-            Damage(row.Date);
+            Damage(row.Handle);
             return false;
         }
     }
@@ -318,8 +353,8 @@ public sealed partial class DiagnosticStore : IDiagnosticRepository
             foreach (var date in rows.Select(row => row.Date).Distinct())
             {
                 _dayPayload.Remove(date);
-                Damage(date);
             }
+            foreach (var handle in rows.Select(row => row.Handle).Distinct()) Damage(handle);
         }
     }
 
@@ -361,9 +396,52 @@ public sealed partial class DiagnosticStore : IDiagnosticRepository
         transaction.Commit();
     }
 
-    /// <summary>把"该会话该天记录不完整"落库（幂等）；重启后的重放据此继续标记。</summary>
+    /// <summary>优先持久化具体请求的缺失标记；旧式日期标记只保留无法完整定位的遗漏。</summary>
     private async Task WriteMarksAsync()
     {
+        RequestDamageKey[] pending;
+        lock (_damageGate) pending = _pendingRequestMarks.ToArray();
+        foreach (var group in pending.Where(mark => Retained(mark.Date)).GroupBy(mark => mark.Date))
+        {
+            var marks = group.ToArray();
+            var overflow = false;
+            try
+            {
+                await WriteAsync(connection =>
+                {
+                    using var transaction = connection.BeginTransaction();
+                    using var command = connection.CreateCommand();
+                    command.Transaction = transaction;
+                    command.CommandText = "SELECT session_id, request_id FROM diagnostic_request_marks WHERE date = $date;";
+                    command.Parameters.AddWithValue("$date", DateText(group.Key));
+                    var existing = new HashSet<RequestKey>();
+                    using (var reader = command.ExecuteReader())
+                        while (reader.Read()) existing.Add(new RequestKey(reader.GetString(0), reader.GetString(1)));
+                    command.CommandText = """
+                        INSERT INTO diagnostic_request_marks (session_id, request_id, date)
+                        VALUES ($session, $request, $date) ON CONFLICT DO NOTHING;
+                        """;
+                    command.Parameters.AddWithValue("$session", _session);
+                    var request = command.Parameters.Add("$request", SqliteType.Text);
+                    foreach (var mark in marks)
+                    {
+                        var key = new RequestKey(_session, mark.RequestId);
+                        if (existing.Contains(key)) continue;
+                        if (existing.Count >= MaxRequestMarksPerDate) { overflow = true; continue; }
+                        request.Value = mark.RequestId;
+                        command.ExecuteNonQuery();
+                        existing.Add(key);
+                    }
+                    transaction.Commit();
+                }).ConfigureAwait(false);
+                lock (_damageGate) foreach (var mark in marks) _pendingRequestMarks.Remove(mark);
+                if (overflow) Damage(group.Key);
+                NotifyChanged();
+            }
+            catch (OperationCanceledException) when (_stop.IsCancellationRequested) { throw; }
+            catch { SetWarning(); }
+        }
+
         foreach (var date in _damagedDates.Keys)
         {
             if (!Retained(date) || _markedDates.Contains(date)) continue;
@@ -395,6 +473,7 @@ public sealed partial class DiagnosticStore : IDiagnosticRepository
                 finally { _queryGate.Release(); }
             }
             foreach (var date in _damagedDates.Keys.Where(date => !Retained(date)).ToArray()) _damagedDates.TryRemove(date, out _);
+            lock (_damageGate) _pendingRequestMarks.RemoveWhere(mark => !Retained(mark.Date));
             _markedDates.RemoveWhere(date => !Retained(date));
             foreach (var date in _dayPayload.Keys.Where(date => !Retained(date)).ToArray()) _dayPayload.Remove(date);
             lock (_liveGate)
@@ -409,13 +488,14 @@ public sealed partial class DiagnosticStore : IDiagnosticRepository
             await WriteAsync(connection =>
             {
                 using var command = connection.CreateCommand();
-                command.CommandText = "DELETE FROM diagnostic_events WHERE date < $cutoff; DELETE FROM diagnostic_marks WHERE date < $cutoff;";
+                command.CommandText = "DELETE FROM diagnostic_events WHERE date < $cutoff; DELETE FROM diagnostic_marks WHERE date < $cutoff; DELETE FROM diagnostic_request_marks WHERE date < $cutoff;";
                 command.Parameters.AddWithValue("$cutoff", cutoff);
                 command.ExecuteNonQuery();
             }).ConfigureAwait(false);
+            Volatile.Write(ref _cleanupFailed, 0);
         }
-        catch (OperationCanceledException) when (_stop.IsCancellationRequested) { SetWarning(); }
-        catch { SetWarning(); }
+        catch (OperationCanceledException) when (_stop.IsCancellationRequested) { Volatile.Write(ref _cleanupFailed, 1); SetWarning(); }
+        catch { Volatile.Write(ref _cleanupFailed, 1); SetWarning(); }
     }
 
     public void Dispose()
@@ -433,7 +513,9 @@ public sealed partial class DiagnosticStore : IDiagnosticRepository
 
     private sealed record WriteItem(PendingRow? Row, DateOnly Date, TaskCompletionSource? Completion);
 
-    private sealed record PendingRow(string Session, string RequestId, DateOnly Date, long Sequence, string Kind,
+    private readonly record struct RequestDamageKey(DateOnly Date, string RequestId);
+
+    private sealed record PendingRow(RequestHandle Handle, string Session, string RequestId, DateOnly Date, long Sequence, string Kind,
         string EntryJson, string? RequestJson, long PayloadBytes, long CreatedAtMs);
 
     private sealed class RequestHandle(DiagnosticStore owner, DiagnosticRequestInfo request) : IDiagnosticRequest
@@ -461,9 +543,13 @@ public sealed partial class DiagnosticStore : IDiagnosticRepository
             }
             catch
             {
-                lock (_gate) State.Incomplete = true;
-                owner.Damage(Request.Date);
+                owner.Damage(this);
             }
+        }
+
+        internal void MarkIncomplete()
+        {
+            lock (_gate) State.Incomplete = true;
         }
 
         internal LiveSnapshot Snapshot()

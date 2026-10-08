@@ -101,7 +101,10 @@ public sealed partial class DiagnosticStore
     {
         internal readonly DateOnly Date = date;
         internal readonly Dictionary<RequestKey, SummaryState> Requests = [];
-        internal readonly HashSet<string> IncompleteSessions = new(StringComparer.Ordinal);
+        internal readonly HashSet<RequestKey> IncompleteRequests = [];
+        internal bool LegacyLoss;
+        internal bool UnattributedLoss;
+        internal bool ReadTruncated;
         /// <summary>已重放到的最大行号；只增不改的追加表让增量重放按行号游标即可。</summary>
         internal long Cursor;
         /// <summary>已读行的 payload_bytes 合计，配合单日读预算。</summary>

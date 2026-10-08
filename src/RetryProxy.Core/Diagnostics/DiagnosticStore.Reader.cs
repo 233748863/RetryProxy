@@ -29,20 +29,22 @@ public sealed partial class DiagnosticStore
             await _queryGate.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
             {
-                if (!RetainedForQuery(query.Date)) return new DiagnosticPage([], false, DiagnosticFilters.Empty, Warning);
+                if (!RetainedForQuery(query.Date)) return new DiagnosticPage([], false, DiagnosticFilters.Empty, null);
                 await FlushAsync(cancellationToken).ConfigureAwait(false);
-                if (!RetainedForQuery(query.Date)) return new DiagnosticPage([], false, DiagnosticFilters.Empty, Warning);
-                await RefreshAsync(query.Date, cancellationToken).ConfigureAwait(false);
+                if (!RetainedForQuery(query.Date)) return new DiagnosticPage([], false, DiagnosticFilters.Empty, null);
+                var readComplete = Refresh(query.Date, cancellationToken);
                 if (!RetainedForQuery(query.Date))
                 {
                     _cache = null;
-                    return new DiagnosticPage([], false, DiagnosticFilters.Empty, Warning);
+                    return new DiagnosticPage([], false, DiagnosticFilters.Empty, null);
                 }
-                var rows = SnapshotRows(query.Date, query.Client, cancellationToken);
+                var allRows = SnapshotRows(query.Date, null, cancellationToken);
+                var rows = allRows.Where(row => row.Summary.Request.Client == query.Client).ToArray();
                 var filters = BuildFilters(rows);
                 var size = Math.Clamp(query.PageSize, 1, 100);
                 var offset = Math.Max(0, query.Offset);
-                var items = rows.Where(row => Matches(row, query))
+                var matches = rows.Where(row => Matches(row, query)).ToArray();
+                var items = matches
                     .OrderByDescending(row => row.Summary.Request.StartedAt)
                     .ThenBy(row => row.Summary.Request.RequestId, StringComparer.Ordinal)
                     .Skip(offset).Take(size + 1).Select(row => row.Summary).ToArray();
@@ -50,12 +52,16 @@ public sealed partial class DiagnosticStore
                 if (!RetainedForQuery(query.Date))
                 {
                     _cache = null;
-                    return new DiagnosticPage([], false, DiagnosticFilters.Empty, Warning);
+                    return new DiagnosticPage([], false, DiagnosticFilters.Empty, null);
                 }
-                return new DiagnosticPage(items.Take(size).ToArray(), items.Length > size, filters, Warning);
+                // 提示按整组筛选结果计算（包含后续分页），不借用其他日期/请求留下的全局状态。
+                var warning = matches.Any(row => row.Summary.Incomplete) ? IncompleteWarning
+                    : !readComplete ? ReadWarning
+                    : HasUnattributedLoss(query, allRows) ? UnattributedWarning : BackgroundWarning;
+                return new DiagnosticPage(items.Take(size).ToArray(), items.Length > size, filters, warning);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
-            catch { SetWarning(); return new DiagnosticPage([], false, DiagnosticFilters.Empty, Warning); }
+            catch { SetWarning(); return new DiagnosticPage([], false, DiagnosticFilters.Empty, ReadWarning); }
             finally { _queryGate.Release(); }
         }, cancellationToken);
 
@@ -66,20 +72,22 @@ public sealed partial class DiagnosticStore
             await _queryGate.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
             {
-                if (!RetainedForQuery(date)) return new DiagnosticDetail(null, [], false, Warning);
+                if (!RetainedForQuery(date)) return new DiagnosticDetail(null, [], false, null);
                 await FlushAsync(cancellationToken).ConfigureAwait(false);
-                if (!RetainedForQuery(date)) return new DiagnosticDetail(null, [], false, Warning);
-                await RefreshAsync(date, cancellationToken).ConfigureAwait(false);
+                if (!RetainedForQuery(date)) return new DiagnosticDetail(null, [], false, null);
+                var readComplete = Refresh(date, cancellationToken);
                 if (!RetainedForQuery(date))
                 {
                     _cache = null;
-                    return new DiagnosticDetail(null, [], false, Warning);
+                    return new DiagnosticDetail(null, [], false, null);
                 }
                 var row = SnapshotRows(date, null, cancellationToken)
                     .Where(row => string.Equals(row.Summary.Request.RequestId, requestId, StringComparison.OrdinalIgnoreCase))
                     .OrderByDescending(row => row.Summary.Request.StartedAt)
                     .ThenByDescending(row => row.Session == _session).FirstOrDefault();
-                if (row is null) return new DiagnosticDetail(null, [], false, Warning);
+                if (row is null)
+                    return new DiagnosticDetail(null, [], false, !readComplete ? ReadWarning
+                        : HasRequestLoss(date, requestId) ? IncompleteWarning : null);
                 var size = Math.Clamp(pageSize, 1, 100);
                 offset = Math.Max(0, offset);
                 List<EventRow> rows;
@@ -91,7 +99,7 @@ public sealed partial class DiagnosticStore
                 catch
                 {
                     SetWarning();
-                    return new DiagnosticDetail(row.Summary with { Incomplete = true }, [], false, Warning);
+                    return new DiagnosticDetail(row.Summary, [], false, ReadWarning);
                 }
                 var events = new List<DiagnosticEvent>(Math.Min(rows.Count, size));
                 var incomplete = false;
@@ -109,32 +117,38 @@ public sealed partial class DiagnosticStore
                 if (!RetainedForQuery(date))
                 {
                     _cache = null;
-                    return new DiagnosticDetail(null, [], false, Warning);
+                    return new DiagnosticDetail(null, [], false, null);
                 }
-                return new DiagnosticDetail(row.Summary with { Incomplete = row.Summary.Incomplete || incomplete },
-                    events, rows.Count > size, Warning);
+                var summary = row.Summary with { Incomplete = row.Summary.Incomplete || incomplete };
+                return new DiagnosticDetail(summary, events, rows.Count > size,
+                    summary.Incomplete ? IncompleteWarning : !readComplete ? ReadWarning : null);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
-            catch { SetWarning(); return new DiagnosticDetail(null, [], false, Warning); }
+            catch { SetWarning(); return new DiagnosticDetail(null, [], false, ReadWarning); }
             finally { _queryGate.Release(); }
         }, cancellationToken);
 
     /// <summary>按行号游标增量重放当日事件（追加表只增不改），并合并当天的"不完整"标记。</summary>
-    private async Task RefreshAsync(DateOnly date, CancellationToken token)
+    private bool Refresh(DateOnly date, CancellationToken token)
     {
         if (_cache?.Date != date) _cache = new DayCache(date);
         var cache = _cache;
-        // 标记每轮重查：行数极少，损坏会话即使在缓存建立之后才被标记也能反映出来。
+        var complete = true;
+        // 旧版日期标记只用于列表的当日提示；新标记只影响所指向的请求。
         try
         {
             using var connection = _data.Database.Connect();
             using var command = connection.CreateCommand();
-            command.CommandText = "SELECT session_id FROM diagnostic_marks WHERE date = $date;";
+            command.CommandText = "SELECT EXISTS(SELECT 1 FROM diagnostic_marks WHERE date = $date);";
             command.Parameters.AddWithValue("$date", DateText(date));
+            cache.LegacyLoss = (long)command.ExecuteScalar()! != 0;
+            command.CommandText = "SELECT session_id, request_id FROM diagnostic_request_marks WHERE date = $date;";
             using var reader = command.ExecuteReader();
-            while (reader.Read()) cache.IncompleteSessions.Add(reader.GetString(0));
+            while (reader.Read()) MarkReadLoss(cache, new RequestKey(reader.GetString(0), reader.GetString(1)));
         }
-        catch { SetWarning(); }
+        catch { SetWarning(); complete = false; }
+
+        if (cache.ReadTruncated) return complete;
 
         while (true)
         {
@@ -147,24 +161,24 @@ public sealed partial class DiagnosticStore
             catch
             {
                 SetWarning();
-                return;
+                return false;
             }
             foreach (var row in batch)
             {
                 token.ThrowIfCancellationRequested();
                 // 读预算用尽或日期在读取期间过期都尽早停下。
-                if (!Retained(date)) return;
+                if (!Retained(date)) return complete;
                 if (cache.PayloadBytes + row.PayloadBytes > _options.MaxDailyBytes)
                 {
                     TruncateRemaining(cache, date, row.Id);
-                    return;
+                    return complete;
                 }
                 cache.PayloadBytes += row.PayloadBytes;
                 _options.BytesReadForTest?.Invoke(row.PayloadBytes);
                 ApplyRow(cache, row);
                 cache.Cursor = row.Id;
             }
-            if (batch.Count < ReadBatchSize) return;
+            if (batch.Count < ReadBatchSize) return complete;
         }
     }
 
@@ -212,19 +226,21 @@ public sealed partial class DiagnosticStore
         return rows;
     }
 
-    /// <summary>读预算用尽：把未读到的会话标记为不完整（对应旧实现"文件被截断"的语义）。</summary>
+    /// <summary>读预算用尽：只标记未读完的请求；列表保留当日读取不完整的提示。</summary>
     private void TruncateRemaining(DayCache cache, DateOnly date, long fromId)
     {
         SetWarning();
+        cache.ReadTruncated = true;
         try
         {
             using var connection = _data.Database.Connect();
             using var command = connection.CreateCommand();
-            command.CommandText = "SELECT DISTINCT session_id FROM diagnostic_events WHERE date = $date AND id >= $after;";
+            command.CommandText = "SELECT DISTINCT session_id, request_id FROM diagnostic_events WHERE date = $date AND id >= $after LIMIT $limit;";
             command.Parameters.AddWithValue("$date", DateText(date));
             command.Parameters.AddWithValue("$after", fromId);
+            command.Parameters.AddWithValue("$limit", MaxRequestMarksPerDate);
             using var reader = command.ExecuteReader();
-            while (reader.Read()) cache.IncompleteSessions.Add(reader.GetString(0));
+            while (reader.Read()) MarkReadLoss(cache, new RequestKey(reader.GetString(0), reader.GetString(1)));
         }
         catch { SetWarning(); }
     }
@@ -249,7 +265,7 @@ public sealed partial class DiagnosticStore
         }
         catch
         {
-            cache.IncompleteSessions.Add(row.Session);
+            MarkReadLoss(cache, new RequestKey(row.Session, row.RequestId));
             SetWarning();
         }
     }
@@ -278,17 +294,45 @@ public sealed partial class DiagnosticStore
     private sealed record EventRow(long Id, string Session, string RequestId, long Sequence, string Kind,
         string EntryJson, string? RequestJson, long PayloadBytes);
 
+    private static void MarkReadLoss(DayCache cache, RequestKey key)
+    {
+        if (Guid.TryParseExact(key.Session, "N", out _) && Guid.TryParse(key.RequestId, out _))
+            cache.IncompleteRequests.Add(key);
+        else
+            cache.UnattributedLoss = true;
+    }
+
+    private HashSet<RequestKey> PendingRequestLosses(DateOnly date)
+    {
+        lock (_damageGate)
+            return _pendingRequestMarks.Where(mark => mark.Date == date)
+                .Select(mark => new RequestKey(_session, mark.RequestId)).ToHashSet();
+    }
+
+    private bool HasRequestLoss(DateOnly date, string requestId) =>
+        _cache!.IncompleteRequests.Concat(PendingRequestLosses(date))
+            .Any(key => string.Equals(key.RequestId, requestId, StringComparison.OrdinalIgnoreCase));
+
+    private bool HasUnattributedLoss(DiagnosticQuery query, IReadOnlyList<QueryRow> rows)
+    {
+        var cache = _cache!;
+        if (cache.LegacyLoss || cache.UnattributedLoss || cache.ReadTruncated || _damagedDates.ContainsKey(query.Date)) return true;
+        var known = rows.Select(row => new RequestKey(row.Session, row.Summary.Request.RequestId)).ToHashSet();
+        return cache.IncompleteRequests.Concat(PendingRequestLosses(query.Date)).Any(key => !known.Contains(key) &&
+            (string.IsNullOrWhiteSpace(query.RequestId) || key.RequestId.StartsWith(query.RequestId.Trim(), StringComparison.OrdinalIgnoreCase)));
+    }
+
     private List<QueryRow> SnapshotRows(DateOnly date, ClientType? client, CancellationToken token)
     {
         var rows = new Dictionary<RequestKey, QueryRow>();
+        var pendingLosses = PendingRequestLosses(date);
         foreach (var pair in _cache!.Requests)
         {
             token.ThrowIfCancellationRequested();
             var state = pair.Value;
             if (client.HasValue && state.Request.Client != client.Value) continue;
             var summary = state.Snapshot(state.Session != _session);
-            var damaged = _cache.IncompleteSessions.Contains(state.Session) ||
-                (state.Session == _session && _damagedDates.ContainsKey(date));
+            var damaged = _cache.IncompleteRequests.Contains(pair.Key) || pendingLosses.Contains(pair.Key);
             rows.Add(pair.Key, new QueryRow(summary with { Incomplete = summary.Incomplete || damaged }, state.Session, state.Targets));
         }
         RequestHandle[] live;
@@ -303,10 +347,10 @@ public sealed partial class DiagnosticStore
             var targets = previous is null ? [] : new HashSet<DiagnosticTarget>(previous.Targets);
             if (snapshot.LastSendTarget is not null) targets.Add(snapshot.LastSendTarget);
             var summary = snapshot.Summary;
-            summary = summary with { Incomplete = summary.Incomplete || previous?.Summary.Incomplete == true || _damagedDates.ContainsKey(date) };
+            summary = summary with { Incomplete = summary.Incomplete || previous?.Summary.Incomplete == true ||
+                _cache.IncompleteRequests.Contains(key) || pendingLosses.Contains(key) };
             rows[key] = new QueryRow(summary, _session, targets);
         }
-        if (rows.Values.Any(row => row.Summary.Incomplete)) SetWarning();
         return rows.Values.ToList();
     }
 

@@ -114,7 +114,7 @@ public partial class RequestDiagnosticDrawer : DrawerPage
             var detail = await _repository.ReadDetailAsync(_date, _requestId, _offset, PageSize, cancellation.Token);
             if (!_active || version != _version || cancellation.IsCancellationRequested) return;
             _summary = detail.Summary;
-            _warning = detail.Warning ?? _repository.Warning;
+            _warning = detail.Warning;
             if (_summary is null) _warning ??= "该请求记录已过期或未找到";
             var oldRows = _events.ToDictionary(row => row.Event.Sequence);
             var rows = detail.Events.OrderBy(item => item.Sequence).Select(item =>

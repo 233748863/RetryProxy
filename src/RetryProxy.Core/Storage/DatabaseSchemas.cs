@@ -13,8 +13,8 @@ public static class DatabaseSchemas
     /// <summary>配置库当前结构版本。</summary>
     public const int ConfigVersion = 1;
 
-    /// <summary>数据库（每日统计 + 请求诊断）当前结构版本。v2 起请求诊断写入 diagnostic_events + diagnostic_marks。</summary>
-    public const int DataVersion = 2;
+    /// <summary>数据库（每日统计 + 请求诊断）当前结构版本。v3 增加按请求保存的诊断缺失标记。</summary>
+    public const int DataVersion = 3;
 
     /// <summary>配置库建表/升级；幂等，可在已建好的库上重复执行。</summary>
     public static void EnsureConfig(SqliteConnection connection, int fromVersion)
@@ -88,6 +88,21 @@ public static class DatabaseSchemas
                     PRIMARY KEY (session_id, date)
                 );
                 CREATE INDEX IF NOT EXISTS ix_diagnostic_marks_date ON diagnostic_marks (date);
+                """);
+        }
+
+        if (fromVersion < 3)
+        {
+            // 旧 diagnostic_marks 只证明当天有遗漏，不能据此判定每个请求都不完整。
+            // 新标记记录确实丢失事件的请求；不保存正文、异常文本或额外身份信息。
+            Execute(connection, """
+                CREATE TABLE IF NOT EXISTS diagnostic_request_marks (
+                    session_id TEXT NOT NULL,
+                    request_id TEXT NOT NULL,
+                    date       TEXT NOT NULL,
+                    PRIMARY KEY (session_id, request_id, date)
+                );
+                CREATE INDEX IF NOT EXISTS ix_diagnostic_request_marks_date ON diagnostic_request_marks (date);
                 """);
         }
     }

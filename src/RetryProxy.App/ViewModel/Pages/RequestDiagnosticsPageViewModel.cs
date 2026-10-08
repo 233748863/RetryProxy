@@ -216,7 +216,7 @@ public partial class RequestDiagnosticsPageViewModel : ViewModel
             if (!_active || version != _version || cancellation.IsCancellationRequested) return;
             _filters = page.Filters;
             UpdateChoices();
-            _warningKey = page.Warning ?? Repository.Warning;
+            _warningKey = page.Warning;
             Warning = _warningKey is null ? string.Empty : T(_warningKey);
             var previous = Rows.ToDictionary(row => row.RequestId, StringComparer.Ordinal);
             var rows = page.Items.Select(summary =>

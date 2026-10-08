@@ -449,7 +449,8 @@ public sealed class DiagnosticStoreTests : IDisposable
             Assert.Equal(8UL, summary.RetryCount);
             Assert.True(summary.Incomplete);
         }
-        Assert.Equal(1, Scalar("SELECT COUNT(*) FROM diagnostic_marks;"));
+        Assert.Equal(1, Scalar("SELECT COUNT(*) FROM diagnostic_request_marks;"));
+        Assert.Equal(0, Scalar("SELECT COUNT(*) FROM diagnostic_marks;"));
         using var restored = Store();
         Assert.True(Assert.Single((await restored.QueryAsync(Query())).Items).Incomplete);
     }
@@ -481,7 +482,8 @@ public sealed class DiagnosticStoreTests : IDisposable
             Assert.Equal(DiagnosticStore.IncompleteWarning, store.Warning);
             Assert.InRange(Scalar("SELECT COALESCE(SUM(payload_bytes), 0) FROM diagnostic_events;"), 1, 2048);
         }
-        Assert.InRange(Scalar("SELECT COUNT(*) FROM diagnostic_marks;"), 1, 3);
+        Assert.InRange(Scalar("SELECT COUNT(*) FROM diagnostic_request_marks;"), 1, 3);
+        Assert.Equal(0, Scalar("SELECT COUNT(*) FROM diagnostic_marks;"));
     }
 
     [Fact]
@@ -574,26 +576,35 @@ public sealed class DiagnosticStoreTests : IDisposable
     [InlineData("kind")]
     public async Task CorruptHistoryIsIncompleteButObservedSuccessIsNotReclassifiedAsFailure(string corruption)
     {
+        var damaged = Info();
+        var healthy = Info(seconds: 10);
         using (var writer = Store())
         {
-            var request = writer.Begin(Info())!;
+            var request = writer.Begin(damaged)!;
             Send(request);
             Complete(request);
+            Complete(writer.Begin(healthy)!);
         }
+        var affected = $"request_id = '{damaged.RequestId}' AND ";
         switch (corruption)
         {
-            case "gap": Exec("DELETE FROM diagnostic_events WHERE sequence = 2;"); break;
-            case "bad-json": Exec("UPDATE diagnostic_events SET entry_json = '{broken-json' WHERE sequence = 2;"); break;
-            case "partial": Exec("DELETE FROM diagnostic_events WHERE sequence = 5;"); break;
-            case "oversized": Exec("UPDATE diagnostic_events SET payload_bytes = 5000 WHERE sequence = 2;"); break;
-            case "kind": Exec("UPDATE diagnostic_events SET kind = 'bogus' WHERE sequence = 2;"); break;
+            case "gap": Exec($"DELETE FROM diagnostic_events WHERE {affected} sequence = 2;"); break;
+            case "bad-json": Exec($"UPDATE diagnostic_events SET entry_json = '{{broken-json' WHERE {affected} sequence = 2;"); break;
+            case "partial": Exec($"DELETE FROM diagnostic_events WHERE {affected} sequence = 5;"); break;
+            case "oversized": Exec($"UPDATE diagnostic_events SET payload_bytes = 5000 WHERE {affected} sequence = 2;"); break;
+            case "kind": Exec($"UPDATE diagnostic_events SET kind = 'bogus' WHERE {affected} sequence = 2;"); break;
         }
         using var store = Store();
-        var page = await store.QueryAsync(Query());
+        var page = await store.QueryAsync(Query() with { RequestId = damaged.RequestId });
         var summary = Assert.Single(page.Items);
         Assert.Equal(DiagnosticOutcome.Success, summary.Outcome);
         Assert.True(summary.Incomplete);
         Assert.Equal(DiagnosticStore.IncompleteWarning, page.Warning);
+        Assert.Equal(DiagnosticStore.IncompleteWarning, (await store.ReadDetailAsync(damaged.Date, damaged.RequestId)).Warning);
+        var healthyPage = await store.QueryAsync(Query() with { RequestId = healthy.RequestId });
+        Assert.False(Assert.Single(healthyPage.Items).Incomplete);
+        Assert.Null(healthyPage.Warning);
+        Assert.Null((await store.ReadDetailAsync(healthy.Date, healthy.RequestId)).Warning);
     }
 
     [Theory]
@@ -748,11 +759,17 @@ public sealed class DiagnosticStoreTests : IDisposable
             await store.FlushAsync();
             Assert.Equal(DiagnosticStore.IncompleteWarning, store.Warning);
             Assert.Equal(0, Scalar("SELECT COUNT(*) FROM diagnostic_events;"));
-            Assert.Equal(1, Scalar("SELECT COUNT(*) FROM diagnostic_marks;"));
+            Assert.Equal(1, Scalar("SELECT COUNT(*) FROM diagnostic_request_marks;"));
+            Assert.Equal(0, Scalar("SELECT COUNT(*) FROM diagnostic_marks;"));
             Volatile.Write(ref failCommits, 2);
-            Complete(store.Begin(Info())!);
+            var healthy = Info();
+            Complete(store.Begin(healthy)!);
             await store.FlushAsync();
             Assert.True(Scalar("SELECT COUNT(*) FROM diagnostic_events;") > 0);
+            var recoveredPage = await store.QueryAsync(Query() with { RequestId = healthy.RequestId });
+            Assert.False(Assert.Single(recoveredPage.Items).Incomplete);
+            Assert.Null(recoveredPage.Warning);
+            Assert.Null((await store.ReadDetailAsync(healthy.Date, healthy.RequestId)).Warning);
         }
     }
 
@@ -826,6 +843,195 @@ public sealed class DiagnosticStoreTests : IDisposable
         _clock.Advance(TimeSpan.FromDays(7));
         Assert.Empty((await store.QueryAsync(new DiagnosticQuery(info.Date, ClientType.Codex))).Items);
         Assert.Equal(0, store.CachedDateCountForTest);
+    }
+
+    [Fact]
+    public async Task HistoricalWarningFollowsFiltersAndDoesNotLeakIntoHealthyDetailsOrOtherDates()
+    {
+        var damaged = Info();
+        var healthy = Info(seconds: 10);
+        var claude = Info(client: ClientType.Claude);
+        var yesterday = Info() with { Date = healthy.Date.AddDays(-1), StartedAt = healthy.StartedAt.AddDays(-1) };
+        using (var writer = Store())
+        {
+            Send(writer.Begin(damaged)!, Target("damaged-provider", "damaged-key", "damaged-model"));
+            var request = writer.Begin(healthy)!;
+            Send(request, Target("healthy-provider", "healthy-key", "healthy-model"));
+            Complete(request);
+            Complete(writer.Begin(claude)!);
+            Complete(writer.Begin(yesterday)!);
+        }
+        using var store = Store();
+        var firstPage = await store.QueryAsync(Query() with { PageSize = 1 });
+        Assert.Equal(healthy.RequestId, Assert.Single(firstPage.Items).Request.RequestId);
+        Assert.False(firstPage.Items[0].Incomplete);
+        Assert.True(firstPage.HasMore);
+        Assert.Equal(DiagnosticStore.IncompleteWarning, firstPage.Warning);
+        Assert.Null((await store.ReadDetailAsync(healthy.Date, healthy.RequestId)).Warning);
+        Assert.Equal(DiagnosticStore.IncompleteWarning, (await store.ReadDetailAsync(damaged.Date, damaged.RequestId)).Warning);
+        var healthyFilters = new[]
+        {
+            Query() with { RequestId = healthy.RequestId[..8] },
+            Query() with { Outcome = DiagnosticOutcome.Success },
+            Query() with { ProviderId = "healthy-provider" },
+            Query() with { KeyId = "healthy-key" },
+            Query() with { Model = "healthy-model" },
+            Query(ClientType.Claude),
+            Query() with { Date = yesterday.Date },
+        };
+        foreach (var query in healthyFilters)
+        {
+            var page = await store.QueryAsync(query);
+            Assert.False(Assert.Single(page.Items).Incomplete);
+            Assert.Null(page.Warning);
+        }
+        Assert.Null((await store.QueryAsync(Query() with { RequestId = "no-match" })).Warning);
+        Assert.Null((await store.QueryAsync(Query() with { Date = healthy.Date.AddDays(-7) })).Warning);
+        Assert.Equal(DiagnosticStore.IncompleteWarning, (await store.QueryAsync(Query())).Warning);
+    }
+
+    [Fact]
+    public async Task LegacyDateMarkWarnsInListWithoutChangingHealthyRequestCompleteness()
+    {
+        var info = Info();
+        string session;
+        using (var writer = Store())
+        {
+            session = writer.SessionIdForTest;
+            var request = writer.Begin(info)!;
+            Send(request);
+            Complete(request);
+        }
+        Exec($"INSERT INTO diagnostic_marks (session_id, date) VALUES ('{session}', '{DiagnosticStore.DateText(info.Date)}');");
+        using var store = Store();
+        var page = await store.QueryAsync(Query());
+        Assert.Equal(DiagnosticStore.UnattributedWarning, page.Warning);
+        Assert.False(Assert.Single(page.Items).Incomplete);
+        var detail = await store.ReadDetailAsync(info.Date, info.RequestId);
+        Assert.Null(detail.Warning);
+        Assert.False(detail.Summary!.Incomplete);
+        Assert.Equal(5, detail.Events.Count);
+        Assert.Null((await store.QueryAsync(Query() with { Date = info.Date.AddDays(-1) })).Warning);
+        Exec("DELETE FROM diagnostic_marks;");
+        Assert.Null((await store.QueryAsync(Query())).Warning);
+    }
+
+    [Fact]
+    public async Task MissingFirstEventWarnsForUnattributedLossWithoutContaminatingAnotherRequest()
+    {
+        var damaged = Info();
+        var healthy = Info();
+        using (var writer = Store())
+        {
+            var request = writer.Begin(damaged)!;
+            Send(request);
+            Complete(request);
+            Complete(writer.Begin(healthy)!);
+        }
+        Exec($"DELETE FROM diagnostic_events WHERE request_id = '{damaged.RequestId}' AND sequence = 1;");
+        using var store = Store();
+        var page = await store.QueryAsync(Query());
+        Assert.Equal(DiagnosticStore.UnattributedWarning, page.Warning);
+        Assert.Equal(healthy.RequestId, Assert.Single(page.Items).Request.RequestId);
+        Assert.False(page.Items[0].Incomplete);
+        Assert.Null((await store.QueryAsync(Query() with { RequestId = healthy.RequestId })).Warning);
+        Assert.Null((await store.ReadDetailAsync(healthy.Date, healthy.RequestId)).Warning);
+        var missing = await store.ReadDetailAsync(damaged.Date, damaged.RequestId);
+        Assert.Null(missing.Summary);
+        Assert.Equal(DiagnosticStore.IncompleteWarning, missing.Warning);
+    }
+
+    [Fact]
+    public async Task LostFinalEventStaysAttributedAfterLiveEvictionAndRestart()
+    {
+        var damaged = Info();
+        var healthy = Info();
+        var failNextWrite = 0;
+        var data = Data();
+        using (var store = new DiagnosticStore(data, _clock, new DiagnosticStoreOptions
+        {
+            MaxLiveRequests = 1,
+            WriteForTest = action =>
+            {
+                if (Interlocked.Exchange(ref failNextWrite, 0) != 0) throw new IOException("test write failure");
+                using var connection = data.Database.Connect();
+                action(connection);
+                return Task.CompletedTask;
+            },
+        }))
+        {
+            var request = store.Begin(damaged)!;
+            Send(request);
+            request.Record(new DiagnosticEntry(DiagnosticEventKind.Outcome, 3) { Outcome = DiagnosticOutcome.Success });
+            request.Record(new DiagnosticEntry(DiagnosticEventKind.Delivery, 3.5) { Delivery = DiagnosticDelivery.Complete });
+            await store.FlushAsync();
+            Volatile.Write(ref failNextWrite, 1);
+            request.Record(new DiagnosticEntry(DiagnosticEventKind.Finished, 4));
+            await store.FlushAsync();
+            Complete(store.Begin(healthy)!);
+            Assert.Equal(1, store.LiveCountForTest);
+            var page = await store.QueryAsync(Query());
+            Assert.True(Assert.Single(page.Items, row => row.Request.RequestId == damaged.RequestId).Incomplete);
+            Assert.False(Assert.Single(page.Items, row => row.Request.RequestId == healthy.RequestId).Incomplete);
+            Assert.Null((await store.ReadDetailAsync(healthy.Date, healthy.RequestId)).Warning);
+        }
+        Assert.Equal(1, Scalar("SELECT COUNT(*) FROM diagnostic_request_marks;"));
+        Assert.Equal(0, Scalar("SELECT COUNT(*) FROM diagnostic_marks;"));
+        using var restored = Store();
+        Assert.Null((await restored.QueryAsync(Query() with { RequestId = healthy.RequestId })).Warning);
+        var damagedDetail = await restored.ReadDetailAsync(damaged.Date, damaged.RequestId);
+        Assert.Equal(DiagnosticStore.IncompleteWarning, damagedDetail.Warning);
+        Assert.Equal(DiagnosticOutcome.Success, damagedDetail.Summary!.Outcome);
+        Assert.Null(damagedDetail.Summary.TotalSeconds);
+    }
+
+    [Fact]
+    public async Task RequestMarkLimitKeepsUnknownLossVisibleAndDoesNotMarkHealthyDetails()
+    {
+        var info = Info();
+        var date = DiagnosticStore.DateText(info.Date);
+        var session = Guid.NewGuid().ToString("N");
+        Exec($"""
+            WITH RECURSIVE numbers(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM numbers WHERE n < {DiagnosticStore.MaxRequestMarksPerDate})
+            INSERT INTO diagnostic_request_marks (session_id, request_id, date)
+            SELECT '{session}', printf('%032x', n), '{date}' FROM numbers;
+            """);
+        using var store = Store(new DiagnosticStoreOptions { MaxEventBytes = 256 });
+        var damaged = store.Begin(info)!;
+        Send(damaged, new DiagnosticTarget("provider-a", new string('a', 64), "key-a", new string('a', 64), new string('b', 128)));
+        Complete(damaged);
+        await store.FlushAsync();
+        Assert.Equal(DiagnosticStore.MaxRequestMarksPerDate, Scalar("SELECT COUNT(*) FROM diagnostic_request_marks;"));
+        Assert.Equal(1, Scalar("SELECT COUNT(*) FROM diagnostic_marks;"));
+        var healthy = Info();
+        Complete(store.Begin(healthy)!);
+        var detail = await store.ReadDetailAsync(healthy.Date, healthy.RequestId);
+        Assert.False(detail.Summary!.Incomplete);
+        Assert.Null(detail.Warning);
+        Assert.Equal(DiagnosticStore.UnattributedWarning, (await store.QueryAsync(Query() with { RequestId = healthy.RequestId })).Warning);
+        _clock.Advance(TimeSpan.FromDays(7));
+        await store.FlushAsync();
+        Assert.Empty((await store.QueryAsync(Query())).Items);
+        Assert.Equal(0, Scalar("SELECT COUNT(*) FROM diagnostic_request_marks;"));
+        Assert.Equal(0, Scalar("SELECT COUNT(*) FROM diagnostic_marks;"));
+    }
+
+    [Fact]
+    public async Task ReadFailureWarningClearsWhenStorageBecomesReadableAgain()
+    {
+        var info = Info();
+        using var store = Store();
+        Complete(store.Begin(info)!);
+        Assert.Null((await store.QueryAsync(Query())).Warning);
+        Exec("ALTER TABLE diagnostic_events RENAME TO temporarily_unavailable_events;");
+        Assert.Equal(DiagnosticStore.ReadWarning, (await store.QueryAsync(Query())).Warning);
+        Assert.Equal(DiagnosticStore.ReadWarning, (await store.ReadDetailAsync(info.Date, info.RequestId)).Warning);
+        Exec("ALTER TABLE temporarily_unavailable_events RENAME TO diagnostic_events;");
+        Assert.Null((await store.QueryAsync(Query())).Warning);
+        var recovered = await store.ReadDetailAsync(info.Date, info.RequestId);
+        Assert.Null(recovered.Warning);
+        Assert.False(recovered.Summary!.Incomplete);
+        Assert.Equal(4, recovered.Events.Count);
     }
 
     [Fact]

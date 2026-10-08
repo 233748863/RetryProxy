@@ -258,8 +258,9 @@ function Open-Detail([string]$RequestId) {
     Wait-For { $c=Find-Control 'DiagnosticOverview'; $c -and $c.Current.Name.Contains($RequestId) } '请求详情未打开'
     $save=Find-Control 'DrawerSave'
     Check (!$save -or $save.Current.IsOffscreen) '只读抽屉没有可见保存按钮'
-    $close=Find-Control 'DrawerCancel'
-    Check ($close -and $close.Current.Name -eq '关闭' -and $close.Current.IsEnabled) '只读关闭按钮文案与可用状态正确'
+    # 概况会先于 200ms 抽屉动画出现；等到原有的按钮条件满足，避免把切换期间的禁用态误报为失败。
+    Wait-For { $close=Find-Control 'DrawerCancel'; $close -and $close.Current.Name -eq '关闭' -and $close.Current.IsEnabled } '只读关闭按钮文案与可用状态正确'
+    Check $true '只读关闭按钮文案与可用状态正确'
 }
 function Close-Detail([string]$RequestId) {
     Focus-App; Send-Key 27
@@ -506,8 +507,23 @@ public static class RequestDiagnosticWindow {
     Open-Detail $crashRow.id
     $overview=(Find-Control 'DiagnosticOverview').Current.Name
     Check ($overview.Contains('结束状态未记录') -and $overview.Contains('总耗时：未记录')) '缺收尾详情没有编造总耗时'
+    Wait-For { $w=Find-Control 'DiagnosticDetailWarning'; $w -and !$w.Current.IsOffscreen -and $w.Current.Name.Contains('诊断记录不完整') } '缺收尾请求详情未保留诊断警告'
     Capture 'restarted-incomplete-detail'
     Close-Detail $crashRow.id
+    Set-Search $retry.id; Assert-Rows 1 'diag-retry-model'
+    Wait-For { $w=Find-Control 'DiagnosticWarning'; !$w -or $w.Current.IsOffscreen } '筛选到完整请求后仍残留其他请求的警告'
+    Open-Detail $retry.id
+    Wait-For { (Texts-Under (Find-Control 'DiagnosticEvents')).Contains('请求收尾') } '完整请求详情尚未读取完毕'
+    $healthyWarning=Find-Control 'DiagnosticDetailWarning'
+    Check (!$healthyWarning -or $healthyWarning.Current.IsOffscreen) '完整请求详情不复用其他请求的警告'
+    Check (!(Find-Control 'DiagnosticOverview').Current.Name.Contains('诊断记录不完整')) '完整请求概况未被其他请求标记为不完整'
+    Capture 'restarted-healthy-detail'
+    Close-Detail $retry.id
+    Set-Search ''; Assert-Rows 4
+    Wait-For { $w=Find-Control 'DiagnosticWarning'; $w -and !$w.Current.IsOffscreen } '恢复全部请求后未重新显示实际缺失警告'
+    Invoke-Control 'SelectClaude'; Assert-Rows 1 'diag-claude-model'
+    Wait-For { $w=Find-Control 'DiagnosticWarning'; !$w -or $w.Current.IsOffscreen } '切换客户端后残留其他客户端的警告'
+    Check $true '实际缺失仍提示，完整请求与其他客户端不受连带影响'
     Navigate '运行日志' 'LogRows'
     Stop-App
     Assert-Safe (Diagnostic-DbText) '独立诊断数据库'

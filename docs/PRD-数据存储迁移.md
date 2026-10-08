@@ -57,7 +57,7 @@
 - 列：`id`、`session_id`、`request_id`、`date`、`sequence`、`kind`、`entry_json`、`request_json`（首个事件）、`payload_bytes`、`created_at_ms`；唯一约束 `(session_id, request_id, sequence)`；索引 `(date, request_id, sequence)`。
 - 查询：按日期取当日事件后台重放（沿用现有 SummaryState 归并逻辑），详情按请求分页；"单日缓存、可取消、不在界面线程、不一次加载 7 天"的语义保持。
 - 保留：含今天的 7 个本机自然日，启动与跨午夜后台清理；删除失败提示语义保持。
-- 容量：单日 64 MiB 上限改按 `payload_bytes` 汇总控制；"诊断记录不完整"标记按会话/日保留，文案不变；会话（每次运行的段）概念保留（PreviousSession 标记、实时合并）。
+- 容量：单日 64 MiB 上限改按 `payload_bytes` 汇总控制；会话（每次运行的段）概念保留（PreviousSession 标记、实时合并）。2026-10-08 优化：数据结构 v3 新增 `diagnostic_request_marks`，缺失优先标记到具体请求，每天及待保存队列分别最多 4096 个；旧会话/日标记及超限退回的日期标记保留在 `diagnostic_marks`，仅提示当日有无法完整定位的遗漏，不影响完整请求的判断。
 - 写入：非阻塞入队、单写者、每秒或累计 256 项落库；退出最多等待 2 秒。
 
 ### 2.3 通用

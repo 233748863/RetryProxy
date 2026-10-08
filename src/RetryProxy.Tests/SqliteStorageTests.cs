@@ -102,6 +102,40 @@ public sealed class SqliteStorageTests : IDisposable
     }
 
     [Fact]
+    public void DiagnosticRequestMarkUpgradePreservesVersionTwoEventsAndLegacyMarks()
+    {
+        var database = OpenData();
+        using (var connection = database.Connect())
+        {
+            // 精确还原 v2 的表集合与版本；已有事件、旧日期标记应原样保留。
+            Exec(connection, """
+                DROP TABLE diagnostic_request_marks;
+                UPDATE meta SET value = '2' WHERE key = 'schema_version';
+                INSERT INTO diagnostic_events (session_id, request_id, date, sequence, kind, entry_json, payload_bytes, created_at_ms)
+                VALUES ('original-session', 'original-request', '2026-10-08', 1, 'started', '{"kind":"started"}', 18, 123);
+                INSERT INTO diagnostic_marks (session_id, date) VALUES ('original-session', '2026-10-08');
+                """);
+        }
+        database.Dispose();
+
+        var upgraded = OpenData();
+        Assert.Equal(3, upgraded.ReadSchemaVersion());
+        using (var connection = upgraded.Connect())
+        {
+            Assert.Equal("{\"kind\":\"started\"}", Text(connection, "SELECT entry_json FROM diagnostic_events;"));
+            Assert.Equal("original-session", Text(connection, "SELECT session_id FROM diagnostic_marks;"));
+            Assert.Equal(0, Scalar(connection, "SELECT COUNT(*) FROM diagnostic_request_marks;"));
+            Exec(connection, "INSERT INTO diagnostic_request_marks (session_id, request_id, date) VALUES ('new-session', 'affected-request', '2026-10-08');");
+        }
+        upgraded.Dispose();
+        var reopened = OpenData();
+        using var check = reopened.Connect();
+        Assert.Equal(1, Scalar(check, "SELECT COUNT(*) FROM diagnostic_events;"));
+        Assert.Equal(1, Scalar(check, "SELECT COUNT(*) FROM diagnostic_marks;"));
+        Assert.Equal(1, Scalar(check, "SELECT COUNT(*) FROM diagnostic_request_marks;"));
+    }
+
+    [Fact]
     public void NewerSchemaVersionIsRejected()
     {
         var database = OpenConfig();

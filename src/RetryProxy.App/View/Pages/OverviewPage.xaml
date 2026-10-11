@@ -235,8 +235,8 @@
                         </UniformGrid>
                         <ScrollViewer x:Name="HeatmapScroll" Grid.Column="1" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled" Padding="0,0,0,4"
                                       Loaded="OnHeatmapLoaded" ScrollChanged="OnHeatmapScrollChanged" AutomationProperties.AutomationId="StatisticsHeatScroll">
-                        <!-- 最后一周也可能是新月份的起点，右侧留白保证月份标签完整可见。 -->
-                        <Grid MinWidth="722" Margin="0,0,28,0">
+                        <!-- 右侧留出月份标签宽度；底部避开 WPF-UI 覆盖内容的滚动条，保证周日日期格可悬停和点击。 -->
+                        <Grid MinWidth="722" Margin="0,0,28,16">
                             <Grid.RowDefinitions><RowDefinition Height="24" /><RowDefinition Height="112" /></Grid.RowDefinitions>
                             <ItemsControl ItemsSource="{Binding HeatMonths}">
                                 <ItemsControl.ItemsPanel><ItemsPanelTemplate><UniformGrid Columns="53" /></ItemsPanelTemplate></ItemsControl.ItemsPanel>

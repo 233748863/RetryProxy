@@ -17,10 +17,12 @@ namespace RetryProxy.Core.Proxy;
 public sealed class ProxyHost : IAsyncDisposable
 {
     private readonly WebApplication _app;
+    private readonly RetryProxy _proxy;
 
-    private ProxyHost(WebApplication app)
+    private ProxyHost(WebApplication app, RetryProxy proxy)
     {
         _app = app;
+        _proxy = proxy;
     }
 
     /// <summary>实际绑定的端口（传 0 时启动后才知道）。</summary>
@@ -62,10 +64,11 @@ public sealed class ProxyHost : IAsyncDisposable
         catch
         {
             await app.DisposeAsync().ConfigureAwait(false);
+            proxy.Dispose();
             throw;
         }
 
-        var host = new ProxyHost(app);
+        var host = new ProxyHost(app, proxy);
         var addresses = app.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>();
         if (addresses is not null)
         {
@@ -102,6 +105,7 @@ public sealed class ProxyHost : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        await _app.DisposeAsync().ConfigureAwait(false);
+        try { await _app.DisposeAsync().ConfigureAwait(false); }
+        finally { _proxy.Dispose(); }
     }
 }

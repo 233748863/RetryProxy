@@ -35,6 +35,7 @@ public sealed class PreparationCatalog(
         return new PreparationTarget
         {
             RequestRules = provider.RequestRules.Select(rule => rule.Clone()).ToArray(),
+            NetworkProxy = NetworkProxySettings.Effective(provider.NetworkProxy, key.NetworkProxy),
             ClientType = client,
             Key = reference,
             ProviderName = provider.Name,

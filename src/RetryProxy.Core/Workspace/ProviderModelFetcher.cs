@@ -17,7 +17,6 @@ namespace RetryProxy.Core.Workspace;
 public static class ProviderModelFetcher
 {
     private const int MaxResponseBytes = 1024 * 1024;
-    private static readonly HttpClient Client = CreateClient(SystemProxyResolver.Shared);
     private static readonly string[] CompatibilitySuffixes =
     {
         "/api/claudecode", "/api/anthropic", "/apps/anthropic", "/api/coding",
@@ -34,9 +33,19 @@ public static class ProviderModelFetcher
         PooledConnectionIdleTimeout = TimeSpan.FromSeconds(90),
     });
 
-    public static Task<IReadOnlyList<string>> FetchAsync(ProviderEndpoint provider, string apiKey, ClientType clientType, CancellationToken cancellationToken,
-        ClaudeAuthMode authMode = ClaudeAuthMode.Bearer)
-        => FetchAsync(provider, apiKey, clientType, Client, cancellationToken, authMode);
+    public static async Task<IReadOnlyList<string>> FetchAsync(ProviderEndpoint provider, string apiKey, ClientType clientType, CancellationToken cancellationToken,
+        ClaudeAuthMode authMode = ClaudeAuthMode.Bearer, NetworkProxySettings? keyNetworkProxy = null)
+    {
+        var settings = NetworkProxySettings.Effective(provider.NetworkProxy, keyNetworkProxy);
+        var proxy = new NetworkProxyResolver(settings, SystemProxyResolver.Shared).Resolve(new Uri(provider.BaseUrl))?.ProxyUrl;
+        // 手动查询独立使用一次客户端，退出即释放；不同账号、出口之间不共用连接。
+        using var client = new HttpClient(new SocketsHttpHandler
+        {
+            AllowAutoRedirect = false, AutomaticDecompression = DecompressionMethods.None, UseCookies = false,
+            UseProxy = proxy is not null, Proxy = proxy is null ? null : NetworkProxyResolver.WebProxyFor(proxy),
+        });
+        return await FetchAsync(provider, apiKey, clientType, client, cancellationToken, authMode).ConfigureAwait(false);
+    }
 
     internal static async Task<IReadOnlyList<string>> FetchAsync(ProviderEndpoint provider, string apiKey, ClientType clientType, HttpClient client,
         CancellationToken cancellationToken, ClaudeAuthMode authMode = ClaudeAuthMode.Bearer)

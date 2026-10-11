@@ -36,6 +36,8 @@ public sealed class ProviderEndpoint : IEquatable<ProviderEndpoint>
 
     public List<RequestRule> RequestRules { get; set; } = new();
 
+    public NetworkProxySettings NetworkProxy { get; set; } = new();
+
     public ProviderEndpoint()
     {
     }
@@ -56,6 +58,7 @@ public sealed class ProviderEndpoint : IEquatable<ProviderEndpoint>
         WebsiteUrl = WebsiteUrl.Trim();
         Notes = Notes.Trim();
         Models.NormalizeInPlace();
+        NetworkProxy.NormalizeInPlace();
         foreach (var rule in RequestRules) rule.NormalizeInPlace();
         FetchedModels = FetchedModels.Where(model => !string.IsNullOrWhiteSpace(model))
             .Select(model => model.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
@@ -79,6 +82,7 @@ public sealed class ProviderEndpoint : IEquatable<ProviderEndpoint>
         }
 
         UrlRules.ValidateBaseUrl(BaseUrl, "服务商地址");
+        NetworkProxy.Validate();
         if (!Enum.IsDefined(ClientType))
         {
             throw new ConfigException("请选择有效的客户端类型");
@@ -105,6 +109,7 @@ public sealed class ProviderEndpoint : IEquatable<ProviderEndpoint>
         var keyNames = new HashSet<string>();
         foreach (var key in Keys)
         {
+            key.NetworkProxy.Validate();
             if (key.Id.Length == 0)
             {
                 throw new ConfigException($"服务商“{Name}”有 Key 缺少 ID");
@@ -150,6 +155,7 @@ public sealed class ProviderEndpoint : IEquatable<ProviderEndpoint>
         Notes = Notes,
         Keys = Keys.Select(key => key.Clone()).ToList(),
         RequestRules = RequestRules.Select(rule => rule.Clone()).ToList(),
+        NetworkProxy = NetworkProxy.Clone(),
     };
 
     public bool Equals(ProviderEndpoint? other)
@@ -165,6 +171,7 @@ public sealed class ProviderEndpoint : IEquatable<ProviderEndpoint>
             && WebsiteUrl == other.WebsiteUrl
             && Notes == other.Notes
             && RequestRules.SequenceEqual(other.RequestRules)
+            && NetworkProxy.Equals(other.NetworkProxy)
             && Keys.SequenceEqual(other.Keys);
     }
 

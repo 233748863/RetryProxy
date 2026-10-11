@@ -16,6 +16,7 @@
                 <ComboBoxItem Content="x-api-key" />
             </ComboBox>
         </StackPanel>
+        <drawers:NetworkProxyEditor x:Name="NetworkEditor" Margin="0,16,0,0" />
         <TextBlock Text="{i18n:T 官网}" Margin="0,12,0,4" />
         <ui:TextBox x:Name="WebsiteBox" AutomationProperties.Name="{i18n:T 官网}" />
         <TextBlock Text="{i18n:T 备注}" Margin="0,12,0,4" />

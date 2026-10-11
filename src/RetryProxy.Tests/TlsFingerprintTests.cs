@@ -387,6 +387,75 @@ public class TlsFingerprintTests
         Assert.Contains("连接上游失败，代理要求认证（HTTP 407），链路：系统代理", await proxy.Logs());
     }
 
+    [Theory]
+    [InlineData("http", ClientType.Claude)]
+    [InlineData("socks5", ClientType.Claude)]
+    [InlineData("socks5h", ClientType.Claude)]
+    [InlineData("http", ClientType.Codex)]
+    [InlineData("socks5", ClientType.Codex)]
+    [InlineData("socks5h", ClientType.Codex)]
+    public async Task CustomNetworkProxyOverridesSystemAndKeepsItsOwnTlsPool(string scheme, ClientType client)
+    {
+        var connections = new ConcurrentQueue<string>();
+        await using var upstream = await HttpsUpstream.StartAsync(context =>
+        {
+            Assert.False(context.Request.Headers.ContainsKey("Proxy-Authorization"));
+            connections.Enqueue(context.Connection.Id);
+            return Upstream.Json(context, 200, "{\"ok\":true}");
+        });
+        await using var system = await TunnelProxy.StartAsync("http", "", "");
+        await using var custom = await TunnelProxy.StartAsync(scheme, "user", "p@ss");
+        await using var proxy = await TlsProxy.StartAsync(upstream.BaseUrl, upstream.Certificate,
+            new FixedProxyResolver(new Uri($"http://127.0.0.1:{system.Port}")), client);
+        using var http = TestClient.Create(10);
+        foreach (var direct in new[] { false, true, false })
+        {
+            var settings = direct ? new NetworkProxySettings { Mode = NetworkProxyMode.Direct }
+                : new NetworkProxySettings { Mode = NetworkProxyMode.Custom, Address = $"{scheme}://127.0.0.1:{custom.Port}", Username = "user", Password = "p@ss" };
+            proxy.Proxy.UpdateSnapshot(ChannelSnapshot.FromRuntime(proxy.Proxy.Config, networkProxy: settings));
+            using var response = await TestClient.Send(http, HttpMethod.Post, $"{proxy.Address}/v1/messages", "{}", "application/json");
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            await response.Content.ReadAsStringAsync();
+        }
+        Assert.Empty(system.Targets);
+        Assert.Single(custom.Targets);
+        var ids = connections.ToArray();
+        Assert.Equal(3, ids.Length);
+        Assert.Equal(ids[0], ids[2]);
+        Assert.NotEqual(ids[0], ids[1]);
+    }
+
+    [Theory]
+    [InlineData("http", ClientType.Claude)]
+    [InlineData("socks5", ClientType.Claude)]
+    [InlineData("http", ClientType.Codex)]
+    [InlineData("socks5", ClientType.Codex)]
+    public async Task ChangedProxyPasswordCannotReuseAuthenticatedConnectionOrFallBackToDirect(string scheme, ClientType client)
+    {
+        var reached = 0;
+        await using var upstream = await HttpsUpstream.StartAsync(context => { Interlocked.Increment(ref reached); return Upstream.Json(context, 200, "{}"); });
+        await using var tunnel = await TunnelProxy.StartAsync(scheme, "user", "right-password");
+        await using var proxy = await TlsProxy.StartAsync(upstream.BaseUrl, upstream.Certificate, client: client);
+        using var http = TestClient.Create(10);
+        foreach (var password in new[] { "right-password", "wrong-private-password" })
+        {
+            var settings = new NetworkProxySettings
+            {
+                Mode = NetworkProxyMode.Custom, Address = $"{scheme}://127.0.0.1:{tunnel.Port}", Username = "user", Password = password,
+            };
+            proxy.Proxy.UpdateSnapshot(ChannelSnapshot.FromRuntime(proxy.Proxy.Config, networkProxy: settings));
+            using var response = await TestClient.Send(http, HttpMethod.Post, $"{proxy.Address}/v1/messages", "{}", "application/json");
+            Assert.Equal(password == "right-password", response.IsSuccessStatusCode);
+            await response.Content.ReadAsStringAsync();
+        }
+        Assert.Equal(1, reached);
+        Assert.Single(tunnel.Targets);
+        var logs = await proxy.Logs();
+        Assert.Contains("链路：指定代理", logs);
+        Assert.DoesNotContain("wrong-private-password", logs);
+        Assert.DoesNotContain("right-password", logs);
+    }
+
     [Fact]
     public async Task SendsRequestHeadersInClientOrderOverFingerprintConnection()
     {
@@ -931,7 +1000,7 @@ public class TlsFingerprintTests
             var expected = "Proxy-Authorization: Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes($"{_user}:{_password}"));
             if (_user.Length > 0 && !lines.Contains(expected))
             {
-                await stream.WriteAsync(Encoding.ASCII.GetBytes("HTTP/1.1 407 Proxy Authentication Required\r\nContent-Length: 0\r\n\r\n"));
+                await stream.WriteAsync(Encoding.ASCII.GetBytes("HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"fixture\"\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"));
                 return null;
             }
 

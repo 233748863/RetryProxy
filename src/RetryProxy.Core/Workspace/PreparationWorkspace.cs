@@ -72,6 +72,12 @@ public sealed class PreparationWorkspace
 
     public CliCredential ResolveCredential(PreparationDialogState options) => ResolveTarget(options).Credential;
 
+    public (CliCredential Credential, NetworkProxySettings NetworkProxy) ResolveModelQuery(PreparationDialogState options)
+    {
+        var result = ResolveTarget(options);
+        return (result.Credential, result.Target?.NetworkProxy.Clone() ?? new());
+    }
+
     private (CliCredential Credential, PreparationTarget? Target) ResolveTarget(PreparationDialogState options)
     {
         if (!Enum.IsDefined(options.ClientType) || !Enum.IsDefined(options.Mode))
@@ -375,7 +381,7 @@ public sealed class PreparationWorkspace
                     .AsPreparationProxy(plan.Upstream.ApiKey, plan.Credential.ApiKey, plan.Upstream.AuthMode);
                 task.Service = service;
                 service.SetUiNotifier(_uiNotifier);
-                if (!service.RequestStart(plan.Runtime, ChannelSnapshot.FromRuntime(plan.Runtime, plan.Target?.RequestRules))) throw new InvalidOperationException();
+                if (!service.RequestStart(plan.Runtime, ChannelSnapshot.FromRuntime(plan.Runtime, plan.Target?.RequestRules, plan.Target?.NetworkProxy))) throw new InvalidOperationException();
                 startedCount++;
                 logger.WithActivity(LogActivity.Preparation).Info($"已提交准备 · 模型 {task.Model} · 思考 {task.ReasoningEffort.Label()}");
             }

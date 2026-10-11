@@ -1,0 +1,26 @@
+<UserControl x:Class="RetryProxy.View.Drawers.NetworkProxyEditor"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:i18n="clr-namespace:RetryProxy.Service.I18n"
+             xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml">
+    <StackPanel>
+        <TextBlock Text="{i18n:T 联网方式}" Margin="0,0,0,4" />
+        <ComboBox x:Name="ModeBox" SelectionChanged="ModeChanged" AutomationProperties.Name="{i18n:T 联网方式}">
+            <ComboBoxItem><TextBlock x:Name="InheritText" TextWrapping="Wrap" /></ComboBoxItem>
+            <ComboBoxItem Content="{i18n:T 直连}" />
+            <ComboBoxItem Content="{i18n:T 指定网络代理}" />
+        </ComboBox>
+        <TextBlock Text="{i18n:T 获取模型、日常请求和后台准备均使用此设置。}" TextWrapping="Wrap" Margin="0,4,0,0"
+                   Foreground="{ui:ThemeResource TextFillColorSecondaryBrush}" />
+        <StackPanel x:Name="CustomPanel" Margin="0,8,0,0" Visibility="Collapsed">
+            <TextBlock Text="{i18n:T 网络代理地址}" Margin="0,0,0,4" />
+            <ui:TextBox x:Name="AddressBox" MaxLength="2048" AutomationProperties.Name="{i18n:T 网络代理地址}" />
+            <TextBlock Text="{i18n:T 例如 http://127.0.0.1:7897 或 socks5://127.0.0.1:1080}" TextWrapping="Wrap" Margin="0,4,0,0"
+                       Foreground="{ui:ThemeResource TextFillColorSecondaryBrush}" />
+            <TextBlock Text="{i18n:T 代理用户名（可空）}" Margin="0,12,0,4" />
+            <ui:TextBox x:Name="UsernameBox" MaxLength="255" AutomationProperties.Name="{i18n:T 代理用户名（可空）}" />
+            <TextBlock Text="{i18n:T 代理密码（可空）}" Margin="0,12,0,4" />
+            <PasswordBox x:Name="PasswordBox" MaxLength="255" AutomationProperties.Name="{i18n:T 代理密码（可空）}" />
+        </StackPanel>
+    </StackPanel>
+</UserControl>

@@ -406,6 +406,8 @@ public partial class PreparationDrawer : DrawerPage
             Url = Mode == PrepareMode.CustomProvider ? ProviderUrlBox.Text : provider?.BaseUrl,
             Secret = Mode == PrepareMode.CustomProvider ? SecretBox.Password : provider?.Keys.FirstOrDefault(key => key.Id == keyId)?.ApiKey,
             Auth = provider?.AuthMode,
+            ProviderNetwork = provider?.NetworkProxy,
+            KeyNetwork = provider?.Keys.FirstOrDefault(key => key.Id == keyId)?.NetworkProxy,
         });
     }
 
@@ -455,8 +457,9 @@ public partial class PreparationDrawer : DrawerPage
         ProviderEndpoint provider;
         try
         {
-            credential = _preparations.ResolveCredential(FirstKeyDraft());
-            provider = new ProviderEndpoint("独立准备", credential.BaseUrl);
+            var query = _preparations.ResolveModelQuery(FirstKeyDraft());
+            credential = query.Credential;
+            provider = new ProviderEndpoint("独立准备", credential.BaseUrl) { NetworkProxy = query.NetworkProxy };
         }
         catch (Exception error) when (error is WorkspaceException or CliException or ConfigException)
         {

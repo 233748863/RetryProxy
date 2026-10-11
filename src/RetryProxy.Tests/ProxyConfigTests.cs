@@ -729,7 +729,7 @@ public class ProxyConfigTests
         Assert.Equal(
             new[]
             {
-                "id", "client_type", "name", "base_url", "auth_mode", "models", "website_url", "notes", "sort_index", "request_rules", "keys", "fetched_models",
+                "id", "client_type", "name", "base_url", "auth_mode", "network_proxy", "models", "website_url", "notes", "sort_index", "request_rules", "keys", "fetched_models",
             },
             providerKeys);
         var routeKeys = document.RootElement.GetProperty("routes")[0].EnumerateObject().Select(property => property.Name).ToArray();

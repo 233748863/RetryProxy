@@ -24,6 +24,7 @@ public partial class KeyDrawer : DrawerPage
         NameBox.Text = Draft.Name;
         SecretBox.Password = Draft.ApiKey;
         NotesBox.Text = Draft.Notes;
+        NetworkEditor.Load(Draft.NetworkProxy, true);
         ModelBox.ItemsSource = provider.FetchedModels.Concat(new[] { provider.Models.Model })
             .Where(model => !string.IsNullOrWhiteSpace(model)).Distinct().ToArray();
         ModelBox.Text = Draft.ModelOverride?.Model ?? string.Empty;
@@ -45,10 +46,13 @@ public partial class KeyDrawer : DrawerPage
     {
         NameBox.Text, Secret = SecretBox.Password, Model = ModelBox.Text,
         Context = _overrideContext, Notes = NotesBox.Text,
+        Network = NetworkEditor.CaptureState(),
     });
 
     public string? ReadDraft()
     {
+        if (NetworkEditor.Read(out var network) is { } networkError) return networkError;
+        Draft.NetworkProxy = network;
         Draft.Name = NameBox.Text.Trim();
         Draft.ApiKey = SecretBox.Password.Trim();
         Draft.Notes = NotesBox.Text.Trim();
@@ -107,5 +111,6 @@ public partial class KeyDrawer : DrawerPage
         _syncingSecret = true;
         SecretBox.Clear();
         VisibleSecretBox.Clear();
+        NetworkEditor.ClearCredentials();
     }
 }

@@ -57,6 +57,8 @@ internal static class DrawerText
 
     public static string? ValidateKey(ProviderKey key, ProviderEndpoint provider, bool isNew)
     {
+        try { key.NetworkProxy.Validate(); }
+        catch (ConfigException error) { return error.Message; }
         if (string.IsNullOrWhiteSpace(key.Name)) return "Key 名称不能为空";
         if (string.IsNullOrWhiteSpace(key.ApiKey)) return "请填写 API Key";
         if (key.ApiKey.Any(char.IsControl)) return "API Key 不能包含控制字符";

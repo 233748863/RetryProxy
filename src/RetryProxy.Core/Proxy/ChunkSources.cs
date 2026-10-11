@@ -75,14 +75,16 @@ internal sealed class HttpChunkSource : IChunkSource
     private readonly Stream _stream;
     private readonly TimeSpan _readTimeout;
     private readonly CancellationTokenSource? _overall;
+    private readonly IDisposable? _connectionLease;
     private bool _disposed;
 
-    public HttpChunkSource(HttpResponseMessage response, Stream stream, TimeSpan readTimeout, CancellationTokenSource? overall)
+    public HttpChunkSource(HttpResponseMessage response, Stream stream, TimeSpan readTimeout, CancellationTokenSource? overall, IDisposable? connectionLease = null)
     {
         _response = response;
         _stream = stream;
         _readTimeout = readTimeout;
         _overall = overall;
+        _connectionLease = connectionLease;
     }
 
     public async Task<ReadOnlyMemory<byte>?> ReadAsync()
@@ -132,8 +134,8 @@ internal sealed class HttpChunkSource : IChunkSource
         {
         }
 
-        _response.Dispose();
-        _overall?.Dispose();
+        try { _response.Dispose(); _overall?.Dispose(); }
+        finally { _connectionLease?.Dispose(); }
     }
 }
 

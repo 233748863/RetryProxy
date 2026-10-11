@@ -53,6 +53,7 @@ public partial class ProviderDrawer : DrawerPage
         AuthPanel.Visibility = ContextCheck.Visibility = RolesExpander.Visibility = claude ? Visibility.Visible : Visibility.Collapsed;
         CodexPanel.Visibility = claude ? Visibility.Collapsed : Visibility.Visible;
         RulesEditor.Load(Draft.ClientType, Draft.RequestRules);
+        NetworkEditor.Load(Draft.NetworkProxy, false);
         UpdateModels();
         RefreshKeys();
         _initialState = CaptureState();
@@ -75,11 +76,13 @@ public partial class ProviderDrawer : DrawerPage
         Fable = new { FableField.ModelText, FableField.ExplicitContext },
         Window = ContextWindowBox.Text, Compact = AutoCompactBox.Text, Draft.Keys, Draft.FetchedModels,
         Rules = RulesEditor.CaptureState(),
+        Network = NetworkEditor.CaptureState(),
     });
 
     public string? ReadDraft()
     {
         if (RulesEditor.Read(out var rules) is { } ruleError) return ruleError;
+        if (NetworkEditor.Read(out var network) is { } networkError) return networkError;
         long? window = null, compact = null;
         if (Draft.ClientType == ClientType.Codex)
         {
@@ -108,6 +111,7 @@ public partial class ProviderDrawer : DrawerPage
         Draft.Models.ContextWindow = window;
         Draft.Models.AutoCompactTokenLimit = compact;
         Draft.RequestRules = rules;
+        Draft.NetworkProxy = network;
         if (Draft.BaseUrl != _modelsSourceUrl) Draft.FetchedModels.Clear();
         try { Draft.Validate(); }
         catch (ConfigException error) { return error.Message; }
@@ -153,6 +157,11 @@ public partial class ProviderDrawer : DrawerPage
             panel.Children.Add(new TextBlock
             {
                 Text = key.ModelOverride is { Model.Length: > 0 } model ? model.Model : DrawerText.T("沿用供应商模型"),
+                Margin = new Thickness(0, 4, 0, 0), TextWrapping = TextWrapping.Wrap,
+            });
+            panel.Children.Add(new TextBlock
+            {
+                Text = DrawerText.T(key.NetworkProxy.Mode switch { NetworkProxyMode.Direct => "联网：直连", NetworkProxyMode.Custom => "联网：指定网络代理", _ => "联网：沿用供应商" }),
                 Margin = new Thickness(0, 4, 0, 0), TextWrapping = TextWrapping.Wrap,
             });
             var actions = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 8, 0, 0) };
@@ -247,10 +256,13 @@ public partial class ProviderDrawer : DrawerPage
     {
         if (_fetch is not null) return;
         SetError(null);
+        if (NetworkEditor.Read(out var network) is { } networkError) { SetError(networkError); return; }
+        var networkState = NetworkEditor.CaptureState();
+        var keyNetwork = Draft.Keys.FirstOrDefault()?.NetworkProxy.Clone();
         var apiKey = Draft.Keys.FirstOrDefault()?.ApiKey.Trim() ?? string.Empty;
         if (apiKey.Length == 0) { SetError("请先填写第一个 Key 的密钥"); return; }
         if (apiKey.Any(char.IsControl)) { SetError("API Key 不能包含控制字符"); return; }
-        var provider = new ProviderEndpoint("模型查询", UrlBox.Text);
+        var provider = new ProviderEndpoint("模型查询", UrlBox.Text) { NetworkProxy = network };
         try { provider.Validate(); }
         catch (ConfigException error) { SetError(error.Message); return; }
         var auth = AuthBox.SelectedIndex == 1 ? ClaudeAuthMode.ApiKey : ClaudeAuthMode.Bearer;
@@ -263,12 +275,13 @@ public partial class ProviderDrawer : DrawerPage
         UpdateFetchStatus();
         try
         {
-            var models = await ProviderModelFetcher.FetchAsync(provider, apiKey, Draft.ClientType, cancellation.Token, auth);
+            var models = await ProviderModelFetcher.FetchAsync(provider, apiKey, Draft.ClientType, cancellation.Token, auth, keyNetwork);
             cancellation.Token.ThrowIfCancellationRequested();
             if (UrlBox.Text.Trim().TrimEnd('/') != provider.BaseUrl || Draft.Keys.FirstOrDefault()?.ApiKey.Trim() != apiKey
-                || AuthBox.SelectedIndex != (auth == ClaudeAuthMode.Bearer ? 0 : 1))
+                || AuthBox.SelectedIndex != (auth == ClaudeAuthMode.Bearer ? 0 : 1)
+                || networkState != NetworkEditor.CaptureState() || !Equals(keyNetwork, Draft.Keys.FirstOrDefault()?.NetworkProxy))
             {
-                _fetchMessage = "获取期间地址、认证方式或第一个 Key 已变化，请重新获取模型";
+                _fetchMessage = "获取期间地址、认证、联网方式或第一个 Key 已变化，请重新获取模型";
                 return;
             }
             Draft.FetchedModels = models.ToList();
@@ -299,4 +312,6 @@ public partial class ProviderDrawer : DrawerPage
         RefreshKeys();
         UpdateFetchStatus();
     }
+
+    public override void Dispose() { base.Dispose(); NetworkEditor.ClearCredentials(); }
 }

@@ -32,7 +32,7 @@ namespace RetryProxy.Core.Proxy;
 /// <summary>
 /// 请求转发与重试管线（对应 proxy.rs 的 RetryProxy）。一个实例服务一条通道。
 /// </summary>
-public sealed class RetryProxy
+public sealed class RetryProxy : IDisposable
 {
     public const int MaxRequestBodyBytes = 100 * 1024 * 1024;
     public const int MaxRetryResponseBodyBytes = 1024 * 1024;
@@ -57,14 +57,10 @@ public sealed class RetryProxy
 
     private static readonly string[] AuthHeaders = { "authorization", "x-api-key", "api-key" };
 
-    /// <summary>http 上游（本机测试、本机另一个程序）。</summary>
-    private readonly HttpClient _httpClient;
-    /// <summary>https 上游：Claude 走 TLS 指纹连接器，Codex 走系统 TLS；两者都按客户端原顺序重排请求头。</summary>
-    private readonly HttpClient _httpsClient;
+    private readonly UpstreamClientPool _upstreamClients;
     private readonly PromptCache _promptCache = new();
     private readonly ChannelState _channel;
-    /// <summary>Claude 通道一律创建（默认全应用共用 <see cref="TlsFingerprintStore.Shared"/>），其他通道不触碰指纹组件。</summary>
-    private readonly TlsFingerprintConnector? _tlsConnector;
+    private X509Certificate2? _fingerprintTrustedRoot;
     private X509Certificate2? _trustedTestCertificate;
     private TlsFingerprintStore? _tlsFingerprints;
     /// <summary>一键准备的后台临时代理：只接受带访问密钥的请求，不按通道参数重试（见 <see cref="AsPreparationProxy"/>）。</summary>
@@ -83,47 +79,8 @@ public sealed class RetryProxy
         Cancel = cancel;
         ProxyResolver = proxyResolver ?? SystemProxyResolver.Shared;
         _channel = new ChannelState(ChannelSnapshot.FromRuntime(config));
-        try
-        {
-            // 每条通道按 http / https 各一个客户端；连接超时在连接回调里按当前快照计时，改参数后新连接立即生效。
-            var plain = UpstreamHandler();
-            plain.UseProxy = true;
-            plain.Proxy = new ResolverWebProxy(ProxyResolver);
-            plain.ConnectCallback = (context, token) => TimedConnectAsync(context, token, DialAsync);
-            _httpClient = new HttpClient(plain, disposeHandler: true) { Timeout = Timeout.InfiniteTimeSpan };
-
-            var secure = UpstreamHandler();
-            if (config.ClientType == ClientType.Claude)
-            {
-                // Claude 通道模拟 Claude Code 指纹（TLS 握手 + 请求头原顺序）。连接器自行处理系统代理与 TLS，
-                // 请求改写成 http:// 后 HttpClient 只负责 HTTP/1.1。一律创建，切到 https 供应商时不用重建通道。
-                _tlsFingerprints = TlsFingerprintStore.Shared;
-                var connector = new TlsFingerprintConnector(ProxyResolver, () => _tlsFingerprints!.Current);
-                _tlsConnector = connector;
-                secure.UseProxy = false;
-                secure.ConnectCallback = (context, token) => TimedConnectAsync(context, token, connector.ConnectAsync);
-            }
-            else
-            {
-                // Codex 在 Windows 上走 SChannel，TLS 握手与 .NET 默认一致，只需在系统 TLS 之上按 Codex 原顺序重排请求头。
-                // 经 HTTP 系统代理时，到代理的 CONNECT 连接也会经过这里，隧道建好后其上跑的是 TLS 握手字节，不能套重排层。
-                secure.UseProxy = true;
-                secure.Proxy = new ResolverWebProxy(ProxyResolver);
-                secure.ConnectCallback = (context, token) => TimedConnectAsync(context, token, DialAsync);
-                secure.PlaintextStreamFilter = (context, _) => ValueTask.FromResult(context.InitialRequestMessage.Method == HttpMethod.Connect
-                    ? context.PlaintextStream
-                    : new HeaderOrderStream(context.PlaintextStream));
-                secure.SslOptions.RemoteCertificateValidationCallback = (_, certificate, _, errors) =>
-                    errors == System.Net.Security.SslPolicyErrors.None
-                    || (_trustedTestCertificate is not null && certificate is not null && certificate.GetCertHashString() == _trustedTestCertificate.Thumbprint);
-            }
-
-            _httpsClient = new HttpClient(secure, disposeHandler: true) { Timeout = Timeout.InfiniteTimeSpan };
-        }
-        catch (Exception error)
-        {
-            throw new ConfigException($"无法初始化上游 HTTP 客户端：{error.Message}");
-        }
+        if (config.ClientType == ClientType.Claude) _tlsFingerprints = TlsFingerprintStore.Shared;
+        _upstreamClients = new UpstreamClientPool(CreateUpstreamClient);
 
         KeepAlive = new KeepAliveWatchdog(config.KeepaliveEnabled, TimeSpan.FromSeconds(config.KeepaliveIdleMinutes * 60.0));
         KeepAlive.SetContextLimit((ulong)Math.Max(config.KeepaliveContextLimit, 1));
@@ -136,6 +93,43 @@ public sealed class RetryProxy
         UseCookies = false,
         PooledConnectionIdleTimeout = TimeSpan.FromSeconds(90),
     };
+
+    private HttpClient CreateUpstreamClient(Uri? proxy, bool secure)
+    {
+        var handler = UpstreamHandler();
+        try
+        {
+            if (secure && Config.ClientType == ClientType.Claude)
+            {
+                var connector = new TlsFingerprintConnector(new FixedNetworkProxyResolver(proxy), () => _tlsFingerprints!.Current);
+                handler.UseProxy = false;
+                handler.ConnectCallback = (context, token) =>
+                {
+                    connector.TrustedRoot = _fingerprintTrustedRoot;
+                    return TimedConnectAsync(context, token, connector.ConnectAsync);
+                };
+            }
+            else
+            {
+                handler.UseProxy = proxy is not null;
+                if (proxy is not null) handler.Proxy = NetworkProxyResolver.WebProxyFor(proxy);
+                handler.ConnectCallback = (context, token) => TimedConnectAsync(context, token, DialAsync);
+                if (secure)
+                {
+                    // CONNECT 的明文层不能重排 TLS 字节；仅最终 HTTP 层恢复客户端头序。
+                    handler.PlaintextStreamFilter = (context, _) => ValueTask.FromResult(context.InitialRequestMessage.Method == HttpMethod.Connect
+                        ? context.PlaintextStream : new HeaderOrderStream(context.PlaintextStream));
+                    handler.SslOptions.RemoteCertificateValidationCallback = (_, certificate, _, errors) =>
+                        errors == System.Net.Security.SslPolicyErrors.None
+                        || (_trustedTestCertificate is not null && certificate is not null && certificate.GetCertHashString() == _trustedTestCertificate.Thumbprint);
+                }
+            }
+            return new HttpClient(handler, disposeHandler: true) { Timeout = Timeout.InfiniteTimeSpan };
+        }
+        catch { handler.Dispose(); throw; }
+    }
+
+    public void Dispose() => _upstreamClients.Dispose();
 
     /// <summary>
     /// 建立连接限时：取当前快照的单次超时。到时抛 <see cref="TimeoutException"/>，日志归为“连上游一直连不上”。
@@ -203,7 +197,7 @@ public sealed class RetryProxy
     }
 
     /// <summary>是否用 Claude Code 的 TLS 指纹连上游：Claude 通道且当前供应商是 https。</summary>
-    public bool UsesTlsFingerprint => _tlsConnector is not null
+    public bool UsesTlsFingerprint => _tlsFingerprints is not null
         && _channel.Current.UpstreamBaseUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>当前快照（地址、Key、参数）。</summary>
@@ -225,10 +219,10 @@ public sealed class RetryProxy
     /// <summary>仅供测试：替换指纹来源，并额外信任测试证书。</summary>
     internal RetryProxy WithTlsFingerprint(TlsFingerprintStore store, X509Certificate2? trustedRoot)
     {
-        if (_tlsConnector is not null)
+        if (_tlsFingerprints is not null)
         {
             _tlsFingerprints = store;
-            _tlsConnector.TrustedRoot = trustedRoot;
+            _fingerprintTrustedRoot = trustedRoot;
         }
 
         return this;
@@ -240,7 +234,7 @@ public sealed class RetryProxy
     /// </summary>
     public async Task RefreshTlsFingerprintLoopAsync(CancellationToken cancel)
     {
-        if (_tlsConnector is null || _tlsFingerprints is null)
+        if (_tlsFingerprints is null)
         {
             return;
         }
@@ -505,7 +499,7 @@ public sealed class RetryProxy
 
         public string TargetUrl { get; init; } = string.Empty;
 
-        public bool UsingSystemProxy { get; init; }
+        public ProxyDecision? NetworkProxy { get; init; }
 
         /// <summary>发往上游的模型（改写后），统计与日志用。</summary>
         public string? Model { get; init; }
@@ -1384,7 +1378,7 @@ public sealed class RetryProxy
             AlternateHeaderOrder = alternateOrder,
             CacheRequest = cacheRequest,
             TargetUrl = targetUrl,
-            UsingSystemProxy = ProxyResolver.Resolve(parsedTarget) is not null,
+            NetworkProxy = new NetworkProxyResolver(snapshot.NetworkProxy, ProxyResolver).Resolve(parsedTarget),
             Model = model,
             ReasoningEffort = reasoningEffort,
             ModelIdentity = modelIdentity,
@@ -1443,13 +1437,13 @@ public sealed class RetryProxy
         var requestUri = new Uri(plan.TargetUrl);
         var secure = requestUri.Scheme == Uri.UriSchemeHttps;
         string? hostHeader = null;
-        if (secure && _tlsConnector is not null)
+        if (secure && _tlsFingerprints is not null)
         {
             hostHeader = TlsFingerprintConnector.HostHeader(requestUri);
             requestUri = TlsFingerprintConnector.PlainRequestUri(requestUri);
         }
 
-        var request = new HttpRequestMessage(new HttpMethod(ctx.Method), requestUri)
+        using var request = new HttpRequestMessage(new HttpMethod(ctx.Method), requestUri)
         {
             Version = HttpVersion.Version11,
             VersionPolicy = HttpVersionPolicy.RequestVersionOrLower,
@@ -1491,17 +1485,21 @@ public sealed class RetryProxy
             sendCts.CancelAfter(timeout);
         }
 
-        HttpResponseMessage response;
+        HttpResponseMessage? response = null;
+        UpstreamClientPool.Lease? lease = null;
         Stream stream;
         ctx.Diagnostics?.SendStarted(plan.Snapshot, plan.Model);
         try
         {
-            response = await (secure ? _httpsClient : _httpClient).SendAsync(request, HttpCompletionOption.ResponseHeadersRead, sendCts.Token).ConfigureAwait(false);
+            lease = _upstreamClients.Rent(plan.NetworkProxy?.ProxyUrl, secure);
+            response = await lease.Client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, sendCts.Token).ConfigureAwait(false);
             ctx.Diagnostics?.Headers((int)response.StatusCode);
             stream = await response.Content.ReadAsStreamAsync(sendCts.Token).ConfigureAwait(false);
         }
         catch (OperationCanceledException failure)
         {
+            response?.Dispose();
+            lease?.Dispose();
             overall?.Dispose();
             if (attempt.Token.IsCancellationRequested)
             {
@@ -1512,6 +1510,8 @@ public sealed class RetryProxy
         }
         catch (Exception failure) when (failure is not UpstreamException)
         {
+            response?.Dispose();
+            lease?.Dispose();
             overall?.Dispose();
             throw UpstreamException.From(failure);
         }
@@ -1537,7 +1537,7 @@ public sealed class RetryProxy
             (int)response.StatusCode,
             HeaderRules.CopyResponseHeaders(raw),
             response.Content.Headers.ContentLength,
-            new HttpChunkSource(response, stream, timeout, overall));
+            new HttpChunkSource(response, stream, timeout, overall, lease));
     }
 
     private async Task<UpstreamResponse> SendCacheAwareAsync(RequestContext ctx, AttemptScope attempt, bool streaming)
@@ -1713,7 +1713,7 @@ public sealed class RetryProxy
     {
         var requestId = ctx.RequestId;
         var plan = attempt.Plan;
-        var usingSystemProxy = plan.UsingSystemProxy;
+        var networkProxy = plan.NetworkProxy;
         var generationTimeoutSeconds = plan.Snapshot.GenerationTimeoutSeconds;
         var stats = new ResponseStats(responseHeaders, ctx.SafePath, plan.Model, plan.ReasoningEffort, plan.ModelIdentity).WithCacheKeyState(plan.CacheRequest.State);
         ctx.Diagnostics?.Observe(stats);
@@ -1850,7 +1850,7 @@ public sealed class RetryProxy
         return new ProxyResponse(
             status,
             responseHeaders,
-            token => ForwardBody(ctx, reader, lifecycle, prefixBytes, firstChunk, upstreamFinished, status, usingSystemProxy, token),
+            token => ForwardBody(ctx, reader, lifecycle, prefixBytes, firstChunk, upstreamFinished, status, networkProxy, token),
             null);
     }
 
@@ -1862,7 +1862,7 @@ public sealed class RetryProxy
         ReadOnlyMemory<byte>? firstChunk,
         bool upstreamFinished,
         int status,
-        bool usingSystemProxy,
+        ProxyDecision? networkProxy,
         CancellationToken deliveryToken,
         [EnumeratorCancellation] CancellationToken enumeratorToken = default)
     {
@@ -1921,7 +1921,7 @@ public sealed class RetryProxy
             }
             catch (UpstreamException failure)
             {
-                lifecycle.Interrupted(NetworkErrorLabel.Describe(failure, usingSystemProxy, NetworkPhase.ReadingResponse));
+                lifecycle.Interrupted(NetworkErrorLabel.Describe(failure, networkProxy, NetworkPhase.ReadingResponse));
                 throw new ResponseStreamException(failure.Message);
             }
 
@@ -1964,7 +1964,7 @@ public sealed class RetryProxy
         var phase = status is null ? NetworkPhase.AwaitingResponse : NetworkPhase.ReadingResponse;
         var (label, fields) = error switch
         {
-            UpstreamException network => (NetworkErrorLabel.Describe(network, attempt.Plan.UsingSystemProxy, phase), string.Empty),
+            UpstreamException network => (NetworkErrorLabel.Describe(network, attempt.Plan.NetworkProxy, phase), string.Empty),
             NoGenerationException generation => (generation.Reason, generation.Fields),
             _ => throw error,
         };

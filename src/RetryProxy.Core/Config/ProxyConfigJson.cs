@@ -165,6 +165,7 @@ public static class ProxyConfigJson
         writer.WriteString("name", provider.Name);
         writer.WriteString("base_url", provider.BaseUrl);
         writer.WriteString("auth_mode", provider.AuthMode.AsConfigStr());
+        WriteNetworkProxy(writer, provider.NetworkProxy);
         writer.WriteStartObject("models");
         var models = provider.Models;
         writer.WriteString("model", models.Model);
@@ -209,6 +210,7 @@ public static class ProxyConfigJson
             writer.WriteString("id", key.Id);
             writer.WriteString("name", key.Name);
             writer.WriteString("api_key", key.ApiKey);
+            WriteNetworkProxy(writer, key.NetworkProxy);
             if (key.ModelOverride is { } modelOverride)
             {
                 writer.WriteStartObject("model_override");
@@ -233,6 +235,19 @@ public static class ProxyConfigJson
         }
 
         writer.WriteEndArray();
+        writer.WriteEndObject();
+    }
+
+    private static void WriteNetworkProxy(Utf8JsonWriter writer, NetworkProxySettings settings)
+    {
+        writer.WriteStartObject("network_proxy");
+        writer.WriteString("mode", settings.Mode switch { NetworkProxyMode.Direct => "direct", NetworkProxyMode.Custom => "custom", _ => "inherit" });
+        if (settings.Mode == NetworkProxyMode.Custom)
+        {
+            writer.WriteString("address", settings.Address);
+            writer.WriteString("username", settings.Username);
+            writer.WriteString("password", settings.Password);
+        }
         writer.WriteEndObject();
     }
 
@@ -359,6 +374,7 @@ public static class ProxyConfigJson
                 ?? throw new ConfigException($"{label} auth_mode 只能是 bearer 或 x_api_key"),
             Models = ParseModels(value, label),
             RequestRules = ParseArray(value, "request_rules", (element, _) => ParseRequestRule(element)),
+            NetworkProxy = ParseNetworkProxy(value),
             WebsiteUrl = OptionalString(value, "website_url", string.Empty),
             Notes = OptionalString(value, "notes", string.Empty),
             Keys = ParseArray(value, "keys", (element, keyIndex) => ParseKey(element, $"{label} keys 第 {keyIndex} 项")),
@@ -421,6 +437,25 @@ public static class ProxyConfigJson
         return rule;
     }
 
+    private static NetworkProxySettings ParseNetworkProxy(JsonElement parent)
+    {
+        if (!parent.TryGetProperty("network_proxy", out var value) || value.ValueKind == JsonValueKind.Null) return new();
+        if (value.ValueKind != JsonValueKind.Object) throw new ConfigException("联网设置必须是对象");
+        var settings = new NetworkProxySettings
+        {
+            Mode = OptionalString(value, "mode", "inherit") switch
+            {
+                "inherit" => NetworkProxyMode.Inherit, "direct" => NetworkProxyMode.Direct, "custom" => NetworkProxyMode.Custom,
+                _ => throw new ConfigException("请选择有效的联网方式"),
+            },
+            Address = OptionalString(value, "address", string.Empty),
+            Username = OptionalString(value, "username", string.Empty),
+            Password = OptionalString(value, "password", string.Empty),
+        }.Normalize();
+        settings.Validate();
+        return settings;
+    }
+
     private static RoleModel ParseRole(JsonElement models, string name, string label)
     {
         if (!models.TryGetProperty(name, out var element) || element.ValueKind == JsonValueKind.Null)
@@ -468,6 +503,7 @@ public static class ProxyConfigJson
             Name = RequiredString(value, "name", $"{label}缺少 name"),
             ApiKey = RequiredString(value, "api_key", $"{label}缺少 api_key"),
             ModelOverride = modelOverride,
+            NetworkProxy = ParseNetworkProxy(value),
             Notes = OptionalString(value, "notes", string.Empty),
         };
         key.NormalizeInPlace();

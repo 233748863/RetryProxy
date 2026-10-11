@@ -37,6 +37,8 @@ public sealed class ChannelSnapshot
 
     public IReadOnlyList<RequestRule> RequestRules { get; init; } = Array.Empty<RequestRule>();
 
+    public NetworkProxySettings NetworkProxy { get; init; } = new();
+
     /// <summary>当前 Key 的模型覆盖；为空表示沿用供应商的模型设置。</summary>
     public KeyModelOverride? ModelOverride { get; init; }
 
@@ -72,11 +74,12 @@ public sealed class ChannelSnapshot
     public bool SameKeyAs(ChannelSnapshot other) => ProviderId == other.ProviderId && KeyId == other.KeyId;
 
     /// <summary>由运行时配置生成：只有地址与参数，没有 Key 和本地口令（后台临时准备代理、测试）。</summary>
-    public static ChannelSnapshot FromRuntime(ProxyConfig config, IReadOnlyList<RequestRule>? requestRules = null) => new()
+    public static ChannelSnapshot FromRuntime(ProxyConfig config, IReadOnlyList<RequestRule>? requestRules = null, NetworkProxySettings? networkProxy = null) => new()
     {
         ClientType = config.ClientType,
         UpstreamBaseUrl = config.UpstreamBaseUrl,
         RequestRules = requestRules?.Select(rule => rule.Clone()).ToArray() ?? Array.Empty<RequestRule>(),
+        NetworkProxy = networkProxy?.Clone() ?? new(),
         MaxRetries = config.MaxRetries,
         TimeoutSeconds = config.TimeoutSeconds,
         GenerationTimeoutSeconds = config.GenerationTimeoutSeconds,
@@ -100,6 +103,7 @@ public sealed class ChannelSnapshot
         LocalToken = localToken,
         Models = Models,
         RequestRules = RequestRules,
+        NetworkProxy = NetworkProxy,
         ModelOverride = ModelOverride,
         KnownModels = KnownModels,
         MaxRetries = MaxRetries,

@@ -418,7 +418,8 @@ public sealed class ProxyService
         using (KeepAlive.RegisterService(flavor))
         {
             SetState(ServiceState.Running);
-            serviceLogger.Info($"代理已启动：{config.LocalUrl}{(label.Length > 0 ? $"，当前 {label}" : string.Empty)}（跟随系统代理）");
+            var network = proxy.Snapshot.NetworkProxy.Mode switch { NetworkProxyMode.Direct => "直连", NetworkProxyMode.Custom => "指定网络代理", _ => "跟随系统代理" };
+            serviceLogger.Info($"代理已启动：{config.LocalUrl}{(label.Length > 0 ? $"，当前 {label}" : string.Empty)}（{network}）");
             var keepAliveTask = KeepAlivePollLoopAsync(proxy, cancel.Token);
             var fingerprintTask = proxy.RefreshTlsFingerprintLoopAsync(cancel.Token);
             // 停用通道要立刻放弃在处理中的请求：RequestStop 已在取消前记下「处理中」的数量，这里取用后再取消并硬停 Kestrel。

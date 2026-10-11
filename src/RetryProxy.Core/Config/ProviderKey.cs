@@ -19,6 +19,8 @@ public sealed class ProviderKey : IEquatable<ProviderKey>
 
     public string Notes { get; set; } = string.Empty;
 
+    public NetworkProxySettings NetworkProxy { get; set; } = new();
+
     internal void NormalizeInPlace()
     {
         Id = Id.Trim();
@@ -26,6 +28,7 @@ public sealed class ProviderKey : IEquatable<ProviderKey>
         ApiKey = ApiKey.Trim();
         Notes = Notes.Trim();
         ModelOverride?.NormalizeInPlace();
+        NetworkProxy.NormalizeInPlace();
         if (ModelOverride is { Model.Length: 0 })
         {
             ModelOverride = null;
@@ -42,6 +45,7 @@ public sealed class ProviderKey : IEquatable<ProviderKey>
         ApiKey = ApiKey,
         ModelOverride = ModelOverride?.Clone(),
         Notes = Notes,
+        NetworkProxy = NetworkProxy.Clone(),
     };
 
     public bool Equals(ProviderKey? other)
@@ -51,6 +55,7 @@ public sealed class ProviderKey : IEquatable<ProviderKey>
             && Name == other.Name
             && ApiKey == other.ApiKey
             && Equals(ModelOverride, other.ModelOverride)
+            && NetworkProxy.Equals(other.NetworkProxy)
             && Notes == other.Notes;
     }
 

@@ -118,6 +118,12 @@ internal enum NetworkPhase
 internal static class NetworkErrorLabel
 {
     public static string Describe(UpstreamException error, bool usingSystemProxy, NetworkPhase phase)
+        => DescribeRoute(error, usingSystemProxy ? "系统代理" : "直连", phase);
+
+    public static string Describe(UpstreamException error, Service.ProxyDecision? proxy, NetworkPhase phase)
+        => DescribeRoute(error, proxy is null ? "直连" : proxy.FromSystem ? "系统代理" : "指定代理", phase);
+
+    private static string DescribeRoute(UpstreamException error, string route, NetworkPhase phase)
     {
         string kind;
         string reason;
@@ -140,7 +146,6 @@ internal static class NetworkErrorLabel
         }
 
         var diagnosis = Diagnose(error);
-        var route = usingSystemProxy ? "系统代理" : "直连";
         var cause = error.IsTimeout ? string.Empty : "，" + diagnosis.Plain;
 
         return $"{reason}{cause}，链路：{route}{TechnicalDetails(kind, diagnosis)}";

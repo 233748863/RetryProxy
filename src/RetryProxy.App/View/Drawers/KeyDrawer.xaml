@@ -15,6 +15,7 @@
                     SpellCheck.IsEnabled="False" AutomationProperties.Name="{i18n:T API Key}" />
         <CheckBox x:Name="ShowSecretCheck" Content="{i18n:T 显示密钥}" Checked="SecretVisibilityChanged"
                   Unchecked="SecretVisibilityChanged" Margin="0,8,0,0" />
+        <drawers:NetworkProxyEditor x:Name="NetworkEditor" Margin="0,16,0,0" />
         <TextBlock Text="{i18n:T 模型覆盖}" Margin="0,16,0,4" />
         <ComboBox x:Name="ModelBox" IsEditable="True" IsTextSearchEnabled="False"
                   AutomationProperties.Name="{i18n:T 模型覆盖}" />

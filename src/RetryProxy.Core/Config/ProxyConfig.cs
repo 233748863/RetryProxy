@@ -329,6 +329,7 @@ public sealed class ProxyConfig : IEquatable<ProxyConfig>
             LocalToken = route.LocalToken,
             Models = provider.Models.Clone(),
             RequestRules = provider.RequestRules.Select(rule => rule.Clone()).ToArray(),
+            NetworkProxy = NetworkProxySettings.Effective(provider.NetworkProxy, key?.NetworkProxy),
             ModelOverride = key?.ModelOverride?.Clone(),
             KnownModels = known,
             MaxRetries = runtime.MaxRetries,

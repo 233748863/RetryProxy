@@ -24,6 +24,7 @@ public sealed class PreparationTarget
     public required CliCredential Credential { get; init; }
     public string DefaultModel { get; init; } = string.Empty;
     public IReadOnlyList<RequestRule> RequestRules { get; init; } = Array.Empty<RequestRule>();
+    public NetworkProxySettings NetworkProxy { get; init; } = new();
 
     public override string ToString() => $"PreparationTarget {{ {ClientType}, {ProviderName} · {KeyName} }}";
 }

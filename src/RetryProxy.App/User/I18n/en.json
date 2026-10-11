@@ -829,6 +829,7 @@
   "请求未报告用量": "Requests did not report usage",
   "用量趋势，方向键查看，回车选择时段": "Usage chart. Use arrow keys to inspect and Enter to select a period.",
   "活跃日历": "Activity calendar",
+  "回到最近": "Latest",
   "最近 53 周 · 活跃 {0} 天 · 点击查看当天": "Last 53 weeks · {0} active days · Click to view a day",
   "没有已结束请求": "No completed requests",
   "跟随客户端、供应商、模型、Key 和结果筛选，日期固定为最近 53 周": "Uses client, provider, model, key and outcome filters. Always shows the last 53 weeks.",

@@ -218,24 +218,31 @@
                 </Border>
             </Grid>
 
-            <Border Style="{StaticResource Card}" Margin="0,0,0,16">
+            <Border x:Name="CalendarCard" Style="{StaticResource Card}" Margin="0,0,0,16" AutomationProperties.AutomationId="StatisticsCalendar">
                 <StackPanel>
                     <DockPanel Margin="0,0,0,12">
-                        <ComboBox DockPanel.Dock="Right" Style="{StaticResource Filter}" ItemsSource="{Binding HeatMetricChoices}" SelectedValue="{Binding SelectedHeatMetric}" Width="100" AutomationProperties.AutomationId="StatisticsHeatMetric" />
-                        <StackPanel><TextBlock Text="{i18n:T 活跃日历}" Style="{StaticResource SectionTitle}" /><TextBlock Text="{Binding HeatCaption}" Style="{StaticResource Muted}" Margin="0,5,0,0" /></StackPanel>
+                        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Top">
+                            <ui:Button x:Name="HeatmapRecentButton" Content="{i18n:T 回到最近}" Click="OnHeatmapRecentClick" IsEnabled="False"
+                                       Padding="8,5" Margin="0,0,8,0" MinHeight="32" Appearance="Transparent" AutomationProperties.AutomationId="StatisticsHeatRecent" />
+                            <ComboBox Style="{StaticResource Filter}" ItemsSource="{Binding HeatMetricChoices}" SelectedValue="{Binding SelectedHeatMetric}" Width="100" AutomationProperties.AutomationId="StatisticsHeatMetric" />
+                        </StackPanel>
+                        <StackPanel><TextBlock Text="{i18n:T 活跃日历}" Style="{StaticResource SectionTitle}" TextWrapping="Wrap" /><TextBlock Text="{Binding HeatCaption}" Style="{StaticResource Muted}" Margin="0,5,0,0" /></StackPanel>
                     </DockPanel>
-                    <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled" Padding="0,0,0,4">
-                        <Grid MinWidth="750">
-                            <Grid.ColumnDefinitions><ColumnDefinition Width="28" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                    <Grid>
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="28" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                        <UniformGrid x:Name="HeatmapWeekdays" Rows="7" Height="112" Margin="0,24,0,0" VerticalAlignment="Top">
+                            <TextBlock Text="{i18n:T 一}" Style="{StaticResource Muted}" /><TextBlock /><TextBlock Text="{i18n:T 三}" Style="{StaticResource Muted}" /><TextBlock /><TextBlock Text="{i18n:T 五}" Style="{StaticResource Muted}" /><TextBlock /><TextBlock Text="{i18n:T 日}" Style="{StaticResource Muted}" />
+                        </UniformGrid>
+                        <ScrollViewer x:Name="HeatmapScroll" Grid.Column="1" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled" Padding="0,0,0,4"
+                                      Loaded="OnHeatmapLoaded" ScrollChanged="OnHeatmapScrollChanged" AutomationProperties.AutomationId="StatisticsHeatScroll">
+                        <!-- 最后一周也可能是新月份的起点，右侧留白保证月份标签完整可见。 -->
+                        <Grid MinWidth="722" Margin="0,0,28,0">
                             <Grid.RowDefinitions><RowDefinition Height="24" /><RowDefinition Height="112" /></Grid.RowDefinitions>
-                            <ItemsControl Grid.Column="1" ItemsSource="{Binding HeatMonths}">
+                            <ItemsControl ItemsSource="{Binding HeatMonths}">
                                 <ItemsControl.ItemsPanel><ItemsPanelTemplate><UniformGrid Columns="53" /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
                                 <ItemsControl.ItemTemplate><DataTemplate><Canvas Height="20"><TextBlock Text="{Binding}" Style="{StaticResource Muted}" Width="42" TextWrapping="NoWrap" /></Canvas></DataTemplate></ItemsControl.ItemTemplate>
                             </ItemsControl>
-                            <UniformGrid Grid.Row="1" Rows="7">
-                                <TextBlock Text="{i18n:T 一}" Style="{StaticResource Muted}" /><TextBlock /><TextBlock Text="{i18n:T 三}" Style="{StaticResource Muted}" /><TextBlock /><TextBlock Text="{i18n:T 五}" Style="{StaticResource Muted}" /><TextBlock /><TextBlock Text="{i18n:T 日}" Style="{StaticResource Muted}" />
-                            </UniformGrid>
-                            <ItemsControl Grid.Row="1" Grid.Column="1" ItemsSource="{Binding HeatDays}" KeyboardNavigation.TabNavigation="Once" AutomationProperties.AutomationId="StatisticsHeatmap">
+                            <ItemsControl Grid.Row="1" ItemsSource="{Binding HeatDays}" KeyboardNavigation.TabNavigation="Once" AutomationProperties.AutomationId="StatisticsHeatmap">
                                 <ItemsControl.ItemsPanel><ItemsPanelTemplate><UniformGrid Columns="53" Rows="7" /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate>
@@ -253,7 +260,8 @@
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>
                         </Grid>
-                    </ScrollViewer>
+                        </ScrollViewer>
+                    </Grid>
                     <DockPanel Margin="0,8,0,0">
                         <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
                             <TextBlock Text="{i18n:T 少}" Style="{StaticResource Muted}" Margin="0,0,6,0" />

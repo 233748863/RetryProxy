@@ -30,6 +30,7 @@ public partial class StatisticsPageViewModel : ViewModel
     private const string DateHelpBase = "按本机日期统计，午夜自动切换。请求按编号去重，重试单独计数；跨日仍未完成的请求计入新一天。\n处理中只显示当前实际请求；历史未完成表示日志没有成功或失败的结束记录，计入总请求，单独列出。\n首次升级按现有日志恢复，已被覆盖的旧日志无法补回，缺失用量保持未获取。";
 
     private readonly WorkspaceService _workspaceService;
+    private bool _navigated;
 
     public OverviewPageViewModel Overview { get; }
 
@@ -89,17 +90,24 @@ public partial class StatisticsPageViewModel : ViewModel
 
     public override void OnNavigatedTo()
     {
-        Overview.OnNavigatedTo();
-        Cache.OnNavigatedTo();
-        Active.OnNavigatedTo();
+        _navigated = true;
+        ActivateTab();
         Refresh();
     }
 
     public override void OnNavigatedFrom()
     {
+        _navigated = false;
         Overview.OnNavigatedFrom();
         Cache.OnNavigatedFrom();
         Active.OnNavigatedFrom();
+    }
+
+    private void ActivateTab()
+    {
+        if (IsOverview) Overview.OnNavigatedTo();
+        else if (IsCache) Cache.OnNavigatedTo();
+        else Active.OnNavigatedTo();
     }
 
     private static Brush ThemeBrush(string key)
@@ -162,6 +170,9 @@ public partial class StatisticsPageViewModel : ViewModel
     [RelayCommand]
     private void OnSelectTab(string key)
     {
+        Overview.OnNavigatedFrom();
+        Cache.OnNavigatedFrom();
+        Active.OnNavigatedFrom();
         var tab = key switch
         {
             "cache" => StatisticsTab.Cache,
@@ -172,6 +183,7 @@ public partial class StatisticsPageViewModel : ViewModel
         IsOverview = tab == StatisticsTab.Overview;
         IsCache = tab == StatisticsTab.Cache;
         IsActive = tab == StatisticsTab.Active;
+        if (_navigated) ActivateTab();
     }
 }
 

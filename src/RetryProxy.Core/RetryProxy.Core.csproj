@@ -23,6 +23,7 @@
 
 	<ItemGroup>
 		<EmbeddedResource Include="Tls/claude-code-client-hello.bin" LogicalName="RetryProxy.Core.Tls.claude-code-client-hello.bin" />
+		<EmbeddedResource Include="Metrics/model-prices.json" LogicalName="RetryProxy.Core.Metrics.model-prices.json" />
 	</ItemGroup>
 
 </Project>

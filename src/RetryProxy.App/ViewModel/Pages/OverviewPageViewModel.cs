@@ -1,351 +1,328 @@
 using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.Input;
+using Microsoft.Win32;
+using RetryProxy.Core.Config;
 using RetryProxy.Core.Metrics;
-using RetryProxy.Core.Workspace;
 using RetryProxy.Service;
+using RetryProxy.Service.Interface;
+using RetryProxy.Service.I18n;
 using System;
 using System.Collections.Generic;
-using System.Collections.ObjectModel;
+using System.IO;
 using System.Linq;
-using System.Windows;
-using System.Windows.Media;
+using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
+using System.Windows.Threading;
 
 namespace RetryProxy.ViewModel.Pages;
 
-/// <summary>最近 7 天里的一天；HasData 为 false 表示那天没有统计文件。</summary>
-public sealed record TrendDay(string DateLabel, string RequestsText, string RateText, double BarHeight, Brush Brush, string ToolTip, bool IsToday, bool HasData);
-
-/// <summary>按模型或按 Key 拆分的一行。</summary>
-public sealed record UsageRow(string Name, string Requests, string Rate, Brush RateBrush, string Detail, string ToolTip);
-
-/// <summary>统计页"概况"标签：今日瓦片、缓存摘要、最近 7 天趋势、按模型与按 Key 拆分。</summary>
+/// <summary>统计分析：只在可见时后台读取。旧查询不能覆盖新筛选，切页取消，刷新不重置用户选择。</summary>
 public partial class OverviewPageViewModel : ViewModel
 {
-    private const int TrendDays = 7;
-    private const double TrendBarMaxHeight = 44.0;
-
+    private const int PageSize = 25;
     private readonly WorkspaceService _workspaceService;
-    private string? _trendRouteId;
-    private DateTime _trendDate;
-    private IReadOnlyList<DailySummary> _pastDays = [];
+    private readonly IConfigService _configService;
+    private readonly UsageHistory _history = new();
+    private readonly SemaphoreSlim _readGate = new(1, 1);
+    private readonly DispatcherTimer _timer;
+    private CancellationTokenSource? _loadCancellation;
+    private long _generation;
+    private bool _visible;
+    private bool _dirty;
+    private bool _syncing;
+    private bool _forceRead;
+    private DateTime _lastDay = DateTime.Today;
+    private UsageReport? _report;
+    private ModelPricing _prices;
+    private int _page;
 
-    private ProxyWorkspace Workspace => _workspaceService.Workspace;
+    [ObservableProperty] private bool _isLoading;
+    [ObservableProperty] private bool _hasReport;
+    [ObservableProperty] private bool _hasRequests;
+    [ObservableProperty] private string _notice = string.Empty;
+    [ObservableProperty] private string _rangeCaption = string.Empty;
+    [ObservableProperty] private string _updatedCaption = string.Empty;
+    [ObservableProperty] private string _selectedPeriod = "today";
+    [ObservableProperty] private DateTime? _fromDate = DateTime.Today;
+    [ObservableProperty] private DateTime? _toDate = DateTime.Today;
+    [ObservableProperty] private string _selectedClient = string.Empty;
+    [ObservableProperty] private string _selectedProvider = string.Empty;
+    [ObservableProperty] private string _selectedModel = string.Empty;
+    [ObservableProperty] private string _selectedKey = string.Empty;
+    [ObservableProperty] private string _selectedStatus = string.Empty;
+    [ObservableProperty] private string _selectedMetric = "tokens";
+    [ObservableProperty] private string _selectedDimension = "model";
+    [ObservableProperty] private string _selectedHeatMetric = "requests";
 
-    [ObservableProperty]
-    private bool _hasChannel;
+    [ObservableProperty] private IReadOnlyList<StatisticsChoice> _clientChoices = [];
+    [ObservableProperty] private IReadOnlyList<StatisticsChoice> _providerChoices = [];
+    [ObservableProperty] private IReadOnlyList<StatisticsChoice> _modelChoices = [];
+    [ObservableProperty] private IReadOnlyList<StatisticsChoice> _keyChoices = [];
+    [ObservableProperty] private IReadOnlyList<StatisticsChoice> _statusChoices = [];
+    [ObservableProperty] private IReadOnlyList<StatisticsChoice> _metricChoices = [];
+    [ObservableProperty] private IReadOnlyList<StatisticsChoice> _dimensionChoices = [];
+    [ObservableProperty] private IReadOnlyList<StatisticsChoice> _heatMetricChoices = [];
 
-    [ObservableProperty]
-    private string _emptyHint = string.Empty;
+    [ObservableProperty] private string _totalRequests = "0";
+    [ObservableProperty] private string _requestsDetail = string.Empty;
+    [ObservableProperty] private string _requestsHelp = string.Empty;
+    [ObservableProperty] private string _totalTokens = "—";
+    [ObservableProperty] private string _tokensDetail = string.Empty;
+    [ObservableProperty] private string _tokensHelp = string.Empty;
+    [ObservableProperty] private string _cacheRate = "—";
+    [ObservableProperty] private double _cacheProgress;
+    [ObservableProperty] private string _cacheDetail = string.Empty;
+    [ObservableProperty] private string _cacheRateHelp = string.Empty;
+    [ObservableProperty] private string _totalCost = "—";
+    [ObservableProperty] private string _costDetail = string.Empty;
+    [ObservableProperty] private string _costHelp = string.Empty;
+    [ObservableProperty] private IReadOnlyList<StatisticsTokenTile> _tokenTiles = [];
+    [ObservableProperty] private StatisticsChartData? _chart;
+    [ObservableProperty] private IReadOnlyList<StatisticsCategory> _categories = [];
+    [ObservableProperty] private IReadOnlyList<StatisticsRankRow> _rankRows = [];
+    [ObservableProperty] private string _chartCaption = string.Empty;
+    [ObservableProperty] private IReadOnlyList<StatisticsHeatDay> _heatDays = [];
+    [ObservableProperty] private IReadOnlyList<string> _heatMonths = [];
+    [ObservableProperty] private string _heatCaption = string.Empty;
+    [ObservableProperty] private IReadOnlyList<StatisticsRequestRow> _requestRows = [];
+    [ObservableProperty] private string _pageCaption = string.Empty;
 
-    [ObservableProperty]
-    private string _totalRequests = "0";
+    public bool IsToday => SelectedPeriod == "today";
+    public bool IsWeek => SelectedPeriod == "week";
+    public bool IsMonth => SelectedPeriod == "month";
+    public bool IsAll => SelectedPeriod == "all";
+    public bool IsCustom => SelectedPeriod == "custom";
+    public bool HasNotice => Notice.Length > 0;
+    public DateTime Today => DateTime.Today;
+    public bool CanExport => HasReport && HasRequests && !IsLoading;
+    public bool CanPrevious => _page > 0;
+    public bool CanNext => _report is { } report && (_page + 1) * PageSize < report.Records.Count;
 
-    [ObservableProperty]
-    private string _successfulRequests = "0";
-
-    [ObservableProperty]
-    private string _retryCount = "0";
-
-    [ObservableProperty]
-    private string _failedRequests = "0";
-
-    [ObservableProperty]
-    private string _activeRequests = "0";
-
-    [ObservableProperty]
-    private string _hitRateText = string.Empty;
-
-    [ObservableProperty]
-    private Brush _hitRateBrush = Brushes.Gray;
-
-    [ObservableProperty]
-    private double _hitRateProgress;
-
-    [ObservableProperty]
-    private string _hitRateHelp = string.Empty;
-
-    [ObservableProperty]
-    private string _creationText = string.Empty;
-
-    [ObservableProperty]
-    private string _creationHelp = string.Empty;
-
-    [ObservableProperty]
-    private string _latestText = string.Empty;
-
-    [ObservableProperty]
-    private Brush _latestBrush = Brushes.Gray;
-
-    [ObservableProperty]
-    private string _latestHelp = string.Empty;
-
-    [ObservableProperty]
-    private string _latestDetail = string.Empty;
-
-    [ObservableProperty]
-    private string _zeroHitText = string.Empty;
-
-    [ObservableProperty]
-    private Brush _zeroHitBrush = Brushes.Gray;
-
-    [ObservableProperty]
-    private string _zeroHitHelp = string.Empty;
-
-    [ObservableProperty]
-    private string _measuredText = string.Empty;
-
-    [ObservableProperty]
-    private ObservableCollection<TrendDay> _trend = [];
-
-    [ObservableProperty]
-    private bool _trendIsEmpty = true;
-
-    [ObservableProperty]
-    private string _trendSummary = string.Empty;
-
-    [ObservableProperty]
-    private ObservableCollection<UsageRow> _modelRows = [];
-
-    [ObservableProperty]
-    private bool _hasModelRows;
-
-    [ObservableProperty]
-    private ObservableCollection<UsageRow> _keyRows = [];
-
-    [ObservableProperty]
-    private bool _hasKeyRows;
-
-    public string RateHelp => CacheText.RateHelp;
-
-    public string UsageHelp => CacheText.UsageHelp;
-
-    public OverviewPageViewModel(WorkspaceService workspaceService)
+    public OverviewPageViewModel(WorkspaceService workspaceService, IConfigService configService)
     {
         _workspaceService = workspaceService;
-        _workspaceService.Refreshed += Refresh;
-        Refresh();
-    }
-
-    public override void OnNavigatedTo() => Refresh();
-
-    private static Brush ThemeBrush(string key)
-    {
-        return Application.Current?.TryFindResource(key) as Brush ?? Brushes.Gray;
-    }
-
-    private static Brush RateBrush(double? rate) => rate switch
-    {
-        > 0.0 => ThemeBrush("SystemFillColorSuccessBrush"),
-        { } => ThemeBrush("SystemFillColorCautionBrush"),
-        null => ThemeBrush("TextFillColorSecondaryBrush"),
-    };
-
-    private void Refresh()
-    {
-        var route = Workspace.SelectedRouteRef();
-        HasChannel = route is not null;
-        EmptyHint = ClientPageText.Translate("当前客户端尚无通道，请前往供应商页配置");
-        if (route is null)
+        _configService = configService;
+        _prices = CurrentPrices();
+        _timer = new DispatcherTimer(DispatcherPriority.Background) { Interval = TimeSpan.FromSeconds(2) };
+        _timer.Tick += (_, _) =>
         {
-            Clear();
-            return;
-        }
-
-        var snapshot = Workspace.Services.TryGetValue(route.Id, out var service) ? service.Metrics.Snapshot() : new MetricsSnapshot();
-        RenderTiles(snapshot);
-        RenderCache(snapshot.Cache);
-        RenderTrend(route.Id, snapshot);
-        RenderBreakdowns(snapshot.Cache);
+            if (_lastDay != DateTime.Today) { _lastDay = DateTime.Today; OnPropertyChanged(nameof(Today)); _dirty = true; }
+            if (_dirty && !IsLoading) _ = ReloadAsync();
+        };
+        _workspaceService.Refreshed += () => { if (_visible) _dirty = true; };
+        ResetChoices();
+        UpdatePriceChoices();
+        I18nService.Instance.PropertyChanged += (_, _) => RefreshLanguage();
     }
 
-    private void Clear()
+    private ModelPricing CurrentPrices()
     {
-        TotalRequests = SuccessfulRequests = RetryCount = FailedRequests = ActiveRequests = "0";
-        HitRateText = string.Empty;
-        CreationText = LatestText = LatestDetail = ZeroHitText = MeasuredText = string.Empty;
-        Trend = [];
-        TrendIsEmpty = true;
-        TrendSummary = string.Empty;
-        ModelRows = [];
-        HasModelRows = false;
-        KeyRows = [];
-        HasKeyRows = false;
-        _trendRouteId = null;
+        var config = _configService.Get().OtherConfig;
+        return new ModelPricing(config.StatisticsPublicPrices, config.StatisticsModelPrices);
     }
 
-    private void RenderTiles(MetricsSnapshot snapshot)
+    public override void OnNavigatedTo()
     {
-        TotalRequests = snapshot.TotalRequests.ToString();
-        SuccessfulRequests = snapshot.SuccessfulRequests.ToString();
-        RetryCount = snapshot.RetryCount.ToString();
-        FailedRequests = snapshot.FailedRequests.ToString();
-        ActiveRequests = snapshot.ActiveRequests.ToString();
+        if (_visible) return;
+        _visible = true;
+        _timer.Start();
+        _ = ReloadAsync();
     }
 
-    private void RenderCache(CacheSnapshot cache)
+    public override void OnNavigatedFrom()
     {
-        var rate = cache.HitRatePercent();
-        HitRateText = CacheText.RateText(rate);
-        HitRateBrush = RateBrush(rate);
-        HitRateProgress = rate ?? 0.0;
-        HitRateHelp = $"已复用 {cache.CachedTokens} / 总输入 {cache.InputTokens} token\n{CacheText.RateHelp}";
-        CreationText = ClientPageText.Translate("已记录写入 {0} token", CacheText.CreationTotalText(cache));
-        CreationHelp = CacheText.CreationHelp(cache);
-        var latest = cache.RecentRequests.Count > 0 ? cache.RecentRequests[^1] : null;
-        LatestText = latest is null ? ClientPageText.Translate("等待请求") : CacheText.RequestRateText(latest);
-        LatestBrush = RateBrush(latest?.HitRatePercent());
-        LatestHelp = latest is null ? ClientPageText.Translate("等待本通道的成功请求") : CacheText.RequestHint(latest);
-        LatestDetail = CacheText.LatestDetail(latest);
-        ZeroHitText = ClientPageText.Translate("{0} 次", CacheText.CountText(cache.ZeroHitRequests));
-        ZeroHitBrush = cache.ZeroHitRequests > 0 ? RateBrush(0.0) : ThemeBrush("TextFillColorPrimaryBrush");
-        ZeroHitHelp = $"{cache.ZeroHitRequests} 次请求的缓存读取量为 0，共 {cache.ZeroHitInputTokens} token 输入。\n{CacheText.UsageHelp}";
-        MeasuredText = ClientPageText.Translate(
-            "有效 {0} 次 · 未计入 {1} 次",
-            CacheText.CountText(cache.MeasuredRequests),
-            CacheText.CountText(cache.UnmeasuredRequests));
+        _visible = false;
+        _timer.Stop();
+        _generation++;
+        _loadCancellation?.Cancel();
+        IsLoading = false;
     }
 
-    /// <summary>历史日期不会再变，只在通道或日期变化时读一次磁盘；今天用内存快照，保证与其它标签一致。</summary>
-    private void RenderTrend(string routeId, MetricsSnapshot snapshot)
+    private void QueryChanged()
     {
-        var todayDate = DateTime.Today;
-        if (_trendRouteId != routeId || _trendDate != todayDate)
+        if (_syncing) return;
+        _page = 0;
+        _dirty = true;
+        if (_visible) _ = ReloadAsync();
+    }
+
+    partial void OnSelectedPeriodChanged(string value)
+    {
+        foreach (var name in new[] { nameof(IsToday), nameof(IsWeek), nameof(IsMonth), nameof(IsAll), nameof(IsCustom) }) OnPropertyChanged(name);
+        QueryChanged();
+    }
+    partial void OnFromDateChanged(DateTime? value) { if (IsCustom) QueryChanged(); }
+    partial void OnToDateChanged(DateTime? value) { if (IsCustom) QueryChanged(); }
+    partial void OnSelectedClientChanged(string value) => QueryChanged();
+    partial void OnSelectedProviderChanged(string value) => QueryChanged();
+    partial void OnSelectedModelChanged(string value) => QueryChanged();
+    partial void OnSelectedKeyChanged(string value) => QueryChanged();
+    partial void OnSelectedStatusChanged(string value) => QueryChanged();
+    partial void OnSelectedDimensionChanged(string value) => QueryChanged();
+    partial void OnSelectedMetricChanged(string value) { if (!_syncing && _report is not null) RenderChart(_report); }
+    partial void OnSelectedHeatMetricChanged(string value) { if (!_syncing && _report is not null) RenderHeatmap(_report); }
+    partial void OnNoticeChanged(string value) => OnPropertyChanged(nameof(HasNotice));
+    partial void OnIsLoadingChanged(bool value) => UpdateCommands();
+    partial void OnHasReportChanged(bool value) => UpdateCommands();
+    partial void OnHasRequestsChanged(bool value) => UpdateCommands();
+
+    private UsageQuery Query()
+    {
+        var today = DateOnly.FromDateTime(DateTime.Today);
+        var first = SelectedPeriod switch
         {
-            _trendRouteId = routeId;
-            _trendDate = todayDate;
-            _pastDays = LoadPastDays(routeId, todayDate);
-        }
-
-        var days = new List<DailySummary>(_pastDays) { TodaySummary(snapshot) };
-        var peak = days.Max(day => day.TotalRequests);
-        var rows = new List<TrendDay>(days.Count);
-        for (var index = 0; index < days.Count; index++)
+            "week" => today.AddDays(-6), "month" => today.AddDays(-29), "all" => (DateOnly?)null,
+            "custom" => FromDate is { } startDate ? DateOnly.FromDateTime(startDate) : throw new ArgumentException(StatisticsText.T("请选择开始日期")),
+            _ => today,
+        };
+        var last = IsCustom ? ToDate is { } date ? DateOnly.FromDateTime(date) : throw new ArgumentException(StatisticsText.T("请选择结束日期")) : today;
+        if (first > last || last > today) throw new ArgumentException(StatisticsText.T("开始日期不能晚于结束日期，结束日期不能晚于今天"));
+        return new UsageQuery
         {
-            var day = days[index];
-            var rate = day.HitRatePercent();
-            var height = peak == 0 ? 0.0 : Math.Max(TrendBarMaxHeight * day.TotalRequests / peak, day.TotalRequests > 0 ? 3.0 : 0.0);
-            rows.Add(new TrendDay(
-                day.Date.ToString("MM-dd"),
-                day.TotalRequests.ToString(),
-                day.HasData ? CacheText.RateText(rate) : ClientPageText.Translate("无记录"),
-                height,
-                day.HasData ? RateBrush(rate) : ThemeBrush("ControlFillColorDefaultBrush"),
-                TrendToolTip(day),
-                index == days.Count - 1,
-                day.HasData));
-        }
-
-        Trend = new ObservableCollection<TrendDay>(rows);
-        TrendIsEmpty = days.All(day => !day.HasData);
-        TrendSummary = TrendIsEmpty
-            ? string.Empty
-            : ClientPageText.Translate(
-                "最近 {0} 天共 {1} 次请求 · 命中 {2}",
-                days.Count,
-                CacheText.CountText(days.Aggregate(0UL, (sum, day) => SaturatingSum(sum, day.TotalRequests))),
-                CacheText.RateText(CombinedRate(days)));
+            FirstDate = first, LastDate = last, Today = today, Client = SelectedClient ?? string.Empty,
+            Provider = SelectedProvider ?? string.Empty, Model = SelectedModel ?? string.Empty, Key = SelectedKey ?? string.Empty,
+            Outcome = SelectedStatus switch { "success" => RequestOutcome.Success, "failure" => RequestOutcome.Failure, _ => null },
+            Dimension = SelectedDimension switch { "provider" => UsageDimension.Provider, "client" => UsageDimension.Client, "key" => UsageDimension.Key, _ => UsageDimension.Model },
+        };
     }
 
-    private IReadOnlyList<DailySummary> LoadPastDays(string routeId, DateTime today)
+    private async Task ReloadAsync()
     {
-        if (!Workspace.Services.TryGetValue(routeId, out var service) || service.Data is not { } data)
-        {
-            return [];
-        }
-
+        var generation = ++_generation;
+        _loadCancellation?.Cancel();
+        _loadCancellation = new CancellationTokenSource();
+        var cancellation = _loadCancellation;
+        var token = cancellation.Token;
+        _dirty = false;
+        IsLoading = true;
         try
         {
-            var first = DateOnly.FromDateTime(today).AddDays(-(TrendDays - 1));
-            return DailyHistory.ReadRange(data, routeId, first, TrendDays - 1);
-        }
-        catch (Exception error) when (error is System.IO.IOException or UnauthorizedAccessException)
-        {
-            return [];
-        }
-    }
-
-    private static DailySummary TodaySummary(MetricsSnapshot snapshot)
-    {
-        return new DailySummary(
-            DateOnly.FromDateTime(DateTime.Today),
-            true,
-            snapshot.TotalRequests,
-            snapshot.SuccessfulRequests,
-            snapshot.FailedRequests,
-            snapshot.RetryCount,
-            snapshot.Cache.InputTokens,
-            snapshot.Cache.CachedTokens);
-    }
-
-    private static double? CombinedRate(IReadOnlyList<DailySummary> days)
-    {
-        ulong input = 0;
-        ulong cached = 0;
-        foreach (var day in days)
-        {
-            input = SaturatingSum(input, day.InputTokens);
-            cached = SaturatingSum(cached, day.CachedTokens);
-        }
-
-        return input > 0 ? 100.0 * cached / input : null;
-    }
-
-    private static ulong SaturatingSum(ulong left, ulong right)
-    {
-        var sum = left + right;
-        return sum < left ? ulong.MaxValue : sum;
-    }
-
-    private static string TrendToolTip(DailySummary day)
-    {
-        if (!day.HasData)
-        {
-            return ClientPageText.Translate("{0} 没有统计记录", day.Date.ToString("MM-dd"));
-        }
-
-        return ClientPageText.Translate(
-            "{0}：请求 {1} · 成功 {2} · 失败 {3} · 重试 {4} · 命中 {5}",
-            day.Date.ToString("MM-dd"),
-            day.TotalRequests,
-            day.SuccessfulRequests,
-            day.FailedRequests,
-            day.RetryCount,
-            CacheText.RateText(day.HitRatePercent()));
-    }
-
-    private void RenderBreakdowns(CacheSnapshot cache)
-    {
-        var models = BuildRows(cache.Models, ClientPageText.Translate("未记录模型"));
-        var keys = BuildRows(cache.Keys, ClientPageText.Translate("未记录 Key"));
-        ModelRows = new ObservableCollection<UsageRow>(models);
-        HasModelRows = models.Count > 0;
-        KeyRows = new ObservableCollection<UsageRow>(keys);
-        HasKeyRows = keys.Count > 0;
-    }
-
-    private static List<UsageRow> BuildRows(Dictionary<string, UsageBreakdown> buckets, string emptyName)
-    {
-        return buckets.Values
-            .OrderByDescending(bucket => bucket.InputTokens)
-            .ThenByDescending(bucket => bucket.Requests)
-            .ThenBy(bucket => bucket.Name, StringComparer.OrdinalIgnoreCase)
-            .Select(bucket =>
+            var query = Query();
+            if (_report?.Query != query) HasReport = false;
+            var clients = _workspaceService.Workspace.Config.Routes.ToDictionary(r => r.Id, r => r.ClientType, StringComparer.Ordinal);
+            var prices = CurrentPrices();
+            var force = _forceRead;
+            _forceRead = false;
+            var result = await Task.Run(async () =>
             {
-                var rate = bucket.HitRatePercent();
-                var name = bucket.Name.Length > 0 ? bucket.Name : emptyName;
-                var usage = ClientPageText.Translate(
-                    "已复用 {0} / 总输入 {1} token · 写入 {2}",
-                    CacheText.CountText(bucket.CachedTokens),
-                    CacheText.CountText(bucket.InputTokens),
-                    CacheText.CountText(bucket.CacheCreationTokens));
-                var measured = ClientPageText.Translate("有效 {0} 次", CacheText.CountText(bucket.MeasuredRequests));
-                return new UsageRow(
-                    name,
-                    ClientPageText.Translate("{0} 次", CacheText.CountText(bucket.Requests)),
-                    CacheText.RateText(rate),
-                    RateBrush(rate),
-                    usage,
-                    $"{name}\n{usage}\n{measured}\n{CacheText.UsageHelp}");
-            })
-            .ToList();
+                await _readGate.WaitAsync(token).ConfigureAwait(false);
+                try
+                {
+                    if (force) _history.Invalidate();
+                    var history = _history.Read(_workspaceService.Data, token);
+                    var report = UsageReport.Build(history.Records, clients, prices, query, token);
+                    return (history, report);
+                }
+                finally { _readGate.Release(); }
+            }, token);
+            if (token.IsCancellationRequested || generation != _generation || !_visible) return;
+            _prices = prices;
+            _report = result.report;
+            Notice = string.Join("\n", result.history.Warnings);
+            HasReport = true;
+            HasRequests = _report.Records.Count > 0;
+            RangeCaption = StatisticsText.T("{0} 至 {1} · 按结束日期统计", _report.FirstDate.ToString("yyyy-MM-dd"), query.LastDate.ToString("yyyy-MM-dd"));
+            UpdatedCaption = StatisticsText.T("本机时间 · 自动刷新 · {0}", DateTime.Now.ToString("HH:mm:ss"));
+            UpdateChoices(_report);
+            RenderTotals(_report.Totals);
+            RenderChart(_report);
+            RenderHeatmap(_report);
+            RenderRequestPage();
+            UpdatePriceChoices();
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception error)
+        {
+            if (generation != _generation || !_visible) return;
+            HasReport = false;
+            Notice = StatisticsText.T("统计读取失败：{0}", error.Message);
+        }
+        finally
+        {
+            if (ReferenceEquals(_loadCancellation, cancellation)) _loadCancellation = null;
+            if (generation == _generation) IsLoading = false;
+            cancellation.Dispose();
+        }
+    }
+
+    [RelayCommand] private void OnSelectPeriod(string period) => SelectedPeriod = period;
+    [RelayCommand] private async Task OnRefresh() { _forceRead = true; await ReloadAsync(); }
+
+    [RelayCommand]
+    private void OnResetFilters()
+    {
+        _syncing = true;
+        SelectedClient = SelectedProvider = SelectedModel = SelectedKey = SelectedStatus = string.Empty;
+        _syncing = false;
+        QueryChanged();
+    }
+
+    [RelayCommand]
+    private void OnSelectRange(StatisticsChartPoint point)
+    {
+        if (_report?.Bucket == "hour") return;
+        SelectDates(point.First, point.Last);
+    }
+
+    [RelayCommand] private void OnSelectDay(DateTime date) => SelectDates(DateOnly.FromDateTime(date), DateOnly.FromDateTime(date));
+
+    private void SelectDates(DateOnly first, DateOnly last)
+    {
+        _syncing = true;
+        FromDate = first.ToDateTime(TimeOnly.MinValue);
+        ToDate = last.ToDateTime(TimeOnly.MinValue);
+        SelectedPeriod = "custom";
+        _syncing = false;
+        QueryChanged();
+    }
+
+    [RelayCommand]
+    private void OnSelectGroup(string id)
+    {
+        switch (_report?.Query.Dimension)
+        {
+            case UsageDimension.Provider: SelectedProvider = SelectedProvider == id ? string.Empty : id; break;
+            case UsageDimension.Client: SelectedClient = SelectedClient == id ? string.Empty : id; break;
+            case UsageDimension.Key: SelectedKey = SelectedKey == id ? string.Empty : id; break;
+            default: SelectedModel = SelectedModel == id ? string.Empty : id; break;
+        }
+    }
+
+    [RelayCommand(CanExecute = nameof(CanPrevious))] private void OnPreviousPage() { _page--; RenderRequestPage(); }
+    [RelayCommand(CanExecute = nameof(CanNext))] private void OnNextPage() { _page++; RenderRequestPage(); }
+
+    [RelayCommand(CanExecute = nameof(CanExport))]
+    private async Task OnExport()
+    {
+        if (_report is not { } report) return;
+        var dialog = new SaveFileDialog
+        {
+            Title = StatisticsText.T("导出当前筛选的全部请求"), Filter = "CSV (*.csv)|*.csv",
+            FileName = $"RetryProxy-{report.FirstDate:yyyyMMdd}-{report.Query.LastDate:yyyyMMdd}.csv",
+            DefaultExt = ".csv", AddExtension = true,
+        };
+        if (dialog.ShowDialog() != true) return;
+        try
+        {
+            await Task.Run(() =>
+            {
+                using var writer = new StreamWriter(dialog.FileName, false, new UTF8Encoding(true));
+                UsageCsv.Write(writer, report.Records);
+            });
+            Notice = StatisticsText.T("已导出 {0} 条请求", report.Records.Count);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        { Notice = StatisticsText.T("导出失败：{0}", error.Message); }
+    }
+
+    private void UpdateCommands()
+    {
+        OnPropertyChanged(nameof(CanExport));
+        OnPropertyChanged(nameof(CanPrevious));
+        OnPropertyChanged(nameof(CanNext));
+        ExportCommand.NotifyCanExecuteChanged();
+        PreviousPageCommand.NotifyCanExecuteChanged();
+        NextPageCommand.NotifyCanExecuteChanged();
     }
 }

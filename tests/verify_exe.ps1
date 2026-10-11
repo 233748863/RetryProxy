@@ -321,8 +321,36 @@ try {
         }
         Wait-TrayCondition {
             $counter = Find-UiElement $mainWindow 'OverviewTotalRequests' -ById
-            return $null -ne $counter -and $counter.Current.Name -eq [string]$cacheHealth.metrics.total_requests
-        } 'Statistics did not show current-client request totals'
+            return $null -ne $counter -and $counter.Current.Name -eq [string]($cacheHealth.metrics.successful_requests + $cacheHealth.metrics.failed_requests)
+        } 'Statistics did not show completed request totals'
+        Invoke-UiElement $mainWindow 'StatisticsPeriodCustom' -ById
+        Wait-TrayCondition { $null -ne (Find-UiElement $mainWindow 'StatisticsFromDate' -ById) } 'Custom date filters did not load'
+        Invoke-UiElement $mainWindow 'StatisticsPeriodWeek' -ById
+        Invoke-UiElement $mainWindow 'StatisticsPeriodToday' -ById
+        Wait-TrayCondition {
+            $counter = Find-UiElement $mainWindow 'OverviewTotalRequests' -ById
+            return $null -ne $counter -and $counter.Current.Name -eq [string]($cacheHealth.metrics.successful_requests + $cacheHealth.metrics.failed_requests)
+        } 'Statistics did not restore today after changing date filters'
+        Invoke-UiElement $mainWindow 'StatisticsOpenPrices' -ById
+        Wait-TrayCondition { $null -ne (Find-UiElement $mainWindow 'StatisticsPriceInput' -ById) } 'Model price editor did not load'
+        foreach ($price in @(
+            @{ Id = 'StatisticsPriceInput'; Value = '2' },
+            @{ Id = 'StatisticsPriceOutput'; Value = '10' },
+            @{ Id = 'StatisticsPriceRead'; Value = '0.2' }
+        )) {
+            $field = Find-UiElement $mainWindow $price.Id -ById
+            $field.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($price.Value)
+        }
+        Invoke-UiElement $mainWindow 'StatisticsSavePrice' -ById
+        Wait-TrayCondition {
+            $feedback = Find-UiElement $mainWindow 'StatisticsPriceFeedback' -ById
+            return $null -ne $feedback -and $feedback.Current.Name.StartsWith('单价已保存')
+        } 'Model price was not saved'
+        Invoke-UiElement $mainWindow 'StatisticsOpenPrices' -ById
+        Wait-TrayCondition {
+            $cost = Find-UiElement $mainWindow 'StatisticsTotalCost' -ById
+            return $null -ne $cost -and $cost.Current.Name -eq '≥$0.00084'
+        } 'Changing model prices did not recalculate recorded usage'
         Invoke-UiElement $mainWindow 'StatisticsTabCache' -ById
         Wait-TrayCondition { $null -ne (Find-UiElement $mainWindow '统计范围') } 'Statistics did not switch to the cache tab'
         Invoke-UiElement $mainWindow 'StatisticsTabActive' -ById
@@ -355,7 +383,7 @@ try {
         Invoke-UiElement $mainWindow 'StatisticsTabOverview' -ById
         Wait-TrayCondition {
             $counter = Find-UiElement $mainWindow 'OverviewTotalRequests' -ById
-            return $null -ne $counter -and $counter.Current.Name -eq [string]$cacheHealth.metrics.total_requests
+            return $null -ne $counter -and $counter.Current.Name -eq [string]($cacheHealth.metrics.successful_requests + $cacheHealth.metrics.failed_requests)
         } 'Navigation or channel restart lost statistics'
         Write-Host 'Statistics, provider navigation, proxy settings start-stop and software settings checks passed.'
 

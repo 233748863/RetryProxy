@@ -131,12 +131,24 @@ public sealed class ProxyMetrics : IDisposable
         NotifyUi();
     }
 
-    public void Success(string requestId, CacheRequest? cache, string keyId = "", string keyName = "")
-        => Change(requestId, new DailyChange.Succeeded(cache, keyId, keyName));
+    public void Success(string requestId, CacheRequest? cache, string keyId = "", string keyName = "", RequestUsage? usage = null)
+        => Change(requestId, new DailyChange.Succeeded(cache, keyId, keyName, usage));
 
     public void Retry(string requestId, ulong attempt) => Change(requestId, new DailyChange.Retry(attempt));
 
-    public void Failure(string requestId) => Change(requestId, new DailyChange.Failed());
+    public void Failure(string requestId, RequestUsage? usage = null) => Change(requestId, new DailyChange.Failed(usage));
+
+    /// <summary>只更新已登记的真实请求；切换供应商后，最终记录跟随实际尝试。</summary>
+    public void Attribute(string requestId, RequestAttribution attribution)
+    {
+        lock (_lock)
+        {
+            if (!_state.Active.ContainsKey(requestId)) return;
+            var now = DateTime.Now;
+            _state.Rollover(now);
+            _state.Change(requestId, new DailyChange.Attributed(attribution), UnixMs(now));
+        }
+    }
 
     public void CacheKey(string requestId, CacheKeyState state)
     {

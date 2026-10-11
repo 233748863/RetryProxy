@@ -58,6 +58,14 @@ public sealed class DailyRequest
     [JsonPropertyName("key_name")]
     public string KeyName { get; set; } = string.Empty;
 
+    [JsonPropertyName("attribution")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public RequestAttribution? Attribution { get; set; }
+
+    [JsonPropertyName("usage")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public RequestUsage? Usage { get; set; }
+
     public void Retry(ulong attempt)
     {
         if (LastRetryAttempt is null || attempt > LastRetryAttempt.Value)
@@ -80,9 +88,11 @@ internal abstract record DailyChange
 {
     public sealed record Started : DailyChange;
 
-    public sealed record Succeeded(CacheRequest? Cache, string KeyId = "", string KeyName = "") : DailyChange;
+    public sealed record Succeeded(CacheRequest? Cache, string KeyId = "", string KeyName = "", RequestUsage? Usage = null) : DailyChange;
 
-    public sealed record Failed : DailyChange;
+    public sealed record Failed(RequestUsage? Usage = null) : DailyChange;
+
+    public sealed record Attributed(RequestAttribution Attribution) : DailyChange;
 
     public sealed record Retry(ulong Attempt) : DailyChange;
 

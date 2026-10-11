@@ -162,7 +162,7 @@ internal sealed class StreamLifecycle : IDisposable
 
         if (_status == 200)
         {
-            _metrics.Success(_requestId, Stats.CacheRequest(_requestId), _keyId, _keyName);
+            _metrics.Success(_requestId, Stats.CacheRequest(_requestId), _keyId, _keyName, Stats.Usage(elapsed));
             _diagnostics?.Outcome(true, stats: Stats, status: _status);
             if (_keepAliveTemplate is { } template)
             {
@@ -172,7 +172,7 @@ internal sealed class StreamLifecycle : IDisposable
         }
         else
         {
-            _metrics.Failure(_requestId);
+            _metrics.Failure(_requestId, Stats.Usage(elapsed));
             _diagnostics?.Outcome(false, stats: Stats, status: _status);
         }
     }
@@ -186,7 +186,7 @@ internal sealed class StreamLifecycle : IDisposable
 
         Completed = true;
         var elapsed = _startedAt.ElapsedSeconds;
-        _metrics.Failure(_requestId);
+        _metrics.Failure(_requestId, Stats.Usage(elapsed));
         _diagnostics?.Outcome(false, reason, Stats, _status);
         if (!_logCompletion)
         {

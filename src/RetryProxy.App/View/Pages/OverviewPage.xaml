@@ -1,315 +1,299 @@
 <UserControl x:Class="RetryProxy.View.Pages.OverviewPage"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:controls="clr-namespace:RetryProxy.View.Controls"
              xmlns:i18n="clr-namespace:RetryProxy.Service.I18n"
-             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-             xmlns:pages="clr-namespace:RetryProxy.ViewModel.Pages"
              xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
-             d:DataContext="{d:DesignInstance Type=pages:OverviewPageViewModel}"
-             d:DesignHeight="700"
-             d:DesignWidth="700"
-             ui:Design.Background="{DynamicResource ApplicationBackgroundBrush}"
-             ui:Design.Foreground="{DynamicResource TextFillColorPrimaryBrush}"
+             x:Name="Root" SizeChanged="OnSizeChanged"
              FontFamily="{StaticResource TextThemeFontFamily}"
-             Foreground="{DynamicResource TextFillColorPrimaryBrush}"
-             mc:Ignorable="d">
-
+             Foreground="{DynamicResource TextFillColorPrimaryBrush}">
     <UserControl.Resources>
-        <Style x:Key="TileBorder" TargetType="Border">
-            <Setter Property="Background" Value="{DynamicResource ControlFillColorDefaultBrush}" />
+        <Style x:Key="Card" TargetType="Border">
+            <Setter Property="Background" Value="{DynamicResource CardBackgroundFillColorDefaultBrush}" />
             <Setter Property="BorderBrush" Value="{DynamicResource ControlStrokeColorDefaultBrush}" />
             <Setter Property="BorderThickness" Value="1" />
-            <Setter Property="CornerRadius" Value="7" />
-            <Setter Property="Padding" Value="4,8" />
-            <Setter Property="Margin" Value="0,0,8,0" />
+            <Setter Property="CornerRadius" Value="10" />
+            <Setter Property="Padding" Value="18" />
         </Style>
-        <Style x:Key="TileValue" TargetType="TextBlock">
-            <Setter Property="FontSize" Value="18" />
-            <Setter Property="FontWeight" Value="SemiBold" />
-            <Setter Property="HorizontalAlignment" Value="Center" />
-        </Style>
-        <Style x:Key="TileLabel" TargetType="TextBlock">
+        <Style x:Key="Muted" TargetType="TextBlock">
             <Setter Property="FontSize" Value="11" />
-            <Setter Property="HorizontalAlignment" Value="Center" />
-            <Setter Property="Foreground" Value="{DynamicResource TextFillColorTertiaryBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource TextFillColorSecondaryBrush}" />
+            <Setter Property="TextWrapping" Value="Wrap" />
         </Style>
-        <Style x:Key="CardTitle" TargetType="TextBlock">
-            <Setter Property="FontSize" Value="12" />
+        <Style x:Key="Label" TargetType="TextBlock" BasedOn="{StaticResource Muted}">
+            <Setter Property="Margin" Value="0,0,0,6" />
+        </Style>
+        <Style x:Key="SectionTitle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="14" />
             <Setter Property="FontWeight" Value="SemiBold" />
-            <Setter Property="Margin" Value="0,0,0,8" />
         </Style>
-        <Style x:Key="ColumnLabel" TargetType="TextBlock">
-            <Setter Property="FontSize" Value="10.5" />
-            <Setter Property="Foreground" Value="{DynamicResource TextFillColorTertiaryBrush}" />
-            <Setter Property="Margin" Value="0,0,8,0" />
+        <Style x:Key="PeriodButton" TargetType="ui:Button" BasedOn="{StaticResource {x:Type ui:Button}}">
+            <Setter Property="Padding" Value="14,7" />
+            <Setter Property="Margin" Value="0,0,4,6" />
+            <Setter Property="CornerRadius" Value="7" />
+        </Style>
+        <Style x:Key="KpiCard" TargetType="Border" BasedOn="{StaticResource Card}">
+            <Setter Property="Margin" Value="0,0,10,10" />
+            <Setter Property="MinHeight" Value="132" />
+        </Style>
+        <Style x:Key="KpiValue" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="27" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Margin" Value="0,5,0,8" />
             <Setter Property="TextTrimming" Value="CharacterEllipsis" />
         </Style>
-        <Style x:Key="MutedText" TargetType="TextBlock">
-            <Setter Property="FontSize" Value="11" />
-            <Setter Property="Foreground" Value="{DynamicResource TextFillColorTertiaryBrush}" />
-            <Setter Property="TextWrapping" Value="Wrap" />
+        <Style x:Key="Filter" TargetType="ComboBox" BasedOn="{StaticResource {x:Type ComboBox}}">
+            <Setter Property="MinHeight" Value="32" />
+            <Setter Property="HorizontalAlignment" Value="Stretch" />
+            <Setter Property="DisplayMemberPath" Value="Name" />
+            <Setter Property="SelectedValuePath" Value="Id" />
+        </Style>
+        <DataTemplate x:Key="PricesTemplate">
+            <UniformGrid Columns="{Binding ActualWidth, RelativeSource={RelativeSource Self}, Converter={StaticResource AdaptiveUniformGridColumnsConverter}, ConverterParameter='132,5'}" Margin="0,8,-8,0">
+                <StackPanel Margin="0,0,8,8"><TextBlock Text="{i18n:T 普通输入}" Style="{StaticResource Label}" /><TextBox Text="{Binding Input, UpdateSourceTrigger=PropertyChanged}" AutomationProperties.AutomationId="StatisticsPriceInput" /></StackPanel>
+                <StackPanel Margin="0,0,8,8"><TextBlock Text="{i18n:T 输出用量}" Style="{StaticResource Label}" /><TextBox Text="{Binding Output, UpdateSourceTrigger=PropertyChanged}" AutomationProperties.AutomationId="StatisticsPriceOutput" /></StackPanel>
+                <StackPanel Margin="0,0,8,8"><TextBlock Text="{i18n:T 缓存读取}" Style="{StaticResource Label}" /><TextBox Text="{Binding CacheRead, UpdateSourceTrigger=PropertyChanged}" AutomationProperties.AutomationId="StatisticsPriceRead" /></StackPanel>
+                <StackPanel Margin="0,0,8,8"><TextBlock Text="{i18n:T 缓存写入（5 分钟）}" Style="{StaticResource Label}" /><TextBox Text="{Binding CacheWrite, UpdateSourceTrigger=PropertyChanged}" AutomationProperties.AutomationId="StatisticsPriceWrite" /></StackPanel>
+                <StackPanel Margin="0,0,8,8"><TextBlock Text="{i18n:T 缓存写入（1 小时）}" Style="{StaticResource Label}" /><TextBox Text="{Binding CacheWrite1h, UpdateSourceTrigger=PropertyChanged}" AutomationProperties.AutomationId="StatisticsPriceWriteHour" /></StackPanel>
+            </UniformGrid>
+        </DataTemplate>
+        <Style x:Key="CellText" TargetType="TextBlock">
+            <Setter Property="VerticalAlignment" Value="Center" />
+            <Setter Property="Margin" Value="4,6" />
+            <Setter Property="TextTrimming" Value="CharacterEllipsis" />
         </Style>
     </UserControl.Resources>
 
     <StackPanel>
-        <!--  今日请求瓦片  -->
-        <ui:Card Margin="0,0,0,12" Padding="14,10">
+        <Border Style="{StaticResource Card}" Margin="0,0,0,16"
+                AutomationProperties.AutomationId="StatisticsPriceEditor"
+                Visibility="{Binding IsPriceEditorOpen, Converter={StaticResource BooleanToVisibilityConverter}}">
             <StackPanel>
-                <TextBlock Style="{StaticResource CardTitle}" Text="{i18n:T 今日请求}" />
-                <UniformGrid Columns="5">
-                    <Border Style="{StaticResource TileBorder}">
-                        <StackPanel>
-                            <TextBlock AutomationProperties.AutomationId="OverviewTotalRequests"
-                                       Style="{StaticResource TileValue}"
-                                       Text="{Binding TotalRequests}" />
-                            <TextBlock Style="{StaticResource TileLabel}" Text="{i18n:T 今日请求}" />
-                        </StackPanel>
-                    </Border>
-                    <Border Style="{StaticResource TileBorder}">
-                        <StackPanel>
-                            <TextBlock Foreground="{DynamicResource SystemFillColorSuccessBrush}"
-                                       Style="{StaticResource TileValue}"
-                                       Text="{Binding SuccessfulRequests}" />
-                            <TextBlock Style="{StaticResource TileLabel}" Text="{i18n:T 成功}" />
-                        </StackPanel>
-                    </Border>
-                    <Border Style="{StaticResource TileBorder}">
-                        <StackPanel>
-                            <TextBlock Foreground="{DynamicResource AccentTextFillColorPrimaryBrush}"
-                                       Style="{StaticResource TileValue}"
-                                       Text="{Binding RetryCount}" />
-                            <TextBlock Style="{StaticResource TileLabel}" Text="{i18n:T 重试}" />
-                        </StackPanel>
-                    </Border>
-                    <Border Style="{StaticResource TileBorder}">
-                        <StackPanel>
-                            <TextBlock Foreground="{DynamicResource SystemFillColorCriticalBrush}"
-                                       Style="{StaticResource TileValue}"
-                                       Text="{Binding FailedRequests}" />
-                            <TextBlock Style="{StaticResource TileLabel}" Text="{i18n:T 失败}" />
-                        </StackPanel>
-                    </Border>
-                    <Border Margin="0" Style="{StaticResource TileBorder}">
-                        <StackPanel>
-                            <TextBlock Foreground="{DynamicResource SystemFillColorCautionBrush}"
-                                       Style="{StaticResource TileValue}"
-                                       Text="{Binding ActiveRequests}" />
-                            <TextBlock Style="{StaticResource TileLabel}" Text="{i18n:T 用户处理中}" />
-                        </StackPanel>
-                    </Border>
-                </UniformGrid>
-            </StackPanel>
-        </ui:Card>
-
-        <Grid Margin="0,0,0,12">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="*" />
-            </Grid.ColumnDefinitions>
-
-            <!--  今日缓存摘要  -->
-            <ui:Card Grid.Column="0" Margin="0,0,6,0" Padding="14" VerticalAlignment="Stretch" VerticalContentAlignment="Top">
-                <StackPanel>
-                    <TextBlock Style="{StaticResource CardTitle}" Text="{i18n:T 今日缓存命中}" />
-                    <StackPanel Orientation="Horizontal" ToolTip="{Binding RateHelp}">
-                        <TextBlock VerticalAlignment="Center"
-                                   FontSize="22"
-                                   FontWeight="Bold"
-                                   Foreground="{Binding HitRateBrush}"
-                                   Text="{Binding HitRateText}" />
+                <DockPanel LastChildFill="True">
+                    <ui:Button DockPanel.Dock="Right" Content="{i18n:T 收起}" Command="{Binding OpenPricesCommand}" Padding="10,4" />
+                    <TextBlock Text="{i18n:T 模型单价}" Style="{StaticResource SectionTitle}" VerticalAlignment="Center" />
+                </DockPanel>
+                <TextBlock Text="{i18n:T 每百万 Token 的美元价格；留空表示未知，0 表示免费。供应商单价优先。}" Style="{StaticResource Muted}" Margin="0,8,0,12" />
+                <UniformGrid Columns="2" Margin="0,0,-10,0">
+                    <StackPanel Margin="0,0,10,8">
+                        <TextBlock Text="{i18n:T 模型名称（可输入）}" Style="{StaticResource Label}" />
+                        <ComboBox IsEditable="True" IsTextSearchEnabled="True" ItemsSource="{Binding PriceModels}"
+                                  Text="{Binding EditingModel, UpdateSourceTrigger=LostFocus}" AutomationProperties.AutomationId="StatisticsPriceModel" />
                     </StackPanel>
-                    <ProgressBar Height="5"
-                                 Margin="0,6,0,6"
-                                 Foreground="{DynamicResource SystemFillColorSuccessBrush}"
-                                 Maximum="100"
-                                 ToolTip="{Binding HitRateHelp}"
-                                 Value="{Binding HitRateProgress, Mode=OneWay}" />
-                    <TextBlock Style="{StaticResource MutedText}"
-                               Text="{Binding MeasuredText}"
-                               ToolTip="{Binding RateHelp}" />
-                    <TextBlock Margin="0,4,0,0"
-                               Style="{StaticResource MutedText}"
-                               Text="{Binding CreationText}"
-                               ToolTip="{Binding CreationHelp}" />
-                    <TextBlock Margin="0,4,0,0"
-                               Style="{StaticResource MutedText}"
-                               Text="{Binding LatestDetail}"
-                               ToolTip="{Binding LatestHelp}" />
-                </StackPanel>
-            </ui:Card>
+                    <StackPanel Margin="0,0,10,8">
+                        <TextBlock Text="{i18n:T 生效范围}" Style="{StaticResource Label}" />
+                        <ComboBox Style="{StaticResource Filter}" ItemsSource="{Binding PriceProviders}" SelectedValue="{Binding EditingProvider}"
+                                  AutomationProperties.AutomationId="StatisticsPriceProvider" />
+                    </StackPanel>
+                </UniformGrid>
+                <TextBlock Text="{Binding EditingSource}" Style="{StaticResource Muted}" />
+                <ContentControl Content="{Binding BasePrices}" ContentTemplate="{StaticResource PricesTemplate}" />
+                <ItemsControl ItemsSource="{Binding PriceTiers}" Margin="0,4,0,0">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Border CornerRadius="7" Padding="12" Margin="0,0,0,8" Background="{DynamicResource ControlFillColorDefaultBrush}">
+                                <StackPanel>
+                                    <WrapPanel VerticalAlignment="Center">
+                                        <TextBlock Text="{i18n:T 总输入超过}" VerticalAlignment="Center" Margin="0,0,8,0" />
+                                        <TextBox Text="{Binding AboveTokens, UpdateSourceTrigger=PropertyChanged}" Width="112" AutomationProperties.AutomationId="StatisticsPriceThreshold" />
+                                        <TextBlock Text="{i18n:T Token 时，整条请求使用以下单价}" VerticalAlignment="Center" Margin="8,0" />
+                                        <ui:Button Content="{i18n:T 移除}" Command="{Binding DataContext.RemovePriceTierCommand, ElementName=Root}" CommandParameter="{Binding}" Padding="8,4" />
+                                    </WrapPanel>
+                                    <ContentControl Content="{Binding}" ContentTemplate="{StaticResource PricesTemplate}" />
+                                </StackPanel>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+                <WrapPanel Margin="0,8,0,0">
+                    <ui:Button Content="{i18n:T 保存单价}" Command="{Binding SavePriceCommand}" Appearance="Primary" Margin="0,0,8,8" AutomationProperties.AutomationId="StatisticsSavePrice" />
+                    <ui:Button Content="{i18n:T 恢复继承单价}" Command="{Binding RestorePriceCommand}" Margin="0,0,8,8" AutomationProperties.AutomationId="StatisticsRestorePrice" />
+                    <ui:Button Content="{i18n:T 添加长上下文档位}" Command="{Binding AddPriceTierCommand}" Margin="0,0,8,8" />
+                    <ui:Button Content="{i18n:T 更新公开价}" Command="{Binding UpdatePublicPricesCommand}" Margin="0,0,0,8" AutomationProperties.AutomationId="StatisticsUpdatePrices" />
+                </WrapPanel>
+                <TextBlock Text="{Binding PriceCatalogCaption}" Style="{StaticResource Muted}" />
+                <TextBlock Text="{Binding PriceFeedback}" Style="{StaticResource Muted}" Margin="0,6,0,0" AutomationProperties.AutomationId="StatisticsPriceFeedback" />
+            </StackPanel>
+        </Border>
 
-            <!--  最近 7 天  -->
-            <ui:Card Grid.Column="1" Margin="6,0,0,0" Padding="14" VerticalAlignment="Stretch" VerticalContentAlignment="Top">
-                <StackPanel>
-                    <TextBlock Style="{StaticResource CardTitle}" Text="{i18n:T 最近 7 天}" />
-                    <TextBlock Style="{StaticResource MutedText}"
-                               Text="{Binding TrendSummary}"
-                               ToolTip="{Binding RateHelp}" />
-                    <Grid Height="98" Margin="0,8,0,0">
-                        <ItemsControl ItemsSource="{Binding Trend}">
-                            <ItemsControl.ItemsPanel>
-                                <ItemsPanelTemplate>
-                                    <UniformGrid Columns="7" Rows="1" />
-                                </ItemsPanelTemplate>
-                            </ItemsControl.ItemsPanel>
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate>
-                                    <Grid Margin="3,0" ToolTip="{Binding ToolTip}">
-                                        <Grid.RowDefinitions>
-                                            <RowDefinition Height="44" />
-                                            <RowDefinition Height="Auto" />
-                                            <RowDefinition Height="Auto" />
-                                            <RowDefinition Height="Auto" />
-                                        </Grid.RowDefinitions>
-                                        <Border Grid.Row="0"
-                                                Height="{Binding BarHeight}"
-                                                VerticalAlignment="Bottom"
-                                                Background="{Binding Brush}"
-                                                CornerRadius="3" />
-                                        <TextBlock Grid.Row="1"
-                                                   Margin="0,4,0,0"
-                                                   HorizontalAlignment="Center"
-                                                   FontSize="11"
-                                                   FontWeight="SemiBold"
-                                                   Text="{Binding RequestsText}" />
-                                        <TextBlock Grid.Row="2"
-                                                   HorizontalAlignment="Center"
-                                                   FontSize="10"
-                                                   Foreground="{DynamicResource TextFillColorTertiaryBrush}"
-                                                   Text="{Binding DateLabel}" />
-                                        <TextBlock Grid.Row="3"
-                                                   HorizontalAlignment="Center"
-                                                   FontSize="10"
-                                                   Foreground="{Binding Brush}"
-                                                   Text="{Binding RateText}" />
-                                    </Grid>
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
+        <WrapPanel Margin="0,0,0,8" AutomationProperties.AutomationId="StatisticsPeriods">
+            <ui:Button Content="{i18n:T 今天}" Style="{StaticResource PeriodButton}" Command="{Binding SelectPeriodCommand}" CommandParameter="today" Appearance="{Binding IsToday, Converter={StaticResource BooleanToChipAppearanceConverter}}" AutomationProperties.AutomationId="StatisticsPeriodToday" />
+            <ui:Button Content="{i18n:T 7 天}" Style="{StaticResource PeriodButton}" Command="{Binding SelectPeriodCommand}" CommandParameter="week" Appearance="{Binding IsWeek, Converter={StaticResource BooleanToChipAppearanceConverter}}" AutomationProperties.AutomationId="StatisticsPeriodWeek" />
+            <ui:Button Content="{i18n:T 30 天}" Style="{StaticResource PeriodButton}" Command="{Binding SelectPeriodCommand}" CommandParameter="month" Appearance="{Binding IsMonth, Converter={StaticResource BooleanToChipAppearanceConverter}}" AutomationProperties.AutomationId="StatisticsPeriodMonth" />
+            <ui:Button Content="{i18n:T 全部}" Style="{StaticResource PeriodButton}" Command="{Binding SelectPeriodCommand}" CommandParameter="all" Appearance="{Binding IsAll, Converter={StaticResource BooleanToChipAppearanceConverter}}" AutomationProperties.AutomationId="StatisticsPeriodAll" />
+            <ui:Button Content="{i18n:T 自定义}" Style="{StaticResource PeriodButton}" Command="{Binding SelectPeriodCommand}" CommandParameter="custom" Appearance="{Binding IsCustom, Converter={StaticResource BooleanToChipAppearanceConverter}}" AutomationProperties.AutomationId="StatisticsPeriodCustom" />
+        </WrapPanel>
+        <WrapPanel Margin="0,0,0,12" Visibility="{Binding IsCustom, Converter={StaticResource BooleanToVisibilityConverter}}">
+            <TextBlock Text="{i18n:T 开始日期}" VerticalAlignment="Center" Margin="0,0,8,0" />
+            <DatePicker SelectedDate="{Binding FromDate}" DisplayDateEnd="{Binding Today, Mode=OneWay}" Width="145" AutomationProperties.AutomationId="StatisticsFromDate" />
+            <TextBlock Text="{i18n:T 至}" VerticalAlignment="Center" Margin="10,0" />
+            <DatePicker SelectedDate="{Binding ToDate}" DisplayDateEnd="{Binding Today, Mode=OneWay}" Width="145" AutomationProperties.AutomationId="StatisticsToDate" />
+        </WrapPanel>
+        <UniformGrid x:Name="FilterGrid" Columns="3" Margin="0,0,-10,4">
+            <StackPanel Margin="0,0,10,10"><TextBlock Text="{i18n:T 客户端}" Style="{StaticResource Label}" /><ComboBox Style="{StaticResource Filter}" ItemsSource="{Binding ClientChoices}" SelectedValue="{Binding SelectedClient}" AutomationProperties.AutomationId="StatisticsClientFilter" /></StackPanel>
+            <StackPanel Margin="0,0,10,10"><TextBlock Text="{i18n:T 供应商}" Style="{StaticResource Label}" /><ComboBox Style="{StaticResource Filter}" ItemsSource="{Binding ProviderChoices}" SelectedValue="{Binding SelectedProvider}" AutomationProperties.AutomationId="StatisticsProviderFilter" /></StackPanel>
+            <StackPanel Margin="0,0,10,10"><TextBlock Text="{i18n:T 模型}" Style="{StaticResource Label}" /><ComboBox Style="{StaticResource Filter}" ItemsSource="{Binding ModelChoices}" SelectedValue="{Binding SelectedModel}" AutomationProperties.AutomationId="StatisticsModelFilter" /></StackPanel>
+            <StackPanel Margin="0,0,10,10"><TextBlock Text="Key" Style="{StaticResource Label}" /><ComboBox Style="{StaticResource Filter}" ItemsSource="{Binding KeyChoices}" SelectedValue="{Binding SelectedKey}" AutomationProperties.AutomationId="StatisticsKeyFilter" /></StackPanel>
+            <StackPanel Margin="0,0,10,10"><TextBlock Text="{i18n:T 请求结果}" Style="{StaticResource Label}" /><ComboBox Style="{StaticResource Filter}" ItemsSource="{Binding StatusChoices}" SelectedValue="{Binding SelectedStatus}" AutomationProperties.AutomationId="StatisticsStatusFilter" /></StackPanel>
+            <ui:Button Content="{i18n:T 重置筛选}" Command="{Binding ResetFiltersCommand}" VerticalAlignment="Bottom" HorizontalAlignment="Stretch" Margin="0,0,10,10" MinHeight="32" AutomationProperties.AutomationId="StatisticsResetFilters" />
+        </UniformGrid>
+        <TextBlock Text="{Binding RangeCaption}" Style="{StaticResource Muted}" Margin="0,0,0,12" AutomationProperties.AutomationId="StatisticsRangeCaption" />
+        <ProgressBar Height="2" IsIndeterminate="True" Margin="0,0,0,10" Visibility="{Binding IsLoading, Converter={StaticResource BooleanToVisibilityConverter}}" />
+        <Border Background="{DynamicResource ControlFillColorDefaultBrush}" CornerRadius="7" Padding="12" Margin="0,0,0,12"
+                Visibility="{Binding HasNotice, Converter={StaticResource BooleanToVisibilityConverter}}">
+            <TextBlock Text="{Binding Notice}" TextWrapping="Wrap" Foreground="{DynamicResource SystemFillColorCautionBrush}" AutomationProperties.AutomationId="StatisticsNotice" />
+        </Border>
+
+        <StackPanel Visibility="{Binding HasReport, Converter={StaticResource BooleanToVisibilityConverter}}">
+            <UniformGrid x:Name="KpiGrid" Columns="4" Margin="0,0,-10,0">
+                <Border Style="{StaticResource KpiCard}" ToolTip="{Binding RequestsHelp}">
+                    <StackPanel><TextBlock Text="{i18n:T 已结束请求}" Style="{StaticResource Muted}" /><TextBlock Text="{Binding TotalRequests}" Style="{StaticResource KpiValue}" AutomationProperties.AutomationId="OverviewTotalRequests" /><TextBlock Text="{Binding RequestsDetail}" Style="{StaticResource Muted}" /></StackPanel>
+                </Border>
+                <Border Style="{StaticResource KpiCard}" ToolTip="{Binding TokensHelp}">
+                    <StackPanel><TextBlock Text="{i18n:T 总用量}" Style="{StaticResource Muted}" /><TextBlock Text="{Binding TotalTokens}" Style="{StaticResource KpiValue}" Foreground="{Binding AccentBrush}" AutomationProperties.AutomationId="StatisticsTotalTokens" /><TextBlock Text="{Binding TokensDetail}" Style="{StaticResource Muted}" /></StackPanel>
+                </Border>
+                <Border Style="{StaticResource KpiCard}" ToolTip="{Binding CacheRateHelp}">
+                    <StackPanel><TextBlock Text="{i18n:T 缓存命中率}" Style="{StaticResource Muted}" /><TextBlock Text="{Binding CacheRate}" Style="{StaticResource KpiValue}" AutomationProperties.AutomationId="StatisticsCacheRate" /><ProgressBar Value="{Binding CacheProgress}" Height="3" Margin="0,0,0,7" Foreground="{Binding AccentBrush}" /><TextBlock Text="{Binding CacheDetail}" Style="{StaticResource Muted}" /></StackPanel>
+                </Border>
+                <Border Style="{StaticResource KpiCard}" ToolTip="{Binding CostHelp}">
+                    <StackPanel><TextBlock Text="{i18n:T 估算费用}" Style="{StaticResource Muted}" /><TextBlock Text="{Binding TotalCost}" Style="{StaticResource KpiValue}" AutomationProperties.AutomationId="StatisticsTotalCost" /><TextBlock Text="{Binding CostDetail}" Style="{StaticResource Muted}" /></StackPanel>
+                </Border>
+            </UniformGrid>
+            <Border Style="{StaticResource Card}" Padding="4,12" Margin="0,0,0,16">
+                <ItemsControl ItemsSource="{Binding TokenTiles}">
+                    <ItemsControl.ItemsPanel><ItemsPanelTemplate><UniformGrid Columns="{Binding ActualWidth, RelativeSource={RelativeSource Self}, Converter={StaticResource AdaptiveUniformGridColumnsConverter}, ConverterParameter='142,6'}" /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <StackPanel Margin="14,5" ToolTip="{Binding ToolTip}">
+                                <TextBlock Text="{Binding Label}" Style="{StaticResource Muted}" /><TextBlock Text="{Binding Value}" FontSize="17" FontWeight="SemiBold" Margin="0,5,0,4" />
+                                <TextBlock Text="{Binding Detail}" Style="{StaticResource Muted}" />
+                            </StackPanel>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </Border>
+
+            <Grid x:Name="TrendGrid" Margin="0,0,0,16">
+                <Grid.ColumnDefinitions><ColumnDefinition Width="2.2*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                <Border x:Name="TrendCard" Style="{StaticResource Card}" Margin="0,0,12,0">
+                    <StackPanel>
+                        <WrapPanel VerticalAlignment="Center" Margin="0,0,0,8">
+                            <TextBlock Text="{i18n:T 使用趋势}" Style="{StaticResource SectionTitle}" VerticalAlignment="Center" Margin="0,0,16,6" />
+                            <ComboBox Style="{StaticResource Filter}" ItemsSource="{Binding MetricChoices}" SelectedValue="{Binding SelectedMetric}" MinWidth="90" Margin="0,0,8,6" AutomationProperties.AutomationId="StatisticsMetric" />
+                            <ComboBox Style="{StaticResource Filter}" ItemsSource="{Binding DimensionChoices}" SelectedValue="{Binding SelectedDimension}" MinWidth="108" Margin="0,0,0,6" AutomationProperties.AutomationId="StatisticsDimension" />
+                        </WrapPanel>
+                        <controls:StatisticsChart Data="{Binding Chart}" SelectRangeCommand="{Binding SelectRangeCommand}" Height="238" AutomationProperties.AutomationId="StatisticsTrendChart" />
+                        <ItemsControl ItemsSource="{Binding Categories}" Margin="0,10,0,4">
+                            <ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate><DataTemplate><StackPanel Orientation="Horizontal" Margin="0,0,14,6"><Ellipse Width="7" Height="7" Fill="{Binding Brush}" Margin="0,0,6,0" /><TextBlock Text="{Binding Name}" FontSize="10" MaxWidth="160" TextTrimming="CharacterEllipsis" ToolTip="{Binding Name}" /></StackPanel></DataTemplate></ItemsControl.ItemTemplate>
                         </ItemsControl>
-                        <TextBlock HorizontalAlignment="Center"
-                                   VerticalAlignment="Center"
-                                   FontSize="12"
-                                   Foreground="{DynamicResource TextFillColorTertiaryBrush}"
-                                   IsHitTestVisible="False"
-                                   Text="{i18n:T 暂无历史统计}"
-                                   Visibility="{Binding TrendIsEmpty, Converter={StaticResource BooleanToVisibilityConverter}}" />
-                    </Grid>
-                </StackPanel>
-            </ui:Card>
-        </Grid>
+                        <TextBlock Text="{Binding ChartCaption}" Style="{StaticResource Muted}" />
+                    </StackPanel>
+                </Border>
+                <Border x:Name="RankCard" Grid.Column="1" Style="{StaticResource Card}">
+                    <StackPanel>
+                        <TextBlock Text="{i18n:T 用量排行}" Style="{StaticResource SectionTitle}" />
+                        <TextBlock Text="{i18n:T 与趋势图使用相同指标，点击筛选}" Style="{StaticResource Muted}" Margin="0,5,0,12" />
+                        <ScrollViewer MaxHeight="304" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                            <ItemsControl ItemsSource="{Binding RankRows}" AutomationProperties.AutomationId="StatisticsRanking">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <ui:Button Command="{Binding DataContext.SelectGroupCommand, ElementName=Root}" CommandParameter="{Binding Id}" ToolTip="{Binding ToolTip}"
+                                                   HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" Padding="8" Margin="0,0,0,4" BorderThickness="0" Background="Transparent" Appearance="Transparent">
+                                            <StackPanel>
+                                                <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions><TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis" Margin="0,0,8,0" /><TextBlock Grid.Column="1" Text="{Binding Value}" FontWeight="SemiBold" /></Grid>
+                                                <ProgressBar Height="3" Value="{Binding Share}" Foreground="{Binding Brush}" Margin="0,7,0,6" />
+                                                <TextBlock Text="{Binding Detail}" Style="{StaticResource Muted}" />
+                                            </StackPanel>
+                                        </ui:Button>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </ScrollViewer>
+                    </StackPanel>
+                </Border>
+            </Grid>
 
-        <Grid>
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="*" />
-            </Grid.ColumnDefinitions>
-
-            <!--  按模型拆分  -->
-            <ui:Card Grid.Column="0" Margin="0,0,6,0" Padding="14" VerticalAlignment="Stretch" VerticalContentAlignment="Top">
+            <Border Style="{StaticResource Card}" Margin="0,0,0,16">
                 <StackPanel>
-                    <TextBlock Style="{StaticResource CardTitle}" Text="{i18n:T 按模型拆分}" />
-                    <Grid Margin="0,0,0,4">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Style="{StaticResource ColumnLabel}" Text="{i18n:T 模型}" />
-                        <TextBlock Grid.Column="1" Style="{StaticResource ColumnLabel}" Text="{i18n:T 请求}" />
-                        <TextBlock Grid.Column="2" Margin="0" Style="{StaticResource ColumnLabel}" Text="{i18n:T 命中率}" />
-                    </Grid>
-                    <ItemsControl ItemsSource="{Binding ModelRows}">
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate>
-                                <Grid Height="28" ToolTip="{Binding ToolTip}">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*" />
-                                        <ColumnDefinition Width="Auto" />
-                                        <ColumnDefinition Width="Auto" />
-                                    </Grid.ColumnDefinitions>
-                                    <TextBlock Grid.Column="0"
-                                               Margin="0,0,8,0"
-                                               VerticalAlignment="Center"
-                                               FontSize="11"
-                                               Text="{Binding Name}"
-                                               TextTrimming="CharacterEllipsis" />
-                                    <TextBlock Grid.Column="1"
-                                               Margin="0,0,12,0"
-                                               VerticalAlignment="Center"
-                                               FontSize="11"
-                                               Foreground="{DynamicResource TextFillColorSecondaryBrush}"
-                                               Text="{Binding Requests}" />
-                                    <TextBlock Grid.Column="2"
-                                               MinWidth="52"
-                                               VerticalAlignment="Center"
-                                               FontSize="12"
-                                               FontWeight="SemiBold"
-                                               Foreground="{Binding RateBrush}"
-                                               Text="{Binding Rate}"
-                                               TextAlignment="Right" />
-                                </Grid>
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                    </ItemsControl>
-                    <TextBlock Style="{StaticResource MutedText}"
-                               Text="{i18n:T 暂无成功请求的用量记录}"
-                               Visibility="{Binding HasModelRows, Converter={StaticResource BooleanToVisibilityRevertConverter}}" />
+                    <DockPanel Margin="0,0,0,12">
+                        <ComboBox DockPanel.Dock="Right" Style="{StaticResource Filter}" ItemsSource="{Binding HeatMetricChoices}" SelectedValue="{Binding SelectedHeatMetric}" Width="100" AutomationProperties.AutomationId="StatisticsHeatMetric" />
+                        <StackPanel><TextBlock Text="{i18n:T 活跃日历}" Style="{StaticResource SectionTitle}" /><TextBlock Text="{Binding HeatCaption}" Style="{StaticResource Muted}" Margin="0,5,0,0" /></StackPanel>
+                    </DockPanel>
+                    <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled" Padding="0,0,0,4">
+                        <Grid MinWidth="750">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="28" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions><RowDefinition Height="24" /><RowDefinition Height="112" /></Grid.RowDefinitions>
+                            <ItemsControl Grid.Column="1" ItemsSource="{Binding HeatMonths}">
+                                <ItemsControl.ItemsPanel><ItemsPanelTemplate><UniformGrid Columns="53" /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                                <ItemsControl.ItemTemplate><DataTemplate><Canvas Height="20"><TextBlock Text="{Binding}" Style="{StaticResource Muted}" Width="42" TextWrapping="NoWrap" /></Canvas></DataTemplate></ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                            <UniformGrid Grid.Row="1" Rows="7">
+                                <TextBlock Text="{i18n:T 一}" Style="{StaticResource Muted}" /><TextBlock /><TextBlock Text="{i18n:T 三}" Style="{StaticResource Muted}" /><TextBlock /><TextBlock Text="{i18n:T 五}" Style="{StaticResource Muted}" /><TextBlock /><TextBlock Text="{i18n:T 日}" Style="{StaticResource Muted}" />
+                            </UniformGrid>
+                            <ItemsControl Grid.Row="1" Grid.Column="1" ItemsSource="{Binding HeatDays}" KeyboardNavigation.TabNavigation="Once" AutomationProperties.AutomationId="StatisticsHeatmap">
+                                <ItemsControl.ItemsPanel><ItemsPanelTemplate><UniformGrid Columns="53" Rows="7" /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Button Command="{Binding DataContext.SelectDayCommand, ElementName=Root}" CommandParameter="{Binding Date}" IsEnabled="{Binding IsEnabled}"
+                                                ToolTip="{Binding ToolTip}" AutomationProperties.Name="{Binding ToolTip}" Margin="1.5" Background="{Binding Brush}" BorderThickness="0" Cursor="Hand"
+                                                HorizontalAlignment="Stretch" VerticalAlignment="Stretch" MinWidth="0" MinHeight="0" Padding="0">
+                                            <Button.Template><ControlTemplate TargetType="Button"><Border x:Name="Cell" CornerRadius="3" Background="{TemplateBinding Background}" BorderThickness="1" BorderBrush="Transparent" /><ControlTemplate.Triggers>
+                                                <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Cell" Property="BorderBrush" Value="{DynamicResource TextFillColorPrimaryBrush}" /></Trigger>
+                                                <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="Cell" Property="BorderBrush" Value="{DynamicResource TextFillColorPrimaryBrush}" /></Trigger>
+                                                <DataTrigger Binding="{Binding IsSelected}" Value="True"><Setter TargetName="Cell" Property="BorderBrush" Value="{DynamicResource TextFillColorPrimaryBrush}" /></DataTrigger>
+                                                <Trigger Property="IsEnabled" Value="False"><Setter TargetName="Cell" Property="Opacity" Value="0" /></Trigger>
+                                            </ControlTemplate.Triggers></ControlTemplate></Button.Template>
+                                        </Button>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </Grid>
+                    </ScrollViewer>
+                    <DockPanel Margin="0,8,0,0">
+                        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                            <TextBlock Text="{i18n:T 少}" Style="{StaticResource Muted}" Margin="0,0,6,0" />
+                            <Rectangle Width="10" Height="10" Fill="{Binding AccentBrush}" Opacity="0.25" Margin="2,0" /><Rectangle Width="10" Height="10" Fill="{Binding AccentBrush}" Opacity="0.5" Margin="2,0" /><Rectangle Width="10" Height="10" Fill="{Binding AccentBrush}" Opacity="0.75" Margin="2,0" /><Rectangle Width="10" Height="10" Fill="{Binding AccentBrush}" Margin="2,0" />
+                            <TextBlock Text="{i18n:T 多}" Style="{StaticResource Muted}" Margin="6,0,0,0" />
+                        </StackPanel>
+                        <TextBlock Text="{i18n:T 跟随客户端、供应商、模型、Key 和结果筛选，日期固定为最近 53 周}" Style="{StaticResource Muted}" Margin="0,0,10,0" />
+                    </DockPanel>
                 </StackPanel>
-            </ui:Card>
+            </Border>
 
-            <!--  按 Key 拆分  -->
-            <ui:Card Grid.Column="1" Margin="6,0,0,0" Padding="14" VerticalAlignment="Stretch" VerticalContentAlignment="Top">
+            <Border Style="{StaticResource Card}">
                 <StackPanel>
-                    <TextBlock Style="{StaticResource CardTitle}" Text="{i18n:T 按 Key 拆分}" />
-                    <Grid Margin="0,0,0,4">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Style="{StaticResource ColumnLabel}" Text="{i18n:T Key}" />
-                        <TextBlock Grid.Column="1" Style="{StaticResource ColumnLabel}" Text="{i18n:T 请求}" />
-                        <TextBlock Grid.Column="2" Margin="0" Style="{StaticResource ColumnLabel}" Text="{i18n:T 命中率}" />
-                    </Grid>
-                    <ItemsControl ItemsSource="{Binding KeyRows}">
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate>
-                                <Grid Height="28" ToolTip="{Binding ToolTip}">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*" />
-                                        <ColumnDefinition Width="Auto" />
-                                        <ColumnDefinition Width="Auto" />
-                                    </Grid.ColumnDefinitions>
-                                    <TextBlock Grid.Column="0"
-                                               Margin="0,0,8,0"
-                                               VerticalAlignment="Center"
-                                               FontSize="11"
-                                               Text="{Binding Name}"
-                                               TextTrimming="CharacterEllipsis" />
-                                    <TextBlock Grid.Column="1"
-                                               Margin="0,0,12,0"
-                                               VerticalAlignment="Center"
-                                               FontSize="11"
-                                               Foreground="{DynamicResource TextFillColorSecondaryBrush}"
-                                               Text="{Binding Requests}" />
-                                    <TextBlock Grid.Column="2"
-                                               MinWidth="52"
-                                               VerticalAlignment="Center"
-                                               FontSize="12"
-                                               FontWeight="SemiBold"
-                                               Foreground="{Binding RateBrush}"
-                                               Text="{Binding Rate}"
-                                               TextAlignment="Right" />
-                                </Grid>
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                    </ItemsControl>
-                    <TextBlock Style="{StaticResource MutedText}"
-                               Text="{i18n:T 暂无成功请求的用量记录}"
-                               Visibility="{Binding HasKeyRows, Converter={StaticResource BooleanToVisibilityRevertConverter}}" />
+                    <DockPanel Margin="0,0,0,12">
+                        <ui:Button DockPanel.Dock="Right" Content="{i18n:T 导出 CSV}" Command="{Binding ExportCommand}" AutomationProperties.AutomationId="StatisticsExport" />
+                        <StackPanel><TextBlock Text="{i18n:T 请求明细}" Style="{StaticResource SectionTitle}" /><TextBlock Text="{i18n:T 最新结束的请求在前，悬停查看完整用量}" Style="{StaticResource Muted}" Margin="0,5,0,0" /></StackPanel>
+                    </DockPanel>
+                    <DataGrid ItemsSource="{Binding RequestRows}" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False" CanUserDeleteRows="False"
+                              CanUserSortColumns="False" HeadersVisibility="Column" GridLinesVisibility="None" BorderThickness="0" Background="Transparent" FontSize="12"
+                              RowBackground="Transparent" AlternatingRowBackground="{DynamicResource ControlFillColorDefaultBrush}" MinRowHeight="58" MaxHeight="520"
+                              HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto" AutomationProperties.AutomationId="StatisticsRequestTable">
+                        <DataGrid.RowStyle><Style TargetType="DataGridRow"><Setter Property="ToolTip" Value="{Binding ToolTip}" /></Style></DataGrid.RowStyle>
+                        <DataGrid.ColumnHeaderStyle><Style TargetType="DataGridColumnHeader"><Setter Property="Background" Value="{DynamicResource CardBackgroundFillColorDefaultBrush}" /><Setter Property="Foreground" Value="{DynamicResource TextFillColorSecondaryBrush}" /><Setter Property="Padding" Value="8,8" /><Setter Property="FontSize" Value="11" /><Setter Property="BorderThickness" Value="0,0,0,1" /><Setter Property="BorderBrush" Value="{DynamicResource ControlStrokeColorDefaultBrush}" /></Style></DataGrid.ColumnHeaderStyle>
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="{i18n:T 时间}" Binding="{Binding Time}" Width="78" MinWidth="78" ElementStyle="{StaticResource CellText}" />
+                            <DataGridTemplateColumn Header="{i18n:T 模型与供应商}" Width="*" MinWidth="210">
+                                <DataGridTemplateColumn.CellTemplate><DataTemplate><StackPanel Margin="8,7" VerticalAlignment="Center"><TextBlock Text="{Binding Model}" TextTrimming="CharacterEllipsis" FontWeight="SemiBold" /><TextBlock Text="{Binding Provider}" Style="{StaticResource Muted}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" Margin="0,3,0,0" /><TextBlock Text="{Binding ClientKey}" Style="{StaticResource Muted}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" /></StackPanel></DataTemplate></DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
+                            <DataGridTemplateColumn Header="{i18n:T 结果}" Width="76" MinWidth="76"><DataGridTemplateColumn.CellTemplate><DataTemplate><TextBlock Text="{Binding Status}" Foreground="{Binding StatusBrush}" Style="{StaticResource CellText}" /></DataTemplate></DataGridTemplateColumn.CellTemplate></DataGridTemplateColumn>
+                            <DataGridTextColumn Header="{i18n:T 用量}" Binding="{Binding Tokens}" Width="100" MinWidth="100" ElementStyle="{StaticResource CellText}" />
+                            <DataGridTextColumn Header="{i18n:T 命中率}" Binding="{Binding Cache}" Width="82" MinWidth="82" ElementStyle="{StaticResource CellText}" />
+                            <DataGridTextColumn Header="{i18n:T 费用 (USD)}" Binding="{Binding Cost}" Width="110" MinWidth="110" ElementStyle="{StaticResource CellText}" />
+                            <DataGridTextColumn Header="{i18n:T 耗时}" Binding="{Binding Duration}" Width="92" MinWidth="92" ElementStyle="{StaticResource CellText}" />
+                        </DataGrid.Columns>
+                    </DataGrid>
+                    <TextBlock Text="{i18n:T 所选时段暂无已结束请求}" HorizontalAlignment="Center" Margin="0,24" Style="{StaticResource Muted}" Visibility="{Binding HasRequests, Converter={StaticResource BooleanToVisibilityRevertConverter}}" />
+                    <DockPanel Margin="0,12,0,0">
+                        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal"><ui:Button Content="{i18n:T 上一页}" Command="{Binding PreviousPageCommand}" Margin="0,0,8,0" AutomationProperties.AutomationId="StatisticsPreviousPage" /><ui:Button Content="{i18n:T 下一页}" Command="{Binding NextPageCommand}" AutomationProperties.AutomationId="StatisticsNextPage" /></StackPanel>
+                        <TextBlock Text="{Binding PageCaption}" Style="{StaticResource Muted}" VerticalAlignment="Center" Margin="0,0,10,0" AutomationProperties.AutomationId="StatisticsPageCaption" />
+                    </DockPanel>
                 </StackPanel>
-            </ui:Card>
-        </Grid>
+            </Border>
+            <TextBlock Text="{Binding UpdatedCaption}" Style="{StaticResource Muted}" Margin="0,12,0,0" HorizontalAlignment="Right" />
+        </StackPanel>
     </StackPanel>
 </UserControl>

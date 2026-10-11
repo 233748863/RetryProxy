@@ -64,6 +64,7 @@ internal sealed class ResponseStats
     private CacheKeyState _cacheKeyState = CacheKeyState.Unchanged;
     private double? _firstByteSeconds;
     private double? _firstContentSeconds;
+    private double? _firstTextSeconds;
     private StreamOutcome? _outcome;
     private bool _missingTerminalEvent;
     private readonly ByteBuffer _jsonBody = new();
@@ -202,6 +203,22 @@ internal sealed class ResponseStats
             CacheKeyStatus = _cacheKeyState.Label() ?? "保持原请求",
         };
     }
+
+    public RequestUsage? Usage(double durationSeconds) => _cacheInputAccounting is not { } accounting ? null : new()
+    {
+        Model = _model ?? string.Empty,
+        InputAccounting = accounting,
+        InputTokens = _usage.Input,
+        OutputTokens = _usage.Output,
+        CachedTokens = _usage.CacheRead,
+        CacheCreationTokens = _usage.CacheCreation,
+        CacheCreation1hTokens = _usage.CacheCreation1h,
+        ReasoningTokens = _usage.Reasoning,
+        IsStreaming = IsApiEventStream,
+        FirstContentSeconds = IsApiEventStream ? _firstContentSeconds : null,
+        FirstTextSeconds = IsApiEventStream ? _firstTextSeconds : null,
+        DurationSeconds = double.IsFinite(durationSeconds) && durationSeconds >= 0 ? durationSeconds : null,
+    };
 
     private void AppendAnswer(string text)
     {
@@ -724,6 +741,15 @@ internal sealed class ResponseStats
         if (_firstContentSeconds is null && ContentRules.HasGeneratedContent(value, eventType))
         {
             _firstContentSeconds = elapsed;
+        }
+
+        if (_firstTextSeconds is null &&
+            ((eventType == "response.output_text.delta" && !string.IsNullOrEmpty(value.Get("delta").AsString()))
+             || !string.IsNullOrEmpty(value.Pointer("/delta/text").AsString())
+             || !string.IsNullOrEmpty(value.Pointer("/content_block/text").AsString())
+             || !string.IsNullOrEmpty(value.Pointer("/choices/0/delta/content").AsString())))
+        {
+            _firstTextSeconds = elapsed;
         }
 
         ObserveAnswer(value, envelope, eventType);

@@ -31,6 +31,8 @@ internal sealed class TokenUsage
 
     public ulong? CacheCreation { get; private set; }
 
+    public ulong? CacheCreation1h { get; private set; }
+
     public ulong? Reasoning { get; private set; }
 
     private bool _inputFromDelta;
@@ -41,6 +43,13 @@ internal sealed class TokenUsage
         var output = TokenCount(usage, OutputPointers);
         var cacheRead = TokenCount(usage, CacheReadPointers);
         var cacheCreation = TokenCount(usage, CacheCreationPointers);
+        var creation1h = usage.Pointer("/cache_creation/ephemeral_1h_input_tokens").AsUInt64();
+        var creation5m = usage.Pointer("/cache_creation/ephemeral_5m_input_tokens").AsUInt64();
+        if (cacheCreation is null && (creation1h is not null || creation5m is not null))
+        {
+            try { cacheCreation = checked((creation1h ?? 0) + (creation5m ?? 0)); }
+            catch (System.OverflowException) { }
+        }
         var current = Input ?? 0;
         var replaceInput = input is { } next
             && (!messageDelta
@@ -68,6 +77,7 @@ internal sealed class TokenUsage
         if (cacheCreation is not null && (!messageDelta || replaceInput || (CacheCreation ?? 0) == 0))
         {
             CacheCreation = cacheCreation;
+            CacheCreation1h = creation1h;
         }
 
         if (TokenCount(usage, ReasoningPointers) is { } reasoning)

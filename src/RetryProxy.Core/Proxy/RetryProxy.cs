@@ -1084,6 +1084,15 @@ public sealed class RetryProxy
 
             var snapshot = plan.Snapshot;
             ctx.Diagnostics?.SelectTarget(snapshot, plan.Model);
+            ctx.Metrics.Attribute(requestId, new RequestAttribution
+            {
+                ProviderId = snapshot.ProviderId,
+                ProviderName = snapshot.ProviderName,
+                KeyId = snapshot.KeyId,
+                KeyName = snapshot.KeyName,
+                Model = plan.Model ?? string.Empty,
+                Client = Config.ClientType,
+            });
             if (plan.MissingKey)
             {
                 return MissingKeyResponse(ctx, snapshot);

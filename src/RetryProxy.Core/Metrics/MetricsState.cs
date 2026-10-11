@@ -151,9 +151,16 @@ internal sealed class MetricsState : IDisposable
                 record.Cache = cache;
                 record.KeyId = succeeded.KeyId;
                 record.KeyName = succeeded.KeyName;
+                record.Usage = succeeded.Usage;
                 break;
-            case DailyChange.Failed when record.Outcome is null:
+            case DailyChange.Failed failed when record.Outcome is null:
                 record.Outcome = RequestOutcome.Failure;
+                record.Usage = failed.Usage;
+                break;
+            case DailyChange.Attributed attributed when record.Outcome is null:
+                record.Attribution = attributed.Attribution;
+                record.KeyId = attributed.Attribution.KeyId;
+                record.KeyName = attributed.Attribution.KeyName;
                 break;
             case DailyChange.Retry retry when record.Outcome is null:
                 record.Retry(retry.Attempt);
@@ -172,7 +179,9 @@ internal sealed class MetricsState : IDisposable
             || before.CacheKey != record.CacheKey
             || before.CacheFallback != record.CacheFallback
             || before.KeyId != record.KeyId
-            || before.KeyName != record.KeyName;
+            || before.KeyName != record.KeyName
+            || before.Attribution != record.Attribution
+            || before.Usage != record.Usage;
         if (changed)
         {
             record.UpdatedAtUnixMs = nowMs;

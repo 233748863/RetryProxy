@@ -24,12 +24,14 @@
             <WrapPanel Margin="0,0,0,18">
                 <ui:Button Content="{i18n:T 用量分析}" Command="{Binding SelectTabCommand}" CommandParameter="overview" Padding="14,7" Margin="0,0,6,0"
                            Appearance="{Binding IsOverview, Converter={StaticResource BooleanToChipAppearanceConverter}}" AutomationProperties.AutomationId="StatisticsTabOverview" />
+                <ui:Button Content="{i18n:T 会话分析}" Command="{Binding SelectTabCommand}" CommandParameter="conversations" Padding="14,7" Margin="0,0,6,0"
+                           Appearance="{Binding IsConversations, Converter={StaticResource BooleanToChipAppearanceConverter}}" AutomationProperties.AutomationId="StatisticsTabConversations" />
                 <ui:Button Content="{i18n:T 缓存详情}" Command="{Binding SelectTabCommand}" CommandParameter="cache" Padding="14,7" Margin="0,0,6,0"
                            Appearance="{Binding IsCache, Converter={StaticResource BooleanToChipAppearanceConverter}}" AutomationProperties.AutomationId="StatisticsTabCache" />
                 <ui:Button Content="{i18n:T 实时请求}" Command="{Binding SelectTabCommand}" CommandParameter="active" Padding="14,7"
                            Appearance="{Binding IsActive, Converter={StaticResource BooleanToChipAppearanceConverter}}" AutomationProperties.AutomationId="StatisticsTabActive" />
             </WrapPanel>
-            <StackPanel Visibility="{Binding IsOverview, Converter={StaticResource BooleanToVisibilityRevertConverter}}" Margin="0,0,0,14">
+            <StackPanel Visibility="{Binding IsChannelTab, Converter={StaticResource BooleanToVisibilityConverter}}" Margin="0,0,0,14">
                 <controls:ClientSelector Margin="0,0,0,12" />
                 <Grid Visibility="{Binding HasChannel, Converter={StaticResource BooleanToVisibilityConverter}}">
                     <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
@@ -43,6 +45,9 @@
             </StackPanel>
             <Grid Visibility="{Binding IsOverview, Converter={StaticResource BooleanToVisibilityConverter}}">
                 <views:OverviewPage DataContext="{Binding Overview}" />
+            </Grid>
+            <Grid Visibility="{Binding IsConversations, Converter={StaticResource BooleanToVisibilityConverter}}">
+                <views:ConversationPage DataContext="{Binding Conversations}" />
             </Grid>
             <Grid Visibility="{Binding IsCache, Converter={StaticResource BooleanToVisibilityConverter}}">
                 <views:CachePage DataContext="{Binding Cache}" />

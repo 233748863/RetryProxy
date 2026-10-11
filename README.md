@@ -203,6 +203,10 @@ python -X utf8 -m unittest discover -s tests -p test_config_storage_probe.py
 
 验收时显式传入 `-ExePath` 指向开发构建产物；共享运行文件复制器同时复制开发构建所需的 `runtimes` 原生依赖，兼容内嵌原生库的单文件发布包。测试复制程序到临时目录，使用独立端口和客户端目录，不停止或覆盖正在使用的 dist 实例。`verify_clients.ps1` 与 `verify_managed_preparation.ps1` 使用真实临时配置文件；仅当程序、Claude 与 Codex 目录均位于同一个临时测试目录时，`RETRY_PROXY_UI_TEST_ROOT` 才允许使用独立单实例名称。`RETRY_PROXY_CONFIG_JSON` 注入模式始终禁止写客户端配置，不能用于接管和重启恢复的落盘验收。使用固定 28080 / 28081 端口的既有验收脚本依次运行，避免相互占用。
 
+## 会话分析
+
+统计页新增“会话分析”：按连续对话汇总请求与估算费用，选择请求查看系统规则、指令、工具和文件等内容构成。分项为估算，会话身份仅保存摘要；旧记录及无法识别的请求列为“未归属请求”。查看详情或翻页会暂停自动刷新，支持筛选、手动刷新和跨日保存。详见[会话与上下文分析说明](docs/PRD-会话与上下文分析.md)。
+
 ## 配置与数据
 
 - 配置库：`User/config.db`。`proxy` 保存供应商、Key、通道与接管状态，`common` 和 `other` 保存界面偏好，`preparations` 保存准备任务；四行同一事务提交，库结构版本与代理配置 schema 7 分开管理。

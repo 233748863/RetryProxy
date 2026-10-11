@@ -13,17 +13,17 @@ using Wpf.Ui.Controls;
 
 namespace RetryProxy.ViewModel.Pages;
 
-/// <summary>统计页的三个子标签。</summary>
+/// <summary>统计页的子标签。</summary>
 public enum StatisticsTab
 {
     Overview,
+    Conversations,
     Cache,
     Active,
 }
 
 /// <summary>
-/// 统计页：顶部是客户端选择和"当前供应商 · Key"上下文，下面用三个子标签分开概况、缓存和在途，
-/// 避免原来把运行状态、缓存摘要和明细表堆在同一条长滚动里。
+/// 统计页：用量与会话分析分别筛选历史，缓存和在途页沿用当前客户端选择。
 /// </summary>
 public partial class StatisticsPageViewModel : ViewModel
 {
@@ -33,6 +33,8 @@ public partial class StatisticsPageViewModel : ViewModel
     private bool _navigated;
 
     public OverviewPageViewModel Overview { get; }
+
+    public ConversationPageViewModel Conversations { get; }
 
     public CachePageViewModel Cache { get; }
 
@@ -73,16 +75,23 @@ public partial class StatisticsPageViewModel : ViewModel
     [ObservableProperty]
     private bool _isActive;
 
+    [ObservableProperty]
+    private bool _isConversations;
+
+    public bool IsChannelTab => IsCache || IsActive;
+
     public StatisticsPageViewModel(
         WorkspaceService workspaceService,
         OverviewPageViewModel overview,
         CachePageViewModel cache,
-        ActiveRequestsViewModel active)
+        ActiveRequestsViewModel active,
+        ConversationPageViewModel conversations)
     {
         _workspaceService = workspaceService;
         Overview = overview;
         Cache = cache;
         Active = active;
+        Conversations = conversations;
         _workspaceService.Refreshed += Refresh;
         I18nService.Instance.PropertyChanged += (_, _) => Refresh();
         Refresh();
@@ -99,6 +108,7 @@ public partial class StatisticsPageViewModel : ViewModel
     {
         _navigated = false;
         Overview.OnNavigatedFrom();
+        Conversations.OnNavigatedFrom();
         Cache.OnNavigatedFrom();
         Active.OnNavigatedFrom();
     }
@@ -106,6 +116,7 @@ public partial class StatisticsPageViewModel : ViewModel
     private void ActivateTab()
     {
         if (IsOverview) Overview.OnNavigatedTo();
+        else if (IsConversations) Conversations.OnNavigatedTo();
         else if (IsCache) Cache.OnNavigatedTo();
         else Active.OnNavigatedTo();
     }
@@ -171,18 +182,22 @@ public partial class StatisticsPageViewModel : ViewModel
     private void OnSelectTab(string key)
     {
         Overview.OnNavigatedFrom();
+        Conversations.OnNavigatedFrom();
         Cache.OnNavigatedFrom();
         Active.OnNavigatedFrom();
         var tab = key switch
         {
             "cache" => StatisticsTab.Cache,
             "active" => StatisticsTab.Active,
+            "conversations" => StatisticsTab.Conversations,
             _ => StatisticsTab.Overview,
         };
 
         IsOverview = tab == StatisticsTab.Overview;
         IsCache = tab == StatisticsTab.Cache;
         IsActive = tab == StatisticsTab.Active;
+        IsConversations = tab == StatisticsTab.Conversations;
+        OnPropertyChanged(nameof(IsChannelTab));
         if (_navigated) ActivateTab();
     }
 }

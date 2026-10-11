@@ -1046,6 +1046,7 @@ public sealed class RetryProxy
         }
 
         var metadata = RequestMetadata.Parse(body);
+        var analysisStartedAt = DateTimeOffset.Now.ToUnixTimeMilliseconds();
         var pathAndQuery = rawQuery.Length > 0 ? $"{safePath}?{rawQuery}" : safePath;
         // 模板取注入前的请求头，内存里不留真实 Key。
         var keepAliveTemplate = HttpMethods.IsPost(method) ? new KeepAliveTemplate(method, pathAndQuery, baseHeaders, body) : null;
@@ -1076,6 +1077,12 @@ public sealed class RetryProxy
 
                 var first = plan is null;
                 plan = BuildAttempt(ctx, current, version, baseHeaders, body, metadata.Model, metadata.ModelIdentity, metadata.ReasoningEffort, streaming, rawQuery);
+                if (!_preparationProxy && ctx.FollowsSwitch && HttpMethods.IsPost(method) && KeepAliveFlavorExtensions.Detect(safePath) != KeepAliveFlavor.Unknown)
+                {
+                    var window = Config.ClientType == ClientType.Codex ? current.Models.ContextWindow
+                        : ModelRewriter.ClaudeTarget(current, metadata.Model ?? string.Empty)?.Context1M == true ? 1_000_000L : (long?)null;
+                    ctx.Metrics.Analyze(requestId, PromptAnalyzer.Capture(Config.ClientType, baseHeaders, plan.CacheRequest.Body, window, analysisStartedAt));
+                }
                 if (first)
                 {
                     ctx.Metrics.CacheKey(requestId, plan.CacheRequest.State);

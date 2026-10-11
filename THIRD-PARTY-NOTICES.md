@@ -1,6 +1,6 @@
 # 统计功能参考与数据来源
 
-统计页参考 [magpie](https://github.com/yetone/magpie) 的统计定义、计价规则及图表交互；使用 C# / WPF 自行实现。内置公开价格数据来自 [models.dev](https://models.dev/api.json)，采集日期为 2026-10-11；应用内可手动更新。
+统计页参考 [magpie](https://github.com/yetone/magpie) 的统计定义、计价规则、图表交互、会话归集及请求内容构成估算；使用 C# / WPF 自行实现。内置公开价格数据来自 [models.dev](https://models.dev/api.json)，采集日期为 2026-10-11；应用内可手动更新。
 
 ## magpie
 

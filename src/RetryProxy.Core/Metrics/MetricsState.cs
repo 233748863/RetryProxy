@@ -83,6 +83,7 @@ internal sealed class MetricsState : IDisposable
         var unsaved = _dirty.Count > 0;
         var carried = Active.Keys
             .Where(id => _records.TryGetValue(id, out var record) && record.Outcome is null)
+            .Select(id => _records[id].Clone())
             .ToList();
         var next = new MetricsState(today, _storage, importLegacy: false);
         next.Active = Active;
@@ -95,9 +96,11 @@ internal sealed class MetricsState : IDisposable
         CopyFrom(next);
         // 跨越午夜仍在处理的请求也算新一天的工作量；已完成但仍在交付的只保留活动阶段。
         var nowMs = new DateTimeOffset(now).ToUnixTimeMilliseconds();
-        foreach (var id in carried)
+        foreach (var record in carried)
         {
-            Change(id, new DailyChange.Started(), nowMs);
+            Change(record.RequestId, new DailyChange.Started(), nowMs);
+            if (record.Attribution is { } attribution) Change(record.RequestId, new DailyChange.Attributed(attribution), nowMs);
+            if (record.PromptAnalysis is { } analysis) Change(record.RequestId, new DailyChange.Analyzed(analysis), nowMs);
         }
     }
 
@@ -162,6 +165,9 @@ internal sealed class MetricsState : IDisposable
                 record.KeyId = attributed.Attribution.KeyId;
                 record.KeyName = attributed.Attribution.KeyName;
                 break;
+            case DailyChange.Analyzed analyzed when record.Outcome is null:
+                record.PromptAnalysis = analyzed.Analysis;
+                break;
             case DailyChange.Retry retry when record.Outcome is null:
                 record.Retry(retry.Attempt);
                 break;
@@ -181,7 +187,8 @@ internal sealed class MetricsState : IDisposable
             || before.KeyId != record.KeyId
             || before.KeyName != record.KeyName
             || before.Attribution != record.Attribution
-            || before.Usage != record.Usage;
+            || before.Usage != record.Usage
+            || before.PromptAnalysis != record.PromptAnalysis;
         if (changed)
         {
             record.UpdatedAtUnixMs = nowMs;

@@ -17,7 +17,7 @@ public enum RequestOutcome
 
 /// <summary>
 /// 当日统计里一条请求的记录（对应 daily.rs 的 DailyRequest）。
-/// 每行覆盖该请求上一条记录，重放两次无副作用；不含提示词、查询串、凭证或上游/会话标识。
+/// 每行覆盖该请求上一条记录，重放两次无副作用；不含提示词、查询串、凭证或原始会话标识。
 /// </summary>
 public sealed class DailyRequest
 {
@@ -66,6 +66,10 @@ public sealed class DailyRequest
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public RequestUsage? Usage { get; set; }
 
+    [JsonPropertyName("prompt_analysis")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public PromptAnalysis? PromptAnalysis { get; set; }
+
     public void Retry(ulong attempt)
     {
         if (LastRetryAttempt is null || attempt > LastRetryAttempt.Value)
@@ -93,6 +97,8 @@ internal abstract record DailyChange
     public sealed record Failed(RequestUsage? Usage = null) : DailyChange;
 
     public sealed record Attributed(RequestAttribution Attribution) : DailyChange;
+
+    public sealed record Analyzed(PromptAnalysis Analysis) : DailyChange;
 
     public sealed record Retry(ulong Attempt) : DailyChange;
 

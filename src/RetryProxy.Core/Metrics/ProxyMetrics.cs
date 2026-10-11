@@ -150,6 +150,17 @@ public sealed class ProxyMetrics : IDisposable
         }
     }
 
+    public void Analyze(string requestId, PromptAnalysis analysis)
+    {
+        lock (_lock)
+        {
+            if (!_state.Active.ContainsKey(requestId)) return;
+            var now = DateTime.Now;
+            _state.Rollover(now);
+            _state.Change(requestId, new DailyChange.Analyzed(analysis), UnixMs(now));
+        }
+    }
+
     public void CacheKey(string requestId, CacheKeyState state)
     {
         if (state != CacheKeyState.Unchanged)

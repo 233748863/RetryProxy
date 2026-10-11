@@ -29,3 +29,10 @@
         Copy-Item -LiteralPath $runtimesDirectory -Destination $DestinationDirectory -Recurse -Force -ErrorAction Stop
     }
 }
+
+function Read-RetryProxyRuntimeLog {
+    param([Parameter(Mandatory)][string]$LogDirectory)
+    $output = @(& python -X utf8 (Join-Path $PSScriptRoot 'log_storage_probe.py') runtime $LogDirectory 2>&1)
+    if ($LASTEXITCODE -ne 0) { throw "读取运行日志失败：$($output -join ' ')" }
+    return ($output -join "`n")
+}

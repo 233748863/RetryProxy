@@ -11,7 +11,7 @@ using RetryProxy.Core.Logging;
 namespace RetryProxy.Core.Metrics;
 
 /// <summary>
-/// 从保留的人类可读日志一次性迁移当日统计（对应 legacy.rs）。绝不推断缺失的 token 字段。
+/// 从保留的运行记录一次性恢复当日统计（对应 legacy.rs），支持旧文本和按日数据库。绝不推断缺失的 token 字段。
 /// </summary>
 internal static class LegacyLogRestore
 {
@@ -48,10 +48,13 @@ internal static class LegacyLogRestore
 
     public static SortedDictionary<string, DailyRequest> Restore(string directory, string routeName, DateOnly date)
     {
-        var prefix = $"[{routeName}][";
-        var labeledPrefix = $"[{LogSource.ChannelProxy.Label()}]{prefix}";
-        var datePrefix = date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
-        var entries = new List<LogEntry>();
+        var ordered = ReadTextLines(directory).Concat(RuntimeLogStore.ReadForStatistics(directory, date, routeName))
+            .Select(line => ParseEntry(line, routeName, date)).OfType<LogEntry>().OrderBy(entry => entry.Timestamp).ToList();
+        return RestoreEntries(ordered);
+    }
+
+    private static IEnumerable<string> ReadTextLines(string directory)
+    {
         // 先读最旧的轮转文件；稳定排序同时保留同一秒内多次尝试的行序。
         foreach (var suffix in new[] { ".3", ".2", ".1", string.Empty })
         {
@@ -59,7 +62,9 @@ internal static class LegacyLogRestore
             try
             {
                 // 日志器还开着当前文件写入，读取时必须允许写共享（对应 Rust std::fs::read 的共享方式）。
-                bytes = ReadShared(Path.Combine(directory, $"retry-proxy.log{suffix}"));
+                var path = Path.Combine(directory, $"retry-proxy.log{suffix}");
+                try { bytes = ReadShared(path); }
+                catch (FileNotFoundException) { bytes = ReadShared(path + ".migrated.bak"); }
             }
             catch (FileNotFoundException)
             {
@@ -92,84 +97,47 @@ internal static class LegacyLogRestore
                     continue;
                 }
 
-                if (!line.StartsWith(datePrefix, StringComparison.Ordinal) || line.Length < 21)
-                {
-                    continue;
-                }
-
-                var time = line[..19];
-                var rest = line[20..];
-                if (!DateTime.TryParseExact(time, "yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture, DateTimeStyles.None, out var timestamp))
-                {
-                    continue;
-                }
-
-                var space = rest.IndexOf(' ');
-                if (space < 0)
-                {
-                    continue;
-                }
-
-                var level = rest[..space];
-                var body = rest[(space + 1)..];
-                if (level is not ("INFO" or "WARNING" or "ERROR"))
-                {
-                    continue;
-                }
-
-                // 新日志显式标注来源，只导入通道代理；准备及保活即便对象同名也不进入用户统计。
-                var hasSource = body.StartsWith(labeledPrefix, StringComparison.Ordinal);
-                if (hasSource)
-                {
-                    body = body[labeledPrefix.Length..];
-                }
-                else if (body.StartsWith(prefix, StringComparison.Ordinal))
-                {
-                    body = body[prefix.Length..];
-                }
-                else
-                {
-                    continue;
-                }
-
-                var close = body.IndexOf(']');
-                if (close < 0)
-                {
-                    continue;
-                }
-
-                var id = body[..close];
-                body = body[(close + 1)..];
-                if (hasSource)
-                {
-                    if (!id.StartsWith("请求 ", StringComparison.Ordinal))
-                    {
-                        continue;
-                    }
-                    id = id[3..];
-                }
-                else if (body.TrimStart().StartsWith('['))
-                {
-                    // 老格式只有通道和请求 ID 两个标签，避免把同名来源下的对象误当请求。
-                    continue;
-                }
-                // 老版本的用户请求 ID 是 8 位十六进制；保活 ID 与供应商会话消息绝不能进入用户统计。
-                if (id.Length is < 8 or > 32 || !id.All(Uri.IsHexDigit))
-                {
-                    continue;
-                }
-
-                entries.Add(new LogEntry
-                {
-                    Timestamp = DateTime.SpecifyKind(timestamp, DateTimeKind.Unspecified),
-                    Level = level,
-                    Id = id,
-                    Body = body.Trim(),
-                });
+                yield return line;
             }
         }
+    }
 
-        var ordered = entries.OrderBy(entry => entry.Timestamp).ToList();
+    private static LogEntry? ParseEntry(string line, string routeName, DateOnly date)
+    {
+        var datePrefix = date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        if (!line.StartsWith(datePrefix, StringComparison.Ordinal) || line.Length < 21) return null;
+        if (!DateTime.TryParseExact(line.AsSpan(0, 19), "yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture, DateTimeStyles.None, out var timestamp))
+            return null;
+        var rest = line[20..];
+        var space = rest.IndexOf(' ');
+        if (space < 0) return null;
+        var level = rest[..space];
+        if (level is not ("INFO" or "WARNING" or "ERROR")) return null;
+        var body = rest[(space + 1)..];
+        var prefix = $"[{routeName}][";
+        var labeledPrefix = $"[{LogSource.ChannelProxy.Label()}]{prefix}";
+        // 准备及保活即便对象同名也不进入用户统计。
+        var hasSource = body.StartsWith(labeledPrefix, StringComparison.Ordinal);
+        if (hasSource) body = body[labeledPrefix.Length..];
+        else if (body.StartsWith(prefix, StringComparison.Ordinal)) body = body[prefix.Length..];
+        else return null;
+        var close = body.IndexOf(']');
+        if (close < 0) return null;
+        var id = body[..close];
+        body = body[(close + 1)..];
+        if (hasSource)
+        {
+            if (!id.StartsWith("请求 ", StringComparison.Ordinal)) return null;
+            id = id[3..];
+        }
+        else if (body.TrimStart().StartsWith('[')) return null;
+        // 老版本只保留 8 位十六进制；新数据库使用完整编号。
+        if (id.Length is < 8 or > 32 || !id.All(Uri.IsHexDigit)) return null;
+        return new LogEntry { Timestamp = DateTime.SpecifyKind(timestamp, DateTimeKind.Unspecified), Level = level, Id = id, Body = body.Trim() };
+    }
+
+    private static SortedDictionary<string, DailyRequest> RestoreEntries(List<LogEntry> ordered)
+    {
         var records = new SortedDictionary<string, DailyRequest>(StringComparer.Ordinal);
         var attempts = new Dictionary<string, ulong>(StringComparer.Ordinal);
         var unknownRetries = new HashSet<(string Id, DateTime Timestamp, string Body)>();

@@ -23,11 +23,11 @@ public sealed class DiagnosticStoreOptions
     public int FlushEventCount { get; init; } = 256;
     public TimeSpan FlushInterval { get; init; } = TimeSpan.FromSeconds(1);
     public int MaxLiveRequests { get; init; } = 4096;
-    internal Func<Action<SqliteConnection>, Task>? WriteForTest { get; init; }
+    internal Func<DateOnly, Action<SqliteConnection>, Task>? WriteForTest { get; init; }
     internal Action<long>? BytesReadForTest { get; init; }
 }
 
-/// <summary>独立、尽力而为的诊断旁路；采集线程只做序列化与入队，落库由后台批量事务完成（logs\data.db 的 diagnostic_events）。</summary>
+/// <summary>独立、尽力而为的诊断旁路；采集线程只做序列化与入队，按请求开始日期批量写入 logs\diagnostics\yyyy-MM-dd.db。</summary>
 public sealed partial class DiagnosticStore : IDiagnosticRepository
 {
     public const string IncompleteWarning = "诊断记录不完整，不影响请求转发";
@@ -245,16 +245,18 @@ public sealed partial class DiagnosticStore : IDiagnosticRepository
     private async Task WriteLoopAsync()
     {
         var cleanupDate = DateOnly.MinValue;
+        var lastCleanup = _time.GetTimestamp();
         var lastFlush = _time.GetTimestamp();
         var pending = new List<PendingRow>();
         try
         {
             while (true)
             {
-                if (cleanupDate != Today)
+                if (cleanupDate != Today || (Volatile.Read(ref _cleanupFailed) != 0 && _time.GetElapsedTime(lastCleanup) >= TimeSpan.FromMinutes(1)))
                 {
                     await CleanupAsync().ConfigureAwait(false);
                     cleanupDate = Today;
+                    lastCleanup = _time.GetTimestamp();
                     NotifyChanged();
                 }
                 var read = 0;
@@ -315,11 +317,14 @@ public sealed partial class DiagnosticStore : IDiagnosticRepository
         {
             if (!_dayPayload.TryGetValue(row.Date, out var used))
             {
-                using var connection = _data.Database.Connect();
-                using var command = connection.CreateCommand();
-                command.CommandText = "SELECT COALESCE(SUM(payload_bytes), 0) FROM diagnostic_events WHERE date = $date;";
-                command.Parameters.AddWithValue("$date", DateText(row.Date));
-                used = Convert.ToInt64(command.ExecuteScalar(), CultureInfo.InvariantCulture);
+                using var lease = _data.Diagnostics.OpenRead(row.Date);
+                if (lease is not null)
+                {
+                    using var command = lease.Connection.CreateCommand();
+                    command.CommandText = "SELECT COALESCE(SUM(payload_bytes), 0) FROM diagnostic_events WHERE date = $date;";
+                    command.Parameters.AddWithValue("$date", DateText(row.Date));
+                    used = Convert.ToInt64(command.ExecuteScalar(), CultureInfo.InvariantCulture);
+                }
                 _dayPayload[row.Date] = used;
             }
             if (used + row.PayloadBytes > _options.MaxDailyBytes)
@@ -340,26 +345,26 @@ public sealed partial class DiagnosticStore : IDiagnosticRepository
     private async Task CommitAsync(List<PendingRow> pending)
     {
         if (pending.Count == 0) return;
-        var rows = pending.ToArray();
+        var groups = pending.GroupBy(row => row.Date).Select(group => (Date: group.Key, Rows: group.ToArray())).ToArray();
         pending.Clear();
-        try
+        foreach (var group in groups)
         {
-            await WriteAsync(connection => InsertRows(connection, rows)).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException) when (_stop.IsCancellationRequested) { throw; }
-        catch
-        {
-            // 批次整体失败：丢弃并标记损坏；已计入的日容量回退，下次按库中实际字节重新汇总。
-            foreach (var date in rows.Select(row => row.Date).Distinct())
+            if (!Retained(group.Date)) continue;
+            try
             {
-                _dayPayload.Remove(date);
+                await WriteAsync(group.Date, connection => InsertRows(connection, group.Rows)).ConfigureAwait(false);
             }
-            foreach (var handle in rows.Select(row => row.Handle).Distinct()) Damage(handle);
+            catch (OperationCanceledException) when (_stop.IsCancellationRequested) { throw; }
+            catch
+            {
+                _dayPayload.Remove(group.Date);
+                foreach (var handle in group.Rows.Select(row => row.Handle).Distinct()) Damage(handle);
+            }
         }
     }
 
-    private Task WriteAsync(Action<SqliteConnection> action) =>
-        _options.WriteForTest is { } custom ? custom(action) : _data.Writer.ExecuteAsync(action, _stop.Token);
+    private Task WriteAsync(DateOnly date, Action<SqliteConnection> action) =>
+        _options.WriteForTest is { } custom ? custom(date, action) : _data.Diagnostics.ExecuteAsync(date, action, _stop.Token);
 
     private static void InsertRows(SqliteConnection connection, IReadOnlyList<PendingRow> rows)
     {
@@ -407,7 +412,7 @@ public sealed partial class DiagnosticStore : IDiagnosticRepository
             var overflow = false;
             try
             {
-                await WriteAsync(connection =>
+                await WriteAsync(group.Key, connection =>
                 {
                     using var transaction = connection.BeginTransaction();
                     using var command = connection.CreateCommand();
@@ -448,7 +453,7 @@ public sealed partial class DiagnosticStore : IDiagnosticRepository
             var text = DateText(date);
             try
             {
-                await WriteAsync(connection =>
+                await WriteAsync(date, connection =>
                 {
                     using var command = connection.CreateCommand();
                     command.CommandText = "INSERT INTO diagnostic_marks (session_id, date) VALUES ($session, $date) ON CONFLICT(session_id, date) DO NOTHING;";
@@ -484,14 +489,7 @@ public sealed partial class DiagnosticStore : IDiagnosticRepository
                 _liveOrder.Clear();
                 foreach (var key in keys) _liveOrder.Enqueue(key);
             }
-            var cutoff = DateText(Today.AddDays(-6));
-            await WriteAsync(connection =>
-            {
-                using var command = connection.CreateCommand();
-                command.CommandText = "DELETE FROM diagnostic_events WHERE date < $cutoff; DELETE FROM diagnostic_marks WHERE date < $cutoff; DELETE FROM diagnostic_request_marks WHERE date < $cutoff;";
-                command.Parameters.AddWithValue("$cutoff", cutoff);
-                command.ExecuteNonQuery();
-            }).ConfigureAwait(false);
+            await _data.Diagnostics.DeleteBeforeAsync(Today.AddDays(-6), _stop.Token).ConfigureAwait(false);
             Volatile.Write(ref _cleanupFailed, 0);
         }
         catch (OperationCanceledException) when (_stop.IsCancellationRequested) { Volatile.Write(ref _cleanupFailed, 1); SetWarning(); }

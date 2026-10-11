@@ -3,7 +3,7 @@ using Microsoft.Data.Sqlite;
 namespace RetryProxy.Core.Storage;
 
 /// <summary>
-/// 两个库（配置库 <c>User\config.db</c>、数据库 <c>logs\data.db</c>）的表结构与结构版本号。
+/// 配置库、按月统计库与按日诊断库的表结构；兼容迁移旧 <c>logs\data.db</c>。
 /// 版本号写在各自 meta 表的 schema_version 行，独立于配置 schema 7。
 /// 例：新建库时回调收到 fromVersion=0，执行建表；将来结构升到 v2 时在方法里追加
 /// <c>if (fromVersion &lt; 2) { /* ALTER ... */ }</c> 即可，其余代码不用动。
@@ -13,7 +13,7 @@ public static class DatabaseSchemas
     /// <summary>配置库当前结构版本。</summary>
     public const int ConfigVersion = 1;
 
-    /// <summary>数据库（每日统计 + 请求诊断）当前结构版本。v3 增加按请求保存的诊断缺失标记。</summary>
+    /// <summary>旧综合数据库及诊断分库的结构版本。v3 增加按请求保存的诊断缺失标记。</summary>
     public const int DataVersion = 3;
 
     /// <summary>配置库建表/升级；幂等，可在已建好的库上重复执行。</summary>
@@ -35,12 +35,14 @@ public static class DatabaseSchemas
     /// <summary>数据库建表/升级；幂等，可在已建好的库上重复执行。</summary>
     public static void EnsureData(SqliteConnection connection, int fromVersion)
     {
-        if (fromVersion < 1)
-        {
-            // daily_requests：每日统计；UPSERT（按主键覆盖）取代 jsonl 的"追加 + 末行覆盖"。
-            // daily_imports：某通道某天曾从旧运行日志恢复（对应 jsonl 头的 legacyImported 标志，重启后仍要提示）。
-            // diagnostic_events：请求诊断；唯一约束 (session_id, request_id, sequence) 保证重放幂等。
-            Execute(connection, """
+        EnsureStatistics(connection, fromVersion);
+        EnsureDiagnostics(connection, fromVersion);
+    }
+
+    public static void EnsureStatistics(SqliteConnection connection, int fromVersion)
+    {
+        if (fromVersion >= 1) return;
+        Execute(connection, """
                 CREATE TABLE IF NOT EXISTS daily_requests (
                     route_id      TEXT NOT NULL,
                     date          TEXT NOT NULL,
@@ -60,6 +62,14 @@ public static class DatabaseSchemas
                     date     TEXT NOT NULL,
                     PRIMARY KEY (route_id, date)
                 );
+                """);
+    }
+
+    public static void EnsureDiagnostics(SqliteConnection connection, int fromVersion)
+    {
+        if (fromVersion < 1)
+        {
+            Execute(connection, """
                 CREATE TABLE IF NOT EXISTS diagnostic_events (
                     id            INTEGER PRIMARY KEY AUTOINCREMENT,
                     session_id    TEXT NOT NULL,

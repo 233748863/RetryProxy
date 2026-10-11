@@ -474,7 +474,7 @@ try {
     Invoke-Control '运行日志'
     Wait-For { @(Find-Elements 'LogSourcePreparation' -ById).Count -gt 0 } 'Log source filters did not load'
     Assert-LogControlsVisible
-    $logLines = @(Get-Content -LiteralPath (Join-Path $runtime 'logs\retry-proxy.log'))
+    $logLines = @((Read-RetryProxyRuntimeLog -LogDirectory (Join-Path $runtime 'logs')) -split '\r?\n' | Where-Object { $_.Length -gt 0 })
     $preparationLines = @($logLines | Where-Object { $_ -match '(INFO|WARNING|ERROR) \[一键准备\]' })
     if ($preparationLines.Count -eq 0) { throw 'Preparation did not produce source-tagged logs' }
     foreach ($line in $preparationLines) {
@@ -515,7 +515,7 @@ try {
     if ($modelEvents.Count -ne 4 -or @($modelEvents | Where-Object { -not $_.authOk -or $_.apiKeyOk }).Count -ne 0) { throw 'Model lookup did not use the default Bearer authentication exactly once per fetch' }
     if (@($modelEvents | Where-Object authOk).Count -ne 4) { throw 'Model lookup did not use the selected provider' }
     if (@($preparationEvents | Where-Object effort -eq 'low').Count -eq 0 -or @($preparationEvents | Where-Object effort -eq 'high').Count -eq 0) { throw 'Selected reasoning efforts did not reach the preparation clients' }
-    $log = Get-Content -LiteralPath (Join-Path $runtime 'logs\retry-proxy.log') -Raw
+    $log = Read-RetryProxyRuntimeLog -LogDirectory (Join-Path $runtime 'logs')
     if ($log.Contains('sk-prepare-fixture')) { throw 'Preparation logged its API key' }
     if (Test-Path -LiteralPath (Join-Path $runtime 'User\config.json')) { throw 'Preparation persisted temporary settings' }
     if (Test-Path -LiteralPath (Join-Path $runtime 'User\config.db')) { throw 'Preparation persisted temporary settings' }
@@ -524,8 +524,8 @@ try {
     Write-Host "准备抽屉验收通过：窗口稳定、双任务独立启停、完成后保活及日志筛选。WithChannels=$($WithChannels.IsPresent), CompactWindow=$($CompactWindow.IsPresent)"
 }
 catch {
-    $logPath = Join-Path $runtime 'logs\retry-proxy.log'
-    if (Test-Path -LiteralPath $logPath) { Get-Content -LiteralPath $logPath -Tail 20 | Write-Host }
+    $logPath = Join-Path $runtime 'logs/runtime'
+    if (Test-Path -LiteralPath $logPath) { (Read-RetryProxyRuntimeLog -LogDirectory (Join-Path $runtime 'logs')) -split '\r?\n' | Select-Object -Last 20 | Write-Host }
     throw
 }
 finally {

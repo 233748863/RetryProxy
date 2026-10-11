@@ -11,4 +11,7 @@ public partial class OtherConfig : ObservableObject
     /// </summary>
     [ObservableProperty]
     private string _uiCultureInfoName = "zh-Hans";
+    /// <summary>运行日志保留的本机日期数，含今天；旧配置默认 7 天。</summary>
+    [ObservableProperty]
+    private int _runtimeLogRetentionDays = 7;
 }

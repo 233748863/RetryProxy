@@ -362,12 +362,18 @@ public static class TestClient
 
 public static class LogFiles
 {
-    /// <summary>日志器仍持有写句柄，读取时必须允许 ReadWrite 共享。</summary>
-    public static string ReadAll(string directory)
+    public static string ReadAll(ProxyLogger logger)
     {
-        using var stream = new FileStream(Path.Combine(directory, "retry-proxy.log"), FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-        using var reader = new StreamReader(stream, Encoding.UTF8);
-        return reader.ReadToEnd();
+        var builder = new StringBuilder();
+        var query = new RuntimeLogQuery(logger.Store.Today) { PageSize = 500 };
+        while (true)
+        {
+            var page = logger.Store.QueryAsync(query).GetAwaiter().GetResult();
+            foreach (var entry in page.Entries) builder.AppendLine(entry.Line);
+            if (query.Offset + page.Entries.Count >= page.Total) break;
+            query = query with { Offset = query.Offset + 500, SnapshotId = page.SnapshotId };
+        }
+        return builder.ToString();
     }
 }
 

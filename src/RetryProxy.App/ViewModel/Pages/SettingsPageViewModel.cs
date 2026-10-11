@@ -1,6 +1,8 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using RetryProxy.Core.Config;
+using RetryProxy.Core.Logging;
+using System.Threading.Tasks;
 using RetryProxy.Service;
 using RetryProxy.Service.I18n;
 using RetryProxy.Service.Interface;
@@ -24,6 +26,11 @@ public partial class SettingsPageViewModel : ViewModel
 
     public AllConfig Config { get; }
 
+    private bool _syncingRetention;
+    [ObservableProperty] private int _runtimeLogRetentionDays;
+    [ObservableProperty] private string _cleanupResult = string.Empty;
+
+
     /// <summary>
     /// 可选界面语言。zh-Hans 为源文案，其余需存在 User/I18n/{lang}.json。
     /// </summary>
@@ -35,7 +42,7 @@ public partial class SettingsPageViewModel : ViewModel
     [ObservableProperty]
     private bool _autoStartEnabled;
 
-    /// <summary>运行日志与数据目录（retry-proxy.log 和 data.db 所在）。</summary>
+    /// <summary>运行日志、请求诊断和统计的日期数据库所在目录。</summary>
     [ObservableProperty]
     private string _logDirectory = string.Empty;
 
@@ -46,6 +53,7 @@ public partial class SettingsPageViewModel : ViewModel
         _clients = clients;
         Clients = [new(ClientType.Claude, workspaceService, clients), new(ClientType.Codex, workspaceService, clients)];
         Config = configService.Get();
+        _runtimeLogRetentionDays = RuntimeLogStore.NormalizeRetentionDays(Config.OtherConfig.RuntimeLogRetentionDays);
         LogDirectory = workspaceService.Workspace.Logger.DirectoryPath;
         _syncingAutoStart = true;
         AutoStartEnabled = AutoStart.IsEnabled();
@@ -89,6 +97,49 @@ public partial class SettingsPageViewModel : ViewModel
             AutoStartEnabled = AutoStart.IsEnabled();
             _syncingAutoStart = false;
         }
+    }
+
+    partial void OnRuntimeLogRetentionDaysChanged(int value)
+    {
+        if (_syncingRetention) return;
+        var previous = Config.OtherConfig.RuntimeLogRetentionDays;
+        if (value < 1 || value > RuntimeLogStore.MaxRetentionDays)
+        {
+            _syncingRetention = true;
+            RuntimeLogRetentionDays = RuntimeLogStore.NormalizeRetentionDays(previous);
+            _syncingRetention = false;
+            CleanupResult = ClientPageText.Translate("运行日志保留天数须为 1–3650 天");
+            return;
+        }
+        try
+        {
+            Config.OtherConfig.RuntimeLogRetentionDays = value;
+            _configService.SaveChecked();
+            _workspaceService.Workspace.Logger.Store.RetentionDays = value;
+            CleanupResult = ClientPageText.Translate("保留天数已保存，过期运行日志将自动清理");
+        }
+        catch
+        {
+            Config.OtherConfig.RuntimeLogRetentionDays = previous;
+            _syncingRetention = true;
+            RuntimeLogRetentionDays = RuntimeLogStore.NormalizeRetentionDays(previous);
+            _syncingRetention = false;
+            CleanupResult = ClientPageText.Translate("保留天数保存失败，已恢复原设置");
+        }
+    }
+
+    [RelayCommand]
+    private async Task OnCleanExpiredLogs()
+    {
+        CleanupResult = ClientPageText.Translate("正在清理过期日志…");
+        try
+        {
+            var store = _workspaceService.Workspace.Logger.Store;
+            await store.CleanupNowAsync();
+            await Task.Run(() => _workspaceService.Data.Diagnostics.DeleteBeforeAsync(_workspaceService.Diagnostics.Today.AddDays(-6)));
+            CleanupResult = ClientPageText.Translate(store.CleanupWarning is null ? "过期日志清理完成" : "部分日志未能清理，请稍后重试");
+        }
+        catch { CleanupResult = ClientPageText.Translate("部分日志未能清理，请稍后重试"); }
     }
 
     [RelayCommand]

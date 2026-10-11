@@ -270,25 +270,9 @@ function Close-Detail([string]$RequestId) {
     Check ($null -eq (Find-Control '放弃未保存的修改？' -ByName)) '只读抽屉没有未保存确认'
 }
 function Diagnostic-DbText {
-    $db=Join-Path $runtime 'logs/data.db'
-    if (!(Test-Path -LiteralPath $db)) { return '' }
-    # 请求诊断已迁入 SQLite（WAL）：经 python sqlite3 读取；应用运行中多进程并发由 WAL 保证。
-    $reader=@'
-import sqlite3, sys
-connection = sqlite3.connect(sys.argv[1], timeout=5)
-rows = connection.execute("SELECT session_id, request_id, kind, entry_json, COALESCE(request_json, '') FROM diagnostic_events").fetchall()
-connection.close()
-sys.stdout.write('\n'.join('|'.join('' if v is None else str(v) for v in row) for row in rows))
-'@
-    $scriptPath=Join-Path ([IO.Path]::GetTempPath()) ('retry-proxy-diag-read-' + [guid]::NewGuid().ToString('N') + '.py')
-    try {
-        [IO.File]::WriteAllText($scriptPath,$reader,[Text.UTF8Encoding]::new($false))
-        $output=@(& python -X utf8 $scriptPath $db 2>&1)
-        if ($LASTEXITCODE -ne 0) { throw "读取诊断库失败：$($output -join ' ')" }
-        return ($output -join "`n")
-    } finally {
-        Remove-Item -LiteralPath $scriptPath -Force -ErrorAction SilentlyContinue
-    }
+    $output = @(& python -X utf8 (Join-Path $PSScriptRoot 'log_storage_probe.py') diagnostics (Join-Path $runtime 'logs') 2>&1)
+    if ($LASTEXITCODE -ne 0) { throw "读取诊断库失败：$($output -join ' ')" }
+    return ($output -join "`n")
 }
 
 try {
@@ -525,6 +509,17 @@ public static class RequestDiagnosticWindow {
     Wait-For { $w=Find-Control 'DiagnosticWarning'; !$w -or $w.Current.IsOffscreen } '切换客户端后残留其他客户端的警告'
     Check $true '实际缺失仍提示，完整请求与其他客户端不受连带影响'
     Navigate '运行日志' 'LogRows'
+    Invoke-Control 'LogSourceSystem'; Invoke-Control 'LogSourceAll'; Invoke-Control 'LogLevelAll'
+    (Find-Control 'LogSearch').GetCurrentPattern([Windows.Automation.ValuePattern]::Pattern).SetValue($retry.id)
+    Wait-For { (Texts-Under (Find-Control 'LogRows')).Contains('diag-retry-model') } '运行日志未能按完整请求编号查询'
+    $runtimeRow=(Find-Control 'LogRows').FindFirst([Windows.Automation.TreeScope]::Descendants,[Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ControlTypeProperty,[Windows.Automation.ControlType]::ListItem))
+    $runtimeRow.GetCurrentPattern([Windows.Automation.SelectionItemPattern]::Pattern).Select()
+    Copy-And-Check 'CopyRuntimeRequestId' $retry.id -IdOnly
+    Invoke-Control 'OpenRuntimeDiagnostic'
+    Wait-For { $search=Find-Control 'DiagnosticSearch'; $search -and $search.GetCurrentPattern([Windows.Automation.ValuePattern]::Pattern).Current.Value -ceq $retry.id } '运行日志未跳转到指定请求诊断'
+    Assert-Rows 1 'diag-retry-model'
+    Check $true '运行日志按完整编号查询、复制并切换客户端跳转到请求诊断'
+    Capture 'runtime-to-diagnostic'
     Stop-App
     Assert-Safe (Diagnostic-DbText) '独立诊断数据库'
     Check ([IO.File]::ReadAllText((Join-Path $env:CLAUDE_CONFIG_DIR 'settings.json')) -ceq '{}' -and [IO.File]::ReadAllText((Join-Path $env:CODEX_HOME 'config.toml')) -ceq '') '隔离客户端配置未被接管或修改'

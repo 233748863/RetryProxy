@@ -71,7 +71,22 @@ public static class DailyHistory
 
     private static Dictionary<string, DayTotals> Query(DataDatabase data, string routeId, DateOnly first, DateOnly last)
     {
-        using var connection = data.Database.Connect();
+        var result = new Dictionary<string, DayTotals>(StringComparer.Ordinal);
+        var store = data.Statistics;
+        var firstMonth = new DateOnly(first.Year, first.Month, 1);
+        var lastMonth = new DateOnly(last.Year, last.Month, 1);
+        foreach (var month in store.Dates())
+        {
+            if (month < firstMonth || month > lastMonth) continue;
+            using var lease = store.OpenRead(month);
+            if (lease is null) continue;
+            foreach (var pair in QueryMonth(lease.Connection, routeId, first, last)) result[pair.Key] = pair.Value;
+        }
+        return result;
+    }
+
+    private static Dictionary<string, DayTotals> QueryMonth(SqliteConnection connection, string routeId, DateOnly first, DateOnly last)
+    {
         using var command = connection.CreateCommand();
         // token 口径：includes_cached 直接取总输入；excludes_cached 为 未缓存输入 + 缓存读取 + 缓存写入（未报写入按 0），
         // 总输入为 0、缓存读取超过总输入或字段缺失的行按"未获取"排除——与 CacheRequest.Usage() 完全一致。

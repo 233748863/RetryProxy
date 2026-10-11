@@ -74,23 +74,44 @@ public sealed class DiagnosticStoreTests : IDisposable
 
     private long Scalar(string sql)
     {
-        using var connection = Data().Database.Connect();
-        using var command = connection.CreateCommand();
-        command.CommandText = sql;
-        return Convert.ToInt64(command.ExecuteScalar(), CultureInfo.InvariantCulture);
+        long total = 0;
+        var store = Data().Diagnostics;
+        foreach (var date in store.Dates())
+        {
+            using var lease = store.OpenRead(date);
+            if (lease is null) continue;
+            using var command = lease.Connection.CreateCommand();
+            command.CommandText = sql;
+            total += Convert.ToInt64(command.ExecuteScalar(), CultureInfo.InvariantCulture);
+        }
+        return total;
     }
 
     private void Exec(string sql)
     {
-        using var connection = Data().Database.Connect();
-        using var command = connection.CreateCommand();
-        command.CommandText = sql;
-        command.ExecuteNonQuery();
+        using var data = Data();
+        data.Diagnostics.Execute(Query().Date, connection =>
+        {
+            using var command = connection.CreateCommand();
+            command.CommandText = sql;
+            command.ExecuteNonQuery();
+        });
+    }
+
+    private SqliteConnection Connect(DateOnly date)
+    {
+        using var data = Data();
+        var store = data.Diagnostics;
+        store.Execute(date, _ => { });
+        data.Dispose();
+        var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = store.GetPath(date), Pooling = false }.ToString());
+        connection.Open();
+        return connection;
     }
 
     private string StoredText()
     {
-        using var connection = Data().Database.Connect();
+        using var connection = Connect(Query().Date);
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT COALESCE(entry_json, '') || ' ' || COALESCE(request_json, '') FROM diagnostic_events ORDER BY id;";
         using var reader = command.ExecuteReader();
@@ -104,7 +125,7 @@ public sealed class DiagnosticStoreTests : IDisposable
         var entryJson = JsonSerializer.Serialize(entry, RowJson);
         var requestJson = request is null ? null : JsonSerializer.Serialize(request, RowJson);
         var payload = Encoding.UTF8.GetByteCount(entryJson) + (requestJson is null ? 0 : Encoding.UTF8.GetByteCount(requestJson));
-        using var connection = Data().Database.Connect();
+        using var connection = Connect(date);
         using var command = connection.CreateCommand();
         command.CommandText = """
             INSERT INTO diagnostic_events (session_id, request_id, date, sequence, kind, entry_json, request_json, payload_bytes, created_at_ms)
@@ -123,26 +144,23 @@ public sealed class DiagnosticStoreTests : IDisposable
     }
 
     /// <summary>阻塞的假写入端：进入后等待释放，再真正执行写动作（验证队列溢出与退出等待）。</summary>
-    private static Func<Action<SqliteConnection>, Task> BlockingWrite(DataDatabase data, TaskCompletionSource entered, Task release)
-        => async action =>
+    private static Func<DateOnly, Action<SqliteConnection>, Task> BlockingWrite(DataDatabase data, TaskCompletionSource entered, Task release)
+        => async (date, action) =>
         {
             entered.TrySetResult();
             await release.ConfigureAwait(false);
-            using var connection = data.Database.Connect();
-            action(connection);
+            data.Diagnostics.Execute(date, action);
         };
 
     /// <summary>统计写入的假写入端：库中已有事件行时发出信号（验证定时与批量落库）。</summary>
-    private static Func<Action<SqliteConnection>, Task> SignalingWrite(DataDatabase data, TaskCompletionSource flushed)
-        => action =>
+    private static Func<DateOnly, Action<SqliteConnection>, Task> SignalingWrite(DataDatabase data, TaskCompletionSource flushed)
+        => (date, action) => data.Diagnostics.ExecuteAsync(date, connection =>
         {
-            using var connection = data.Database.Connect();
             action(connection);
             using var command = connection.CreateCommand();
             command.CommandText = "SELECT COUNT(*) FROM diagnostic_events;";
-            if (Convert.ToInt64(command.ExecuteScalar(), CultureInfo.InvariantCulture) > 0) flushed.TrySetResult();
-            return Task.CompletedTask;
-        };
+            if ((long)command.ExecuteScalar()! > 0) flushed.TrySetResult();
+        });
 
     [Fact]
     public async Task CompletedHistoryRestoresExactObservedResultDeliveryCountersAndFullIdentity()
@@ -737,15 +755,14 @@ public sealed class DiagnosticStoreTests : IDisposable
         var data = Data();
         using (var store = new DiagnosticStore(data, _clock, new DiagnosticStoreOptions
         {
-            WriteForTest = action =>
+            WriteForTest = (date, action) =>
             {
                 if (Volatile.Read(ref failCommits) == 1)
                 {
                     Interlocked.Exchange(ref failCommits, 2);
                     throw new IOException("private-exception-must-not-escape");
                 }
-                using var connection = data.Database.Connect();
-                action(connection);
+                data.Diagnostics.Execute(date, action);
                 return Task.CompletedTask;
             },
         }))
@@ -779,18 +796,10 @@ public sealed class DiagnosticStoreTests : IDisposable
         var expired = Query().Date.AddDays(-7);
         var info = Info() with { Date = expired, StartedAt = _clock.GetUtcNow().AddDays(-7) };
         SeedEvent(Guid.NewGuid().ToString("N"), info.RequestId, expired, 1, new DiagnosticEntry(DiagnosticEventKind.Started, 0), info);
-        var failOnce = 0;
+        foreach (var opened in _databases) opened.Dispose();
         var data = Data();
-        using var store = new DiagnosticStore(data, _clock, new DiagnosticStoreOptions
-        {
-            WriteForTest = action =>
-            {
-                if (Interlocked.Exchange(ref failOnce, 1) == 0) throw new IOException("retention deletion failure");
-                using var connection = data.Database.Connect();
-                action(connection);
-                return Task.CompletedTask;
-            },
-        });
+        using var occupied = new FileStream(data.Diagnostics.GetPath(expired), FileMode.Open, FileAccess.Read, FileShare.Read);
+        using var store = new DiagnosticStore(data, _clock);
         await store.FlushAsync();
         Assert.Equal(DiagnosticStore.IncompleteWarning, store.Warning);
         Assert.Equal(1, Scalar($"SELECT COUNT(*) FROM diagnostic_events WHERE date = '{DiagnosticStore.DateText(expired)}';"));
@@ -951,11 +960,10 @@ public sealed class DiagnosticStoreTests : IDisposable
         using (var store = new DiagnosticStore(data, _clock, new DiagnosticStoreOptions
         {
             MaxLiveRequests = 1,
-            WriteForTest = action =>
+            WriteForTest = (date, action) =>
             {
                 if (Interlocked.Exchange(ref failNextWrite, 0) != 0) throw new IOException("test write failure");
-                using var connection = data.Database.Connect();
-                action(connection);
+                data.Diagnostics.Execute(date, action);
                 return Task.CompletedTask;
             },
         }))

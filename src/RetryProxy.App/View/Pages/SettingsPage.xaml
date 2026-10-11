@@ -111,14 +111,14 @@
                 </StackPanel>
             </ui:Card>
 
-            <!--  运行日志保留文本，统计和诊断共用 data.db；只保留一个目录入口。  -->
+            <!--  运行日志、诊断按天归档，统计按月归档。  -->
             <ui:CardControl Margin="0,0,0,12" Icon="{ui:SymbolIcon DocumentText24}"
                             AutomationProperties.AutomationId="LogsAndDataCard">
                 <ui:CardControl.Header>
                     <StackPanel>
                         <ui:TextBlock FontTypography="Body" Text="{i18n:T 日志与数据}" TextWrapping="Wrap" />
                         <ui:TextBlock Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
-                                      Text="{i18n:T 运行日志 retry-proxy.log；统计与诊断 data.db}"
+                                      Text="{i18n:T 运行日志与请求诊断按天保存，历史统计按月保存}"
                                       TextWrapping="Wrap" />
                         <ui:TextBlock Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
                                       Text="{Binding LogDirectory}"
@@ -132,6 +132,21 @@
                            Icon="{ui:SymbolIcon FolderOpen24}"
                            ToolTip="{i18n:T 打开运行日志、统计与诊断数据库所在目录}" />
             </ui:CardControl>
+
+            <ui:Card Margin="0,0,0,12" Padding="16" AutomationProperties.AutomationId="LogRetentionCard">
+                <StackPanel>
+                    <TextBlock Text="{i18n:T 运行日志保留天数}" FontWeight="SemiBold" />
+                    <TextBlock Text="{i18n:T 包含今天，可设置 1–3650 天；过期文件自动清理}" TextWrapping="Wrap" Margin="0,6,0,10"
+                               Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                    <WrapPanel>
+                        <ui:NumberBox Value="{Binding RuntimeLogRetentionDays, Mode=TwoWay}" Minimum="1" Maximum="3650" SmallChange="1"
+                                      Width="140" Margin="0,0,12,6" AutomationProperties.AutomationId="RuntimeLogRetentionDays" />
+                        <ui:Button Content="{i18n:T 清理过期日志}" Command="{Binding CleanExpiredLogsCommand}" Margin="0,0,0,6"
+                                   AutomationProperties.AutomationId="CleanExpiredLogs" />
+                    </WrapPanel>
+                    <TextBlock Text="{Binding CleanupResult}" TextWrapping="Wrap" Margin="0,6,0,0" />
+                </StackPanel>
+            </ui:Card>
 
             <!--  随系统启动  -->
             <ui:CardExpander Margin="0,0,0,12"

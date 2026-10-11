@@ -174,7 +174,7 @@ $upstreamPort = Get-FreePort
 $proxyPort = Get-FreePort
 $otherProxyPort = Get-FreePort
 while ($otherProxyPort -eq $proxyPort) { $otherProxyPort = Get-FreePort }
-$logPath = Join-Path $runtime 'logs\retry-proxy.log'
+$logPath = Join-Path $runtime 'logs/runtime'
 $eventPath = Join-Path $runtime 'upstream-events.jsonl'
 $cliEventPath = Join-Path $runtime 'cli-events.jsonl'
 try {
@@ -367,12 +367,12 @@ while ($null -ne $line) {
     Write-Host '通道独立设置检查通过。'
     $request = @{ model = 'client-format-model'; stream = $true; store = $false; instructions = 'required client system instructions'; tools = @(@{ type = 'function'; name = 'client_tool'; parameters = @{ type = 'object' } }); input = @(@{ role = 'user'; content = @(@{ type = 'input_text'; text = '正常客户端验证消息' }) }) } | ConvertTo-Json -Depth 10
     $null = Invoke-WebRequest "http://127.0.0.1:$proxyPort/v1/responses?beta=a%20b" -Method Post -ContentType 'application/json; charset=utf-8' -Headers @{ 'User-Agent' = 'client-validation/1'; originator = 'cli-client'; Authorization = 'Bearer local-validation-token' } -Body ([Text.Encoding]::UTF8.GetBytes($request)) -TimeoutSec 15
-    Wait-Condition { (Get-Content -LiteralPath $logPath -Raw) -match '输入/输出 40/12 token' } '正常客户端请求未完成'
-    Wait-Condition { (Get-Content -LiteralPath $logPath -Raw) -match '\[通道保活\].*答：' } '空闲 30 秒后未执行自动保活' 45
+    Wait-Condition { (Read-RetryProxyRuntimeLog -LogDirectory (Join-Path $runtime 'logs')) -match '输入/输出 40/12 token' } '正常客户端请求未完成'
+    Wait-Condition { (Read-RetryProxyRuntimeLog -LogDirectory (Join-Path $runtime 'logs')) -match '\[通道保活\].*答：' } '空闲 30 秒后未执行自动保活' 45
     # 第二轮由模拟 CLI 卡住，真实请求到达后必须让行，不以旧手动准备入口代替。
     Wait-Condition { (Get-Content -LiteralPath $cliEventPath -Raw) -match 'HELD' } '第二轮自动保活没有进入等待状态' 45
     $null = Invoke-WebRequest "http://127.0.0.1:$proxyPort/v1/responses?beta=a%20b" -Method Post -ContentType 'application/json; charset=utf-8' -Headers @{ 'User-Agent' = 'client-validation/1'; originator = 'cli-client'; Authorization = 'Bearer local-validation-token' } -Body ([Text.Encoding]::UTF8.GetBytes($request)) -TimeoutSec 15
-    Wait-Condition { (Get-Content -LiteralPath $logPath -Raw) -match '本轮已中断：已让行真实请求' } '真实请求没有中断自动保活'
+    Wait-Condition { (Read-RetryProxyRuntimeLog -LogDirectory (Join-Path $runtime 'logs')) -match '本轮已中断：已让行真实请求' } '真实请求没有中断自动保活'
     Invoke-ById 'ChannelKeepAlive'
     Wait-Condition { (Invoke-RestMethod "http://127.0.0.1:$proxyPort/_retry/health" -TimeoutSec 2).metrics.active_requests -eq 0 } '真实请求尚未结束'
     $events = @(Get-Content -LiteralPath $eventPath | ForEach-Object { $_ | ConvertFrom-Json })
@@ -396,7 +396,7 @@ while ($null -ne $line) {
         }
         return $false
     } '窗口没有保留正确的累计轮次和最近成功用量'
-    $logs = Get-Content -LiteralPath $logPath -Raw
+    $logs = Read-RetryProxyRuntimeLog -LogDirectory (Join-Path $runtime 'logs')
     foreach ($value in @('题 ', '首字', '总 ', '答：', '上下文 52/50000 token')) {
         if (-not $logs.Contains($value)) { throw "日志缺少：$value" }
     }
@@ -426,7 +426,7 @@ public static class ValidationWindow {
     }
     [pscustomobject]@{ IndependentChannels = $true; Requests = $events.Count; CliMessages = $cliEvents.Count; Automatic = $true; Interrupted = $true; Statistics = $expectedStatistics; RealRequests = $health.metrics.total_requests; LogPath = $logPath; EventsPath = $eventPath; CliEventsPath = $cliEventPath; Screenshot = $screenshotPath }
 } catch {
-    if (Test-Path -LiteralPath $logPath) { Get-Content -LiteralPath $logPath -Encoding UTF8 -Tail 30 | Write-Host }
+    if (Test-Path -LiteralPath $logPath) { (Read-RetryProxyRuntimeLog -LogDirectory (Join-Path $runtime 'logs')) -split '\r?\n' | Select-Object -Last 30 | Write-Host }
     throw
 } finally {
     if ($null -ne $oldConfig) { $env:RETRY_PROXY_CONFIG_JSON = $oldConfig }

@@ -328,7 +328,7 @@ public sealed class ClientTakeoverCoordinatorTests
     }
 
     [Fact]
-    public void FailedSynchronization_LogsOnlySafeDiagnosticOncePerAttempt()
+    public async System.Threading.Tasks.Task FailedSynchronization_LogsOnlySafeDiagnosticOncePerAttempt()
     {
         using var fixture = new ClientLifecycleFixture();
         const ClientType client = ClientType.Codex;
@@ -338,9 +338,9 @@ public sealed class ClientTakeoverCoordinatorTests
 
         fixture.Coordinator.Refresh();
 
-        using var stream = new FileStream(fixture.Logger.FilePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-        using var reader = new StreamReader(stream);
-        var logs = reader.ReadToEnd().Split('\n');
+        using var output = new StringWriter();
+        await fixture.Logger.Store.ExportAsync(new RetryProxy.Core.Logging.RuntimeLogQuery(fixture.Logger.Store.Today), output);
+        var logs = output.ToString().Split('\n');
         var diagnostic = Assert.Single(logs, line => line.Contains("客户端配置操作失败："));
         Assert.Contains("阶段 PersistState，HRESULT 0x", diagnostic);
         Assert.DoesNotContain("secret-path", diagnostic);

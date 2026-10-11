@@ -107,7 +107,7 @@ public sealed class WorkspaceService
     public PreparationCatalog PreparationManagement { get; }
     public IDiagnosticRepository Diagnostics { get; }
 
-    /// <summary>统计库（logs\data.db）；每日统计与请求诊断共用。</summary>
+    /// <summary>日志数据库入口：统计按月、请求诊断按日独立保存。</summary>
     public DataDatabase Data { get; }
 
     private void SaveProxyConfig(ProxyConfig config) => PreparationManagement.SaveProxy(config);

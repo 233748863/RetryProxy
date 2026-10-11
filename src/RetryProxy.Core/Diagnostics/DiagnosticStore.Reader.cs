@@ -137,7 +137,9 @@ public sealed partial class DiagnosticStore
         // 旧版日期标记只用于列表的当日提示；新标记只影响所指向的请求。
         try
         {
-            using var connection = _data.Database.Connect();
+            using var lease = _data.Diagnostics.OpenRead(date, token);
+            if (lease is null) { _cache = new DayCache(date); return true; }
+            var connection = lease.Connection;
             using var command = connection.CreateCommand();
             command.CommandText = "SELECT EXISTS(SELECT 1 FROM diagnostic_marks WHERE date = $date);";
             command.Parameters.AddWithValue("$date", DateText(date));
@@ -184,7 +186,9 @@ public sealed partial class DiagnosticStore
 
     private List<EventRow> ReadBatch(DateOnly date, long afterId)
     {
-        using var connection = _data.Database.Connect();
+        using var lease = _data.Diagnostics.OpenRead(date);
+        if (lease is null) return [];
+        var connection = lease.Connection;
         using var command = connection.CreateCommand();
         command.CommandText = """
             SELECT id, session_id, request_id, sequence, kind, entry_json, request_json, payload_bytes
@@ -198,7 +202,9 @@ public sealed partial class DiagnosticStore
 
     private List<EventRow> ReadDetailRows(DateOnly date, string session, string requestId, int offset, int limit)
     {
-        using var connection = _data.Database.Connect();
+        using var lease = _data.Diagnostics.OpenRead(date);
+        if (lease is null) return [];
+        var connection = lease.Connection;
         using var command = connection.CreateCommand();
         command.CommandText = """
             SELECT id, session_id, request_id, sequence, kind, entry_json, request_json, payload_bytes
@@ -233,7 +239,9 @@ public sealed partial class DiagnosticStore
         cache.ReadTruncated = true;
         try
         {
-            using var connection = _data.Database.Connect();
+            using var lease = _data.Diagnostics.OpenRead(date);
+            if (lease is null) return;
+            var connection = lease.Connection;
             using var command = connection.CreateCommand();
             command.CommandText = "SELECT DISTINCT session_id, request_id FROM diagnostic_events WHERE date = $date AND id >= $after LIMIT $limit;";
             command.Parameters.AddWithValue("$date", DateText(date));

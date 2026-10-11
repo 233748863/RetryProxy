@@ -1,8 +1,10 @@
 ﻿param(
     [string]$PathPrefix = 'D:\RetryProxy',
-    [string]$LogFile = 'D:\RetryProxy\src\RetryProxy.App\bin\Debug\net9.0-windows10.0.22621.0\logs\retry-proxy.log'
+    [string]$LogFile = '',
+    [string]$LogDirectory = ''
 )
 # 验收 7：注入三种异常矩形，期待每次都自动恢复且日志各出现一条 "WindowRect {..} -> WindowRect {..}"。
+. (Join-Path $PSScriptRoot '../tests/runtime_files.ps1')
 Add-Type @'
 using System;
 using System.Runtime.InteropServices;
@@ -17,6 +19,18 @@ public static class RecoveryNative
 [RecoveryNative]::SetProcessDPIAware() | Out-Null
 $proc = Get-Process RetryProxy -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "$PathPrefix*" } | Select-Object -First 1
 if (-not $proc) { Write-Error "no RetryProxy process under $PathPrefix"; exit 1 }
+if (!$LogDirectory) { $LogDirectory = Join-Path (Split-Path -Parent $proc.Path) 'logs' }
+function Read-RecoveryLines {
+    if ($LogFile) {
+        if (!(Test-Path -LiteralPath $LogFile)) { return }
+        $stream = [IO.FileStream]::new($LogFile, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete)
+        $reader = [IO.StreamReader]::new($stream)
+        try { $text = $reader.ReadToEnd() } finally { $reader.Dispose() }
+    } else {
+        $text = Read-RetryProxyRuntimeLog -LogDirectory $LogDirectory
+    }
+    $text -split '\r?\n' | Where-Object { $_ -match 'WindowRect \{' }
+}
 $deadline = (Get-Date).AddSeconds(15)
 while ((Get-Date) -lt $deadline) {
     $proc.Refresh()
@@ -26,7 +40,7 @@ while ((Get-Date) -lt $deadline) {
 $h = $proc.MainWindowHandle
 $orig = New-Object RecoveryNative+RECT
 [RecoveryNative]::GetWindowRect($h, [ref]$orig) | Out-Null
-$before = if (Test-Path $LogFile) { (Select-String -Path $LogFile -Pattern 'WindowRect \{' -SimpleMatch:$false).Count } else { 0 }
+$before = @(Read-RecoveryLines).Count
 Write-Host ("original: {0},{1} {2}x{3}; log lines before: {4}" -f $orig.L, $orig.T, ($orig.R - $orig.L), ($orig.B - $orig.T), $before)
 
 $cases = @(
@@ -45,8 +59,9 @@ foreach ($c in $cases) {
     if (-not $restored) { $ok = $false }
 }
 Start-Sleep -Milliseconds 500
-$after = (Select-String -Path $LogFile -Pattern 'WindowRect \{').Count
+$afterLines = @(Read-RecoveryLines)
+$after = $afterLines.Count
 Write-Host ("log lines after: {0} (new {1})" -f $after, ($after - $before))
-Select-String -Path $LogFile -Pattern 'WindowRect \{' | Select-Object -Last 3 | ForEach-Object { $_.Line }
+$afterLines | Select-Object -Last 3
 if (-not $ok -or ($after - $before) -ne 3) { Write-Error 'window recovery check failed'; exit 1 }
 Write-Host 'window recovery check passed'

@@ -26,7 +26,7 @@ public sealed class ProxyMetrics : IDisposable
         _state = new MetricsState(DateTime.Now, storage);
     }
 
-    /// <summary>从 logs\data.db 恢复当日统计（对应 ProxyMetrics::from_daily_logs）。</summary>
+    /// <summary>从 logs\statistics\yyyy-MM.db 恢复当日统计（对应 ProxyMetrics::from_daily_logs）。</summary>
     public static ProxyMetrics FromDailyLogs(DataDatabase data, string routeId, string routeName)
     {
         return new ProxyMetrics(new SqliteDailyStorage(data, routeId, routeName));

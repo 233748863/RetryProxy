@@ -48,14 +48,15 @@ public partial class App : Application
         })
         .ConfigureServices((context, services) =>
         {
-            // 文件日志先于配置就绪，配置导入/失败信息才能进 retry-proxy.log。
-            var proxyLogger = ProxyLogger.Create(Global.Absolute("logs"));
+            // 日志先于配置就绪；保留期读出前暂停清理，避免误用默认天数删除历史。
+            var proxyLogger = ProxyLogger.Create(Global.Absolute("logs"), options: new RuntimeLogOptions { DeferCleanup = true });
             services.AddSingleton(proxyLogger);
 
             // 提前初始化配置
             var configService = new ConfigService(proxyLogger);
             services.AddSingleton<IConfigService>(sp => configService);
             var all = configService.Get();
+            proxyLogger.Store.RetentionDays = RuntimeLogStore.NormalizeRetentionDays(all.OtherConfig.RuntimeLogRetentionDays);
             // 上次从本机 Claude Code 抓到的 TLS 指纹（没有则用内置）。
             TlsFingerprintStore.Shared.Configure(Global.Absolute("User"));
 

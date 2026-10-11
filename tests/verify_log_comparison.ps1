@@ -69,7 +69,7 @@ function Navigate([string]$Name, [string]$Marker) {
 function Set-Query([string]$Query) {
     (Find-Control 'LogSearch').GetCurrentPattern([Windows.Automation.ValuePattern]::Pattern).SetValue($Query)
     # 绑定明确设置 Delay=200；等防抖与列表重建后再判断 UIA。
-    Start-Sleep -Milliseconds 400
+    Start-Sleep -Milliseconds 650
 }
 function Log-Texts {
     $rows = Find-Control 'LogRows'
@@ -216,6 +216,11 @@ try {
     Wait-For { Test-Path -LiteralPath (Join-Path $runtime 'upstream.ready') } '假上游未启动'
     $handler = [Net.Http.HttpClientHandler]::new(); $handler.UseProxy=$false; $handler.AllowAutoRedirect=$false
     $client = [Net.Http.HttpClient]::new($handler); $client.Timeout=[TimeSpan]::FromSeconds(25)
+    # 启动前构造旧格式历史日志，验证迁移、日期查询与三页历史。
+    $historyDate = (Get-Date).Date.AddDays(-1)
+    $historyLines = for ($i=0; $i -lt 450; $i++) { '{0:yyyy-MM-dd} 12:00:00 INFO [系统] history-fixture-{1:D3}' -f $historyDate,$i }
+    $null = New-Item -ItemType Directory -Path (Join-Path $runtime 'logs') -Force
+    [IO.File]::WriteAllLines((Join-Path $runtime 'logs/retry-proxy.log'), $historyLines, [Text.UTF8Encoding]::new($false))
     $app = Start-Process -FilePath (Join-Path $runtime (Split-Path -Leaf $ExePath)) -WorkingDirectory $runtime -PassThru
     $null = $app.Handle
     $record.pid = $app.Id; $record.ports=$ports; $record.upstreamPort=$upstreamPort
@@ -225,7 +230,7 @@ try {
     # 切到系统来源会明确把 OnlySelected 置 false，再回全部；该按钮没有 TogglePattern。
     Invoke-Control 'LogSourceSystem'; Invoke-Control 'LogSourceAll'; Invoke-Control 'LogLevelAll'
     Set-Query ''
-    Invoke-Control '清空' -ByName
+    Invoke-Control '清空显示' -ByName
     Wait-For { (Find-Control 'LogCounter').Current.Name -match '^0\s*/\s*0$' } '清空日志未完成'
     foreach ($case in $cases) {
         $body = @{fixture_case=$case.id;model=$case.model;stream=$case.stream}
@@ -286,11 +291,43 @@ try {
     # 两客户端的实际请求都在同一列表中，证明仅当前客户端筛选已关闭（无需猜按钮颜色）。
     foreach ($id in @('lc01','lc03')) { Set-Query $id; Wait-For { @(Log-Texts | Where-Object { $_.Contains($id) }).Count -gt 0 } '全部客户端筛选未生效' }
     $record.allClientsVisible=$true
+    Set-Query 'history-fixture'
+    (Find-Control 'RuntimeLogDate').GetCurrentPattern([Windows.Automation.ValuePattern]::Pattern).SetValue($historyDate.ToString('yyyy-MM-dd'))
+    Invoke-Control '刷新' -ByName
+    Wait-For { (Find-Control 'LogCounter').Current.Name -eq '200 / 450' } '历史日期未显示第一页'
+    Invoke-Control 'RuntimeLogsOlder'
+    Wait-For { $c=Find-Control '第 2 / 3 页' -ByName; $null -ne $c } '未翻到历史第二页'
+    Invoke-Control 'RuntimeLogsOlder'
+    Wait-For { (Find-Control 'LogCounter').Current.Name -eq '50 / 450' } '历史最后一页条数不正确'
+    Capture 'history-last-page' -ExpectedWidth 760 -ExpectedHeight 600
+    Invoke-Control 'RuntimeLogsNewer'
+    Wait-For { (Find-Control 'LogCounter').Current.Name -eq '200 / 450' } '历史向前翻页失败'
+    if (!(Test-Path -LiteralPath (Join-Path $runtime 'logs/retry-proxy.log.migrated.bak'))) { throw '旧运行日志未保留迁移备份' }
+    $record.historyPagination = $true
+    Navigate '软件设置' 'RuntimeLogRetentionDays'
+    $retention = Find-Control 'RuntimeLogRetentionDays'
+    $retention.SetFocus()
+    $retention.GetCurrentPattern([Windows.Automation.ValuePattern]::Pattern).SetValue('14')
+    (Find-Control 'CleanExpiredLogs').SetFocus()
+    Invoke-Control 'CleanExpiredLogs'
+    Wait-For { (Read-ConfigDb 'other' | ConvertFrom-Json).runtimeLogRetentionDays -eq 14 } '保留天数没有保存到配置'
+    Wait-For { $null -ne (Find-Control '过期日志清理完成' -ByName) } '手动清理未完成'
+    $record.retentionSettings = $true
     $null = [RetryProxyTrayVerification]::PostMessage($window,0x0010,[UIntPtr]::Zero,[IntPtr]::Zero)
     if (!$app.WaitForExit(25000) -or $app.ExitCode -ne 0) { throw '测试窗口未正常退出' }
     $record.normalExit=$true
+    $app.Dispose()
+    $app = Start-Process -FilePath (Join-Path $runtime (Split-Path -Leaf $ExePath)) -WorkingDirectory $runtime -PassThru
+    $null = $app.Handle
+    Wait-For { $script:window=[RetryProxyTrayVerification]::FindWindow($app.Id,'LLM Retry Proxy',$null); $window -ne [IntPtr]::Zero } '重启后主窗口未出现'
+    Navigate '软件设置' 'RuntimeLogRetentionDays'
+    Wait-For { (Find-Control 'RuntimeLogRetentionDays').GetCurrentPattern([Windows.Automation.ValuePattern]::Pattern).Current.Value -eq '14' } '重启后未恢复保留天数'
+    (Find-Control 'RuntimeLogRetentionDays').SetFocus()
+    $record.retentionSurvivesRestart = $true
+    $null = [RetryProxyTrayVerification]::PostMessage($window,0x0010,[UIntPtr]::Zero,[IntPtr]::Zero)
+    if (!$app.WaitForExit(25000) -or $app.ExitCode -ne 0) { throw '重启后的测试窗口未正常退出' }
     if ([IO.File]::ReadAllText((Join-Path $env:CLAUDE_CONFIG_DIR 'settings.json')) -cne '{}' -or [IO.File]::ReadAllText((Join-Path $env:CODEX_HOME 'config.toml')) -cne '') { throw '隔离客户端配置被修改，出现非预期接管' }
-    $log = Get-Content -LiteralPath (Join-Path $runtime 'logs/retry-proxy.log') -Raw
+    $log = Read-RetryProxyRuntimeLog -LogDirectory (Join-Path $runtime 'logs')
     if ($log.Contains('sk-log-fixture-only')) { throw '日志泄露假密钥全文' }
     $record.passed=$true
     Write-Host "PASS：日志字段、标记、缺失语义、六次无重试响应透传；颜色待人工复核。记录：$OutputDirectory；现场：$runtime"

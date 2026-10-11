@@ -9,7 +9,7 @@ using RetryProxy.Core.Storage;
 namespace RetryProxy.Core.Metrics;
 
 /// <summary>
-/// 每日统计的 SQLite 存储端：logs\data.db 的 daily_requests 表。
+/// 每日统计的 SQLite 存储端：logs\statistics\yyyy-MM.db 的 daily_requests 表。
 /// 写入按主键 (route_id, date, request_id) UPSERT（幂等，取代 jsonl 的"追加 + 末行覆盖"）；
 /// 打开时按 (route_id, date) 读回当天记录。该通道在库中还没有任何记录时，沿用一次性导入
 /// 从保留的运行日志恢复当天统计（上线当天不丢当天已完成的计数）。
@@ -32,26 +32,31 @@ public sealed class SqliteDailyStorage : IDailyStorage
 
     public DailyJournalOpenResult Open(DateOnly date, bool importLegacy)
     {
-        var database = _data.Database;
-        using var connection = database.Connect();
-        var records = Load(connection, _routeId, date, out var damaged);
-        // 恢复标志与旧 jsonl 头字段同义：当天导入过就一直为真，重启后统计页仍提示"今日数据包含旧日志恢复记录"。
-        var legacy = IsImported(connection, _routeId, date);
-        if (!legacy && importLegacy && !RouteHasAnyRows(connection, _routeId))
+        var store = _data.Statistics;
+        var records = new Dictionary<string, DailyRequest>(StringComparer.Ordinal);
+        var damaged = 0;
+        var legacy = false;
+        using (var lease = store.OpenRead(date))
         {
-            // 与 jsonl 时代一致：只有该通道还没有任何统计记录时才导入；普通轮转与重复的旧日志行不再触发。
+            if (lease is not null)
+            {
+                records = Load(lease.Connection, _routeId, date, out damaged);
+                legacy = IsImported(lease.Connection, _routeId, date);
+            }
+        }
+        if (!legacy && importLegacy && !RouteHasAnyRows(store, _routeId))
+        {
             var restored = LegacyLogRestore.Restore(_data.LogDirectory, _routeName, date);
             if (restored.Count > 0)
             {
-                _data.Writer.Execute(c => UpsertAll(c, _routeId, date, restored.Values));
+                store.Execute(date, c => UpsertAll(c, _routeId, date, restored.Values));
                 records = new Dictionary<string, DailyRequest>(restored, StringComparer.Ordinal);
                 legacy = true;
             }
         }
-
         return new DailyJournalOpenResult
         {
-            Journal = new SqliteDailyJournal(_data.Writer, _routeId, date),
+            Journal = new SqliteDailyJournal(_data, _routeId, date),
             Records = records,
             RestoredFromLegacyLogs = legacy,
             Warning = damaged > 0 ? $"统计日志中有 {damaged} 条未写完或损坏的记录，已恢复其余可读数据" : null,
@@ -91,12 +96,18 @@ public sealed class SqliteDailyStorage : IDailyStorage
         return records;
     }
 
-    private static bool RouteHasAnyRows(SqliteConnection connection, string routeId)
+    private static bool RouteHasAnyRows(PartitionedDatabase store, string routeId)
     {
-        using var command = connection.CreateCommand();
-        command.CommandText = "SELECT EXISTS(SELECT 1 FROM daily_requests WHERE route_id = $route);";
-        command.Parameters.AddWithValue("$route", routeId);
-        return Convert.ToInt64(command.ExecuteScalar(), CultureInfo.InvariantCulture) != 0;
+        foreach (var month in store.Dates())
+        {
+            using var lease = store.OpenRead(month);
+            if (lease is null) continue;
+            using var command = lease.Connection.CreateCommand();
+            command.CommandText = "SELECT EXISTS(SELECT 1 FROM daily_requests WHERE route_id = $route);";
+            command.Parameters.AddWithValue("$route", routeId);
+            if ((long)command.ExecuteScalar()! != 0) return true;
+        }
+        return false;
     }
 
     private static void UpsertAll(SqliteConnection connection, string routeId, DateOnly date, IEnumerable<DailyRequest> records)
@@ -177,17 +188,17 @@ internal static class RowJson
 /// <summary>某一天的写入口：每条记录一次 UPSERT（单语句即一个隐式事务）。</summary>
 internal sealed class SqliteDailyJournal : IDailyJournal
 {
-    private readonly SqliteWriteQueue _writer;
+    private readonly DataDatabase _data;
     private readonly string _routeId;
     private readonly DateOnly _date;
 
-    public SqliteDailyJournal(SqliteWriteQueue writer, string routeId, DateOnly date)
+    public SqliteDailyJournal(DataDatabase data, string routeId, DateOnly date)
     {
-        _writer = writer;
+        _data = data;
         _routeId = routeId;
         _date = date;
     }
 
     public void Append(DailyRequest record)
-        => _writer.Execute(connection => SqliteDailyStorage.Upsert(connection, transaction: null, _routeId, _date, record));
+        => _data.Statistics.Execute(_date, connection => SqliteDailyStorage.Upsert(connection, transaction: null, _routeId, _date, record));
 }

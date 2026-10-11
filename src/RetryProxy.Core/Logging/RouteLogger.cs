@@ -13,15 +13,17 @@ public sealed class RouteLogger
     private readonly ProxyLogger _logger;
     private readonly LogActivity? _activity;
     private readonly string? _requestId;
+    private readonly DateOnly? _requestDate;
 
     internal RouteLogger(ProxyLogger logger, string routeName, LogSource source,
-        LogActivity? activity = null, string? requestId = null)
+        LogActivity? activity = null, string? requestId = null, DateOnly? requestDate = null)
     {
         _logger = logger;
         RouteName = routeName.Trim();
         Source = source;
         _activity = activity;
         _requestId = requestId;
+        _requestDate = requestDate;
     }
 
     public ProxyLogger Base => _logger;
@@ -34,7 +36,7 @@ public sealed class RouteLogger
     {
         var source = Source == LogSource.Preparation ? Source
             : activity is LogActivity.Preparation or LogActivity.KeepAlive ? LogSource.ChannelKeepAlive : Source;
-        return new RouteLogger(_logger, RouteName, source, activity, _requestId);
+        return new RouteLogger(_logger, RouteName, source, activity, _requestId, _requestDate);
     }
 
     public RouteLogger ForRequest(string requestId, bool internalRequest, bool preparing)
@@ -42,7 +44,7 @@ public sealed class RouteLogger
         var context = internalRequest || Source == LogSource.Preparation
             ? WithActivity(preparing ? LogActivity.Preparation : LogActivity.KeepAlive)
             : this;
-        return new RouteLogger(_logger, RouteName, context.Source, context._activity, requestId);
+        return new RouteLogger(_logger, RouteName, context.Source, context._activity, requestId, _logger.Today);
     }
 
     /// <summary>
@@ -56,11 +58,11 @@ public sealed class RouteLogger
         return id[..Math.Min(id.Length, DisplayIdLength)];
     }
 
-    public void Info(string message) => _logger.Write("INFO", Prefix(message));
+    public void Info(string message) => _logger.Write("INFO", Prefix(message), Source, RouteName, _requestId, _requestDate);
 
-    public void Warn(string message) => _logger.Write("WARNING", Prefix(message));
+    public void Warn(string message) => _logger.Write("WARNING", Prefix(message), Source, RouteName, _requestId, _requestDate);
 
-    public void Error(string message) => _logger.Write("ERROR", Prefix(message));
+    public void Error(string message) => _logger.Write("ERROR", Prefix(message), Source, RouteName, _requestId, _requestDate);
 
     private string Prefix(string message)
     {

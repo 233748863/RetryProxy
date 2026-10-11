@@ -91,7 +91,7 @@ public sealed class ProxyService
     /// <summary>本通道日志目录。</summary>
     public string LogDirectory => _logger.DirectoryPath;
 
-    /// <summary>统计库（logs\data.db）；统计页的 7 天趋势经它查询。无统计实例的服务为 null。</summary>
+    /// <summary>按月保存的统计库入口；统计页的 7 天趋势经它查询。无统计实例的服务为 null。</summary>
     public DataDatabase? Data { get; private set; }
 
     public ProxyMetrics Metrics { get; }

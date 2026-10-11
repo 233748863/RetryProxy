@@ -415,7 +415,7 @@ try {
     foreach ($task in $finalConfig.preparations) { if ($task.apiKey) { throw '管理来源任务复制了真实密钥' } }
     if ([IO.File]::ReadAllText((Join-Path $env:CLAUDE_CONFIG_DIR 'settings.json')) -cne '{}' -or
         [IO.File]::ReadAllText((Join-Path $env:CODEX_HOME 'config.toml')) -cne '') { throw '独立准备修改了客户端配置' }
-    $logText = [IO.File]::ReadAllText((Join-Path $runtime 'logs\retry-proxy.log'))
+    $logText = Read-RetryProxyRuntimeLog -LogDirectory (Join-Path $runtime 'logs')
     foreach ($secret in @($secrets.Values) + @($codexToken, $claudeToken)) {
         if ($logText.Contains($secret, [StringComparison]::Ordinal)) { throw '准备日志包含密钥或通道口令' }
     }

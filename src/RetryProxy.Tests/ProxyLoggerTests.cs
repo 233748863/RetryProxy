@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Threading;
+using System.Threading.Tasks;
 using RetryProxy.Core.Logging;
 using Xunit;
 
@@ -22,18 +23,15 @@ public class ProxyLoggerTests : IDisposable
     }
 
     [Fact]
-    public void RotatesLogFilesWhenSizeLimitIsReached()
+    public async Task RuntimeLogsArePersistedInDailySqliteInsteadOfRotatingText()
     {
         using var logger = ProxyLogger.Silent(_directory);
-        var chunk = new string('x', 32 * 1024);
-        for (var i = 0; i < 170; i++)
-        {
-            logger.Info(chunk);
-        }
-
-        Assert.True(File.Exists(Path.Combine(_directory, "retry-proxy.log.1")));
-        var current = new FileInfo(Path.Combine(_directory, "retry-proxy.log")).Length;
-        Assert.True(current <= ProxyLogger.MaxLogBytes);
+        for (var i = 0; i < 170; i++) logger.Info(new string('x', 32 * 1024));
+        var page = await logger.Store.QueryAsync(new RuntimeLogQuery(logger.Store.Today));
+        Assert.Equal(170, page.Total);
+        Assert.True(File.Exists(logger.FilePath));
+        Assert.False(File.Exists(Path.Combine(_directory, "retry-proxy.log")));
+        Assert.False(File.Exists(Path.Combine(_directory, "retry-proxy.log.1")));
     }
 
     [Fact]

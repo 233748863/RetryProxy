@@ -76,6 +76,14 @@ public partial class RequestDiagnosticsPageViewModel : ViewModel
         UpdatePageState();
     }
 
+    public void OpenRequest(DateOnly date, string requestId)
+    {
+        SelectedProvider = SelectedKey = SelectedModel = SelectedOutcome = null;
+        SelectedDate = date;
+        RequestIdSearch = requestId;
+        FilterChanged();
+    }
+
     public override void OnNavigatedTo() => Activate();
     public override void OnNavigatedFrom() => Deactivate();
 

@@ -437,7 +437,7 @@ try {
             @{ Left = $healthyBounds.Left; Top = $healthyBounds.Top; Width = 160; Height = 28 },
             @{ Left = -32000; Top = -32000; Width = 1000; Height = 700 }
         )
-        $recoveryLogPath = Join-Path $runtimeDir 'logs\retry-proxy.log'
+        $recoveryLogPath = Join-Path $runtimeDir 'logs/runtime'
         $recoveryPattern = 'WindowRect \{[^\r\n]+ -> WindowRect \{'
         $recoveredCount = 0
         foreach ($damage in $damagedBounds) {
@@ -453,11 +453,11 @@ try {
             if (-not $restoredBounds.Equals($healthyBounds)) { throw 'Recovery did not preserve the last valid window rectangle' }
             # 每次注入都要留下一条恢复日志，等到日志出现再注入下一条，避免两次注入被合并成一次恢复。
             Wait-TrayCondition {
-                [regex]::Matches((Get-Content -LiteralPath $recoveryLogPath -Raw -Encoding UTF8), $recoveryPattern).Count -ge $recoveredCount
+                [regex]::Matches((Read-RetryProxyRuntimeLog -LogDirectory (Join-Path $runtimeDir 'logs')), $recoveryPattern).Count -ge $recoveredCount
             } "Window recovery did not log injected failure #$recoveredCount" 5
         }
         Start-Sleep -Milliseconds 500
-        $recoveryLog = Get-Content -LiteralPath $recoveryLogPath -Raw -Encoding UTF8
+        $recoveryLog = Read-RetryProxyRuntimeLog -LogDirectory (Join-Path $runtimeDir 'logs')
         if ([regex]::Matches($recoveryLog, $recoveryPattern).Count -ne $damagedBounds.Count) {
             throw 'Window recovery did not record exactly one diagnostic for each injected failure'
         }
@@ -507,11 +507,12 @@ try {
         $process = $null
         $mainWindow = [IntPtr]::Zero
         if ($VerifyTray) { [RetryProxyTrayVerification]::ClosePrivateDesktop() }
-        # A rotated-away ordinary log must not erase already saved daily statistics.
-        foreach ($dailySuffix in @('', '.1', '.2', '.3')) {
-            $dailyOldLog = Join-Path $runtimeDir ('logs\retry-proxy.log' + $dailySuffix)
-            if (Test-Path -LiteralPath $dailyOldLog) { Remove-Item -LiteralPath $dailyOldLog -Force }
-        }
+        # 清除已关闭的运行日志库后，历史统计应完整保留。
+        $runtimeLogsRoot = [IO.Path]::GetFullPath((Join-Path $runtimeDir 'logs/runtime'))
+        $fixtureRoot = [IO.Path]::GetFullPath($runtimeDir) + [IO.Path]::DirectorySeparatorChar
+        if (!$runtimeLogsRoot.StartsWith($fixtureRoot, [StringComparison]::OrdinalIgnoreCase)) { throw '日志清理路径越出测试目录' }
+        Get-ChildItem -LiteralPath $runtimeLogsRoot -File | Where-Object Name -Match '^\d{4}-\d{2}-\d{2}\.db(-wal|-shm)?$' |
+            ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force }
         $process = Start-App
         $dailyRestored = $null
         for ($attempt = 0; $attempt -lt 300; $attempt++) {
@@ -550,8 +551,8 @@ try {
 }
 catch {
     Write-Host "Verification failed; evidence retained at $runtimeDir"
-    $logPath = Join-Path $runtimeDir 'logs\retry-proxy.log'
-    if (Test-Path -LiteralPath $logPath) { Get-Content -LiteralPath $logPath -Encoding UTF8 -Tail 30 | Write-Host }
+    $logPath = Join-Path $runtimeDir 'logs/runtime'
+    if (Test-Path -LiteralPath $logPath) { (Read-RetryProxyRuntimeLog -LogDirectory (Join-Path $runtimeDir 'logs')) -split '\r?\n' | Select-Object -Last 30 | Write-Host }
     throw
 }
 finally {

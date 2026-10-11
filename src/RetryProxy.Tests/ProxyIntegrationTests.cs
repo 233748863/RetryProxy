@@ -132,7 +132,7 @@ public class ProxyIntegrationTests
             Assert.Equal(expectedValue, expectedHeader == "Authorization" ? requests[0].Authorization : requests[0].ApiKey);
             Assert.Equal(string.Empty, expectedHeader == "Authorization" ? requests[0].ApiKey : requests[0].Authorization);
             Assert.Equal("Bearer client-key", requests[1].Authorization);
-            Assert.DoesNotContain("sk-upstream", LogFiles.ReadAll(directory));
+            Assert.DoesNotContain("sk-upstream", LogFiles.ReadAll(logger));
         }
         finally
         {
@@ -218,7 +218,7 @@ public class ProxyIntegrationTests
 
         Assert.Equal(2, attempts);
         service.Stop(TimeSpan.FromSeconds(5));
-        var logText = LogFiles.ReadAll(logDirectory);
+        var logText = LogFiles.ReadAll(logger);
         Assert.True(logText.Contains("第 1 次 GET /hello -> HTTP 500（上游服务内部错误），0.0秒后重试"), logText);
         Assert.True(logText.Contains("GET /hello -> HTTP 200（重试 1 次）"), logText);
         Assert.True(service.State is ServiceState.Stopped or ServiceState.Error);
@@ -302,7 +302,7 @@ public class ProxyIntegrationTests
             Assert.Contains("有效答案", body);
             Assert.DoesNotContain("无效答案", body);
             Assert.Equal(2, attempts);
-            Assert.Contains("未转发", LogFiles.ReadAll(logDirectory));
+            Assert.Contains("未转发", LogFiles.ReadAll(logger));
         }
         finally
         {
@@ -341,7 +341,7 @@ public class ProxyIntegrationTests
             Assert.Equal(HttpStatusCode.GatewayTimeout, response.StatusCode);
             Assert.Contains("请求超过总等待上限", await response.Content.ReadAsStringAsync());
             Assert.True(attempts >= 2);
-            var logs = LogFiles.ReadAll(logDirectory);
+            var logs = LogFiles.ReadAll(logger);
             Assert.Contains("第 1 次 POST /v1/messages", logs);
             Assert.DoesNotContain("/10001", logs);
         }
@@ -496,7 +496,7 @@ public class ProxyIntegrationTests
         rebind.Start();
         rebind.Stop();
 
-        var logText = LogFiles.ReadAll(logDirectory);
+        var logText = LogFiles.ReadAll(logger);
         Assert.True(logText.Contains("代理已停止，丢弃 1 个处理中请求"), $"日志里没有丢弃提示：{logText}");
     }
 

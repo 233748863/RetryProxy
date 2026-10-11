@@ -181,7 +181,7 @@ public class TlsFingerprintTests
             await unexpected.RefreshAsync(route, CancellationToken.None);
 
             logger.Dispose();
-            var logs = LogFiles.ReadAll(directory);
+            var logs = LogFiles.ReadAll(logger);
             Assert.Contains($"本机 Claude Code TLS 指纹已变化，新连接改用新指纹：JA4 {ClaudeCodeJa4} → {ClaudeCodeJa4}", logs);
             Assert.Contains($"已核对本机 Claude Code TLS 指纹，与当前一致（JA4 {ClaudeCodeJa4}）", logs);
             Assert.Contains($"抓取本机 Claude Code TLS 指纹失败：未找到本机 Claude Code CLI，请先安装并完成配置；继续使用内置指纹（JA4 {ClaudeCodeJa4}）", logs);
@@ -599,7 +599,7 @@ public class TlsFingerprintTests
         public async Task<string> Logs()
         {
             await TestClock.WaitUntil(() => Proxy.Metrics.Snapshot().ActiveRequests == 0);
-            return LogFiles.ReadAll(_logDirectory);
+            return LogFiles.ReadAll(_logger);
         }
 
         public async ValueTask DisposeAsync()

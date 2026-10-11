@@ -73,6 +73,15 @@ public class DailyStorageTests : IDisposable
 
     private static string Json(object value) => JsonSerializer.Serialize(value);
 
+    private static SqliteConnection ConnectStatistics(DataDatabase data)
+    {
+        var date = new DateOnly(2026, 9, 19);
+        data.Statistics.Execute(date, _ => { });
+        var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = data.Statistics.GetPath(date), Pooling = false }.ToString());
+        connection.Open();
+        return connection;
+    }
+
     private static void Exec(SqliteConnection connection, string sql)
     {
         using var command = connection.CreateCommand();
@@ -240,7 +249,7 @@ public class DailyStorageTests : IDisposable
         using var another = ProxyMetrics.FromDailyLogs(Data(), "id-b", "新名");
         Assert.Equal(0UL, another.Snapshot().TotalRequests);
         // 通道 ID 只作为主键列存进库，不再拼进文件路径。
-        Assert.True(File.Exists(Path.Combine(_directory, "data.db")));
+        Assert.True(File.Exists(Data().Statistics.GetPath(DateOnly.FromDateTime(DateTime.Now))));
     }
 
     [Fact]
@@ -256,7 +265,7 @@ public class DailyStorageTests : IDisposable
             state.Change("done", new DailyChange.Succeeded(Cache("done", false)), ms + 1);
         }
 
-        using (var connection = data.Database.Connect())
+        using (var connection = ConnectStatistics(data))
         {
             Assert.Equal(1L, Scalar(connection, "SELECT COUNT(*) FROM daily_requests WHERE route_id = 'route';"));
             // 直接塞一条坏 JSON：模拟库里出现损坏行。
@@ -359,7 +368,7 @@ public class DailyStorageTests : IDisposable
     public void SchemaVersionTooNewIsReportedAsRecoveryFailureAndLiveDataStaysInMemory()
     {
         var data = Data();
-        using (var connection = data.Database.Connect())
+        using (var connection = ConnectStatistics(data))
         {
             Exec(connection, "UPDATE meta SET value = '99' WHERE key = 'schema_version';");
         }
@@ -480,7 +489,7 @@ public class DailyStorageTests : IDisposable
             Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(10), $"1000 次统计写入耗时 {stopwatch.Elapsed.TotalSeconds:F1} 秒");
         }
 
-        using var connection = data.Database.Connect();
+        using var connection = ConnectStatistics(data);
         Assert.Equal(500L, Scalar(connection, "SELECT COUNT(*) FROM daily_requests WHERE route_id = 'burst-route';"));
     }
 

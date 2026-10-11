@@ -190,7 +190,7 @@ try {
     if ([IO.Path]::GetFullPath($path) -ne [IO.Path]::GetFullPath((Join-Path $importRuntime 'logs'))) { throw '目录卡指向了错误的运行目录' }
     if (Find-Control '每日统计目录' -ByName) { throw '旧每日统计目录卡仍存在' }
     if (!(Find-Control 'OpenLogDataDirectory').Current.IsEnabled) { throw '目录按钮不可用' }
-    if (!(Test-Path -LiteralPath (Join-Path $importRuntime 'logs/data.db'))) { throw '统计和诊断数据库未落在隔离日志目录' }
+    if (!(Test-Path -LiteralPath (Join-Path $importRuntime 'logs/runtime'))) { throw '运行日志数据库未落在隔离日志目录' }
     Capture 'logs-and-data-initial'
     $initialTheme=(Probe 'read' $db | ConvertFrom-Json).commonConfig.currentThemeType
     foreach ($desired in @(3,0)) {
@@ -241,12 +241,12 @@ try {
         }
         $before=(Get-FileHash -LiteralPath $faultDb).Hash
         Start-App $faultRuntime
-        $log=Join-Path $faultRuntime 'logs/retry-proxy.log'
+        $log=Join-Path $faultRuntime 'logs/runtime'
         # 只读库可成功读取旧配置，保存时才被拒绝；坏库/坏节点则在读取阶段失败并备份。
         $expectedError=if ($fault -eq 'readonly') { '配置保存失败' } else { '配置库读取失败' }
         Wait-For {
             if (!(Test-Path -LiteralPath $log)) { return $false }
-            return (Read-SharedLog $log).Contains($expectedError)
+            return (Read-RetryProxyRuntimeLog -LogDirectory (Join-Path $faultRuntime 'logs')).Contains($expectedError)
         } "$fault 场景未出现配置保护提示"
         if ($fault -ne 'readonly') {
             $backups=@(Get-ChildItem -LiteralPath (Join-Path $faultRuntime 'User/backup') -Filter 'config_*.db.bak' -ErrorAction SilentlyContinue)

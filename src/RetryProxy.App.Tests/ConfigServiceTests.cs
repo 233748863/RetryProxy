@@ -140,12 +140,12 @@ public sealed partial class ConfigServiceTests : IDisposable
         ? Directory.GetFiles(BackupDirectory, pattern).Order(StringComparer.Ordinal).ToArray()
         : [];
 
-    // 日志器和 SQLite 会保持写句柄；断言读取必须声明共享写，不能用 File.ReadAllText 的只共享读方式。
+    // 等待运行日志保存，再通过数据库导出读取断言内容。
     private string ReadLog()
     {
-        using var stream = new FileStream(_logger.FilePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-        using var reader = new StreamReader(stream);
-        return reader.ReadToEnd();
+        using var output = new StringWriter();
+        _logger.Store.ExportAsync(new RuntimeLogQuery(_logger.Store.Today), output).GetAwaiter().GetResult();
+        return output.ToString();
     }
 
     private static byte[] ReadSharedBytes(string path)
@@ -176,6 +176,20 @@ public sealed partial class ConfigServiceTests : IDisposable
                 throw;
             }
         }) { BeforeDestructiveChange = service.BackupBeforeDeletion };
+    }
+
+    [Fact]
+    public void ExistingConfigDefaultsToSevenLogDaysAndSavedRetentionSurvivesRestart()
+    {
+        var rows = Rows(Sample());
+        rows["other"] = "{\"uiCultureInfoName\":\"zh-Hans\"}";
+        Seed(rows);
+        var service = Open();
+        Assert.Equal(7, service.Get().OtherConfig.RuntimeLogRetentionDays);
+        service.Get().OtherConfig.RuntimeLogRetentionDays = 14;
+        service.SaveChecked();
+        var reopened = Open();
+        Assert.Equal(14, reopened.Get().OtherConfig.RuntimeLogRetentionDays);
     }
 
     public void Dispose()

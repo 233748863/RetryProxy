@@ -30,7 +30,10 @@
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="ListBoxItem">
-                        <ContentPresenter />
+                        <Border x:Name="Selection" Background="Transparent"><ContentPresenter /></Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsSelected" Value="True"><Setter TargetName="Selection" Property="Background" Value="{DynamicResource ControlFillColorSecondaryBrush}" /></Trigger>
+                        </ControlTemplate.Triggers>
                     </ControlTemplate>
                 </Setter.Value>
             </Setter>
@@ -40,7 +43,9 @@
     <Grid Margin="48,20,48,20">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
         <!--  来源和级别分行；窄窗口下筛选项自动换行。  -->
@@ -77,10 +82,22 @@
                                Icon="{ui:SymbolIcon FolderOpen24}" />
                     <ui:Button Margin="8,0,0,0"
                                Command="{Binding ClearCommand}"
-                               Content="{i18n:T 清空}"
+                               IsEnabled="{Binding CanUseRows}"
+                               Content="{i18n:T 清空显示}"
                                Icon="{ui:SymbolIcon Broom24}" />
                 </StackPanel>
             </Grid>
+            <WrapPanel Margin="0,0,0,8">
+                <TextBlock Text="{i18n:T 日期}" VerticalAlignment="Center" Margin="0,0,8,6" />
+                <DatePicker SelectedDate="{Binding SelectedDate, Mode=TwoWay}" DisplayDateStart="{Binding EarliestDate}"
+                            DisplayDateEnd="{Binding LatestDate}" SelectedDateFormat="Short" Width="150" Margin="0,0,8,6"
+                            AutomationProperties.AutomationId="RuntimeLogDate" />
+                <ui:Button Content="{i18n:T 今天}" Command="{Binding TodayCommand}" Margin="0,0,8,6" />
+                <ui:Button Content="{i18n:T 刷新}" Command="{Binding RefreshCommand}" Margin="0,0,8,6" />
+                <ui:Button Content="{i18n:T 导出筛选结果}" Command="{Binding ExportCommand}" Margin="0,0,8,6"
+                           IsEnabled="{Binding CanUseRows}"
+                           AutomationProperties.AutomationId="ExportRuntimeLogs" />
+            </WrapPanel>
             <WrapPanel Margin="0,0,0,2">
                 <TextBlock Margin="0,0,8,6"
                            VerticalAlignment="Center"
@@ -177,7 +194,10 @@
         </StackPanel>
 
         <!--  日志列表  -->
-        <Border Grid.Row="1"
+        <TextBlock Grid.Row="1" Text="{Binding Warning}" TextWrapping="Wrap" Margin="0,0,0,8"
+                   Foreground="{DynamicResource SystemFillColorCautionBrush}"
+                   Visibility="{Binding HasWarning, Converter={StaticResource BooleanToVisibilityConverter}}" />
+        <Border Grid.Row="2"
                 Padding="9,6"
                 Background="{DynamicResource ControlFillColorDefaultBrush}"
                 BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
@@ -190,6 +210,7 @@
                          BorderThickness="0"
                          ItemContainerStyle="{StaticResource LogRowStyle}"
                          ItemsSource="{Binding Rows}"
+                         SelectedIndex="{Binding SelectedRowIndex, Mode=TwoWay}"
                          ScrollViewer.CanContentScroll="True"
                          ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                          ScrollViewer.VerticalScrollBarVisibility="Auto"
@@ -223,5 +244,16 @@
                            Visibility="{Binding IsEmpty, Converter={StaticResource BooleanToVisibilityConverter}}" />
             </Grid>
         </Border>
+        <WrapPanel Grid.Row="3" Margin="0,10,0,0">
+            <ui:Button Content="{i18n:T 较新一页}" Command="{Binding NewerCommand}" IsEnabled="{Binding CanNewer}"
+                       AutomationProperties.AutomationId="RuntimeLogsNewer" Margin="0,0,8,6" />
+            <TextBlock Text="{Binding PageText}" VerticalAlignment="Center" Margin="0,0,8,6" />
+            <ui:Button Content="{i18n:T 较早一页}" Command="{Binding OlderCommand}" IsEnabled="{Binding CanOlder}"
+                       AutomationProperties.AutomationId="RuntimeLogsOlder" Margin="0,0,16,6" />
+            <ui:Button Content="{i18n:T 复制完整请求编号}" Command="{Binding CopyRequestCommand}" IsEnabled="{Binding CanCopyRequest}" Margin="0,0,8,6"
+                       AutomationProperties.AutomationId="CopyRuntimeRequestId" />
+            <ui:Button Content="{i18n:T 查看请求诊断}" Command="{Binding OpenDiagnosticCommand}" IsEnabled="{Binding CanOpenDiagnostic}" Margin="0,0,0,6"
+                       AutomationProperties.AutomationId="OpenRuntimeDiagnostic" />
+        </WrapPanel>
     </Grid>
 </Page>

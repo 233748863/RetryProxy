@@ -359,6 +359,8 @@ try {
     foreach ($id in @('OverviewChannelPicker', 'CacheChannelPicker', 'EnableAllChannels', 'DisableAllChannels')) {
         if (@(Find-Elements $id -ById).Count -gt 0) { throw "Removed control is still on Statistics: $id" }
     }
+    # 用量分析使用独立的汇总筛选；共享客户端与通道概况位于缓存详情/实时请求。
+    Invoke-Control 'StatisticsTabCache' -ById
     $expectedProviders = if ($WithChannels) {
         @(@{ Selector = 'SelectClaude'; Provider = $longProvider }, @{ Selector = 'SelectCodex'; Provider = 'fixture' })
     } else {
@@ -526,6 +528,7 @@ try {
     Write-Host "准备抽屉验收通过：窗口稳定、双任务独立启停、完成后保活及日志筛选。WithChannels=$($WithChannels.IsPresent), CompactWindow=$($CompactWindow.IsPresent)"
 }
 catch {
+    Write-Host $_.ScriptStackTrace
     $logPath = Join-Path $runtime 'logs/runtime'
     if (Test-Path -LiteralPath $logPath) { (Read-RetryProxyRuntimeLog -LogDirectory (Join-Path $runtime 'logs')) -split '\r?\n' | Select-Object -Last 20 | Write-Host }
     throw

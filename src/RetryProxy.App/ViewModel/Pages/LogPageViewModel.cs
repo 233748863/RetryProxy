@@ -7,11 +7,11 @@ using RetryProxy.Core.Workspace;
 using RetryProxy.Helpers.Ui;
 using RetryProxy.Service;
 using RetryProxy.Service.I18n;
+using RetryProxy.Service.Interface;
 using RetryProxy.View.Pages;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
-using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
@@ -28,77 +28,89 @@ namespace RetryProxy.ViewModel.Pages;
 
 public partial class LogPageViewModel : ViewModel
 {
-    public static readonly TimeSpan ScrollResumeDelay = TimeSpan.FromSeconds(5);
     public const int PageSize = 200;
+    public const int RequestPageSize = 100;
     private readonly WorkspaceService _workspaceService;
+    private readonly IConfigService _configService;
+    private readonly Dispatcher _dispatcher;
     private readonly DispatcherTimer _timer;
     private RuntimeLogStore Store => _workspaceService.Workspace.Logger.Store;
-    private IReadOnlyList<RuntimeLogEntry> _entries = [];
     private CancellationTokenSource? _queryCancellation;
     private bool _active;
     private bool _dirty;
     private bool _hasResult;
     private bool _followToday = true;
+    private bool _resetRows = true;
+    private bool _resetScroll = true;
+    private bool _applyingRows;
     private DateOnly _observedToday;
+    private int _notificationQueued;
     private int _version;
     private int _pageIndex;
     private long _snapshot;
     private long _afterId;
     private string? _lastRouteName;
     private ClientType? _lastClient;
+    private string _requestSearch = string.Empty;
+    private string _eventSearch = string.Empty;
 
-    [ObservableProperty] private BatchObservableCollection<string> _rows = [];
+    public ObservableCollection<LogEventRow> Rows { get; } = [];
+    public ObservableCollection<RequestLogRow> RequestRows { get; } = [];
+    public event Action<bool>? RowsUpdating;
+    public event Action<bool>? RowsUpdated;
+
+    [ObservableProperty] private bool _isRequestView = true;
+    [ObservableProperty] private bool _isCompact;
     [ObservableProperty] private LogLevelFilter _filter = LogLevelFilter.All;
     [ObservableProperty] private string _query = string.Empty;
     [ObservableProperty] private bool _onlySelected;
     [ObservableProperty] private LogSource? _sourceFilter;
     [ObservableProperty] private bool _autoScroll = true;
-    [ObservableProperty] private int _shown;
     [ObservableProperty] private long _total;
-    [ObservableProperty] private string _counter = "0 / 0";
+    [ObservableProperty] private string _counter = string.Empty;
     [ObservableProperty] private string? _selectedRouteName;
     [ObservableProperty] private string _onlySelectedLabel = string.Empty;
     [ObservableProperty] private string _emptyText = string.Empty;
-    [ObservableProperty] private bool _isEmpty = true;
-    [ObservableProperty] private string _autoScrollToolTip = string.Empty;
     [ObservableProperty] private DateTime? _selectedDate;
     [ObservableProperty] private DateTime _earliestDate;
     [ObservableProperty] private DateTime _latestDate;
     [ObservableProperty] private string _pageText = string.Empty;
     [ObservableProperty] private string _warning = string.Empty;
     [ObservableProperty] private bool _isLoading;
-    [ObservableProperty] private int _selectedRowIndex = -1;
+    [ObservableProperty] private int _pendingCount;
+    [ObservableProperty] private LogEventRow? _selectedEvent;
+    [ObservableProperty] private RequestLogRow? _selectedRequest;
 
-    public bool ShowClientFilter => SourceFilter != LogSource.System;
+    public bool IsEventView => !IsRequestView;
+    public bool ShowClientFilter => IsRequestView || SourceFilter != LogSource.System;
     public bool HasWarning => Warning.Length > 0;
-    public bool CanUseRows => _active && _hasResult && !IsLoading;
+    public bool CanUseRows => _active && _hasResult;
+    public bool CanExport => CanUseRows && Total > 0;
+    public bool ShowLoading => IsLoading && !_hasResult;
+    public bool IsEmpty => _hasResult && (IsRequestView ? RequestRows.Count : Rows.Count) == 0;
     public bool CanNewer => CanUseRows && _pageIndex > 0;
-    public bool CanOlder => CanUseRows && ((long)_pageIndex + 1) * PageSize < Total && _pageIndex < int.MaxValue / PageSize - 1;
-    public bool CanCopyRequest => _active && _hasResult && SelectedEntry?.RequestId is { Length: > 0 };
-    public bool CanOpenDiagnostic => _active && _hasResult && SelectedEntry is { Source: LogSource.ChannelProxy, RequestId.Length: > 0, RequestDate: { } date }
+    public bool CanOlder => CanUseRows && ((long)_pageIndex + 1) * CurrentPageSize < Total;
+    public bool CanCopyRequest => CanUseRows && SelectedEvent?.Entry.RequestId is { Length: > 0 };
+    public bool CanOpenDiagnostic => CanUseRows && SelectedEvent?.Entry is
+        { Source: LogSource.ChannelProxy, RequestId.Length: > 0, RequestDate: { } date }
         && date >= _workspaceService.Diagnostics.Today.AddDays(-6) && date <= _workspaceService.Diagnostics.Today;
-    private RuntimeLogEntry? SelectedEntry => SelectedRowIndex >= 0 && SelectedRowIndex < _entries.Count ? _entries[SelectedRowIndex] : null;
-    public event Action? RowsAppended;
+    public bool ShowFollowHint => !AutoScroll && SelectedDate?.Date == LatestDate;
+    public string FollowHint => PendingCount > 0
+        ? T(IsRequestView ? "有 {0} 条新请求" : "有 {0} 条新事件", PendingCount) : T("已暂停跟随，保持当前阅读位置");
+    public string SearchHint => T(IsRequestView ? "搜索模型、供应商、请求编号…" : "搜索日志内容、完整请求编号…");
+    public string CounterUnit => T(IsRequestView ? "条请求" : "条事件");
+    private int CurrentPageSize => IsRequestView ? RequestPageSize : PageSize;
+    private static string T(string text, params object[] args) => ClientPageText.Translate(text, args);
 
-    public LogPageViewModel(WorkspaceService workspaceService)
+    public LogPageViewModel(WorkspaceService workspaceService, IConfigService configService)
     {
         _workspaceService = workspaceService;
+        _configService = configService;
+        _dispatcher = Dispatcher.CurrentDispatcher;
         _observedToday = Store.Today;
         _selectedDate = _observedToday.ToDateTime(TimeOnly.MinValue);
-        _timer = new DispatcherTimer(DispatcherPriority.Background) { Interval = TimeSpan.FromMilliseconds(250) };
-        _timer.Tick += async (_, _) =>
-        {
-            UpdateDates();
-            if (!_dirty || IsLoading) return;
-            _dirty = false;
-            await ReloadAsync();
-        };
-        workspaceService.LogsChanged += () =>
-        {
-            if (_active && _pageIndex == 0 && SelectedDate?.Date == Store.Today.ToDateTime(TimeOnly.MinValue)) Schedule();
-        };
-        workspaceService.Refreshed += OnRefreshed;
-        I18nService.Instance.PropertyChanged += (_, _) => { OnRefreshed(); UpdateCounters(); };
+        _timer = new DispatcherTimer(DispatcherPriority.Background, _dispatcher) { Interval = TimeSpan.FromMilliseconds(750) };
+        _timer.Tick += RefreshTick;
         UpdateDates();
         OnRefreshed();
         UpdateCounters();
@@ -108,7 +120,12 @@ public partial class LogPageViewModel : ViewModel
     {
         if (_active) return;
         _active = true;
+        _workspaceService.LogsChanged += LogsChanged;
+        _workspaceService.Refreshed += OnRefreshed;
+        _workspaceService.Diagnostics.Changed += DiagnosticsChanged;
+        I18nService.Instance.PropertyChanged += LanguageChanged;
         UpdateDates();
+        RefreshText();
         _timer.Start();
         Schedule();
     }
@@ -116,15 +133,47 @@ public partial class LogPageViewModel : ViewModel
     public override void OnNavigatedFrom()
     {
         _active = false;
+        _workspaceService.LogsChanged -= LogsChanged;
+        _workspaceService.Refreshed -= OnRefreshed;
+        _workspaceService.Diagnostics.Changed -= DiagnosticsChanged;
+        I18nService.Instance.PropertyChanged -= LanguageChanged;
         _timer.Stop();
         _version++;
         _queryCancellation?.Cancel();
         IsLoading = false;
     }
 
-    public bool IsFilter(LogLevelFilter filter) => Filter == filter;
+    private async void RefreshTick(object? sender, EventArgs args)
+    {
+        UpdateDates();
+        if (!_dirty || _queryCancellation is not null) return;
+        _dirty = false;
+        await ReloadAsync();
+    }
+
+    private void LogsChanged()
+    {
+        if (_active && SelectedDate?.Date == LatestDate) Schedule();
+    }
+
+    private void DiagnosticsChanged()
+    {
+        if (Interlocked.Exchange(ref _notificationQueued, 1) != 0 || _dispatcher.HasShutdownStarted) return;
+        _dispatcher.BeginInvoke(DispatcherPriority.Background, () =>
+        {
+            Interlocked.Exchange(ref _notificationQueued, 0);
+            if (_active && IsRequestView && SelectedDate?.Date == LatestDate) Schedule();
+        });
+    }
+
+    public void PauseFollowing()
+    {
+        if (_hasResult) AutoScroll = false;
+    }
+
     public void OpenPreparation(int taskNumber)
     {
+        IsRequestView = false;
         OnToday();
         OnlySelected = false;
         Filter = LogLevelFilter.All;
@@ -136,17 +185,33 @@ public partial class LogPageViewModel : ViewModel
     {
         var workspace = _workspaceService.Workspace;
         SelectedRouteName = workspace.SelectedRouteRef()?.Name;
-        OnlySelectedLabel = ClientPageText.Translate("仅当前客户端：{0}", workspace.SelectedClient.Label());
-        AutoScrollToolTip = ClientPageText.Translate("手动上滚后暂停跟随，连续 {0:F0} 秒无操作自动恢复；关闭后保持手动浏览", ScrollResumeDelay.TotalSeconds);
+        OnlySelectedLabel = T("仅当前客户端：{0}", workspace.SelectedClient.Label());
         if (OnlySelected && (_lastRouteName != SelectedRouteName || _lastClient != workspace.SelectedClient)) Schedule(resetPage: true);
         _lastRouteName = SelectedRouteName;
         _lastClient = workspace.SelectedClient;
     }
 
+    private void LanguageChanged(object? sender, PropertyChangedEventArgs args)
+    {
+        if (args.PropertyName != nameof(I18nService.Revision)) return;
+        RefreshText();
+        Schedule();
+    }
+
+    private void RefreshText()
+    {
+        OnRefreshed();
+        OnPropertyChanged(nameof(SearchHint));
+        OnPropertyChanged(nameof(CounterUnit));
+        OnPropertyChanged(nameof(FollowHint));
+        foreach (var row in Rows) row.RefreshLanguage();
+    }
+
     private void UpdateDates()
     {
         var today = Store.Today;
-        EarliestDate = DateOnly.FromDayNumber(Math.Max(0, today.DayNumber - Store.RetentionDays + 1)).ToDateTime(TimeOnly.MinValue);
+        var days = IsRequestView ? 7 : Store.RetentionDays;
+        EarliestDate = DateOnly.FromDayNumber(Math.Max(0, today.DayNumber - days + 1)).ToDateTime(TimeOnly.MinValue);
         LatestDate = today.ToDateTime(TimeOnly.MinValue);
         if (today != _observedToday && _followToday) SelectedDate = LatestDate;
         _observedToday = today;
@@ -158,10 +223,16 @@ public partial class LogPageViewModel : ViewModel
         if (resetPage)
         {
             _hasResult = false;
+            _resetRows = true;
+            _resetScroll = true;
             _pageIndex = 0;
+            _snapshot = 0;
+            _requestSnapshot = null;
+            SelectedEvent = null;
+            SelectedRequest = null;
+            PendingCount = 0;
             _version++;
             _queryCancellation?.Cancel();
-            IsLoading = false;
         }
         _dirty = true;
         UpdateCounters();
@@ -176,64 +247,74 @@ public partial class LogPageViewModel : ViewModel
         PreparationSuffix = " · " + _workspaceService.Workspace.SelectedClient.Label(),
         Offset = _pageIndex * PageSize,
         PageSize = PageSize,
-        SnapshotId = _pageIndex > 0 ? _snapshot : null,
+        SnapshotId = !_resetRows && (!AutoScroll || _pageIndex > 0) ? _snapshot : null,
         AfterId = _afterId,
     };
 
     private async Task ReloadAsync()
     {
         var version = _version;
-        _queryCancellation?.Dispose();
-        _queryCancellation = new CancellationTokenSource();
-        var token = _queryCancellation.Token;
-        var query = CaptureQuery();
+        using var cancellation = new CancellationTokenSource();
+        _queryCancellation = cancellation;
+        var token = cancellation.Token;
         IsLoading = true;
         try
         {
-            var page = await Store.QueryAsync(query, token);
-            if (version != _version || !_active) return;
-            var selectedId = SelectedEntry?.Id;
-            _snapshot = page.SnapshotId;
-            _entries = page.Entries;
-            Rows.ReplaceAll(_entries.Select(entry => entry.Line));
-            SelectedRowIndex = selectedId is { } id ? _entries.ToList().FindIndex(entry => entry.Id == id) : -1;
+            if (IsRequestView) await ReloadRequestsAsync(version, token);
+            else
+            {
+                var query = CaptureQuery();
+                var page = await Store.QueryAsync(query, token);
+                var latest = !AutoScroll && query.Date == Store.Today
+                    ? await Store.QueryAsync(query with { SnapshotId = null, Offset = 0, PageSize = 1 }, token) : page;
+                if (!Current(version, token)) return;
+                var previous = Rows.ToDictionary(row => (row.Entry.Date, row.Entry.Id));
+                var rows = page.Entries.Reverse().Select(entry => previous.GetValueOrDefault((entry.Date, entry.Id)) ?? new LogEventRow(entry)).ToArray();
+                ApplyRows(() => CollectionSync.Update(Rows, rows));
+                _snapshot = page.SnapshotId;
+                Total = page.Total;
+                PendingCount = (int)Math.Min(int.MaxValue, Math.Max(0, latest.Total - page.Total));
+                Warning = T(page.Warning ?? string.Empty);
+            }
+            if (!Current(version, token)) return;
             _hasResult = true;
-            Total = page.Total;
-            Warning = page.Warning ?? string.Empty;
-            if (_pageIndex == 0 && query.Date == Store.Today) RowsAppended?.Invoke();
+            _resetRows = false;
+            _resetScroll = false;
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested) { }
         catch
         {
-            if (version != _version || !_active) return;
-            _hasResult = false;
-            _entries = [];
-            Rows.Clear();
-            Total = 0;
-            Warning = ClientPageText.Translate("读取运行日志失败，请稍后重试");
+            if (Current(version, token)) Warning = T("读取日志失败，请稍后重试");
         }
         finally
         {
-            if (version == _version)
-            {
-                IsLoading = false;
-                UpdateCounters();
-            }
+            if (ReferenceEquals(_queryCancellation, cancellation)) _queryCancellation = null;
+            if (version == _version || _active) IsLoading = false;
+            UpdateCounters();
         }
+    }
+
+    private bool Current(int version, CancellationToken token) => _active && version == _version && !token.IsCancellationRequested;
+
+    private void ApplyRows(Action update)
+    {
+        _applyingRows = true;
+        try
+        {
+            RowsUpdating?.Invoke(_resetScroll);
+            update();
+            RowsUpdated?.Invoke(_resetScroll);
+        }
+        finally { _applyingRows = false; }
     }
 
     private void UpdateCounters()
     {
-        Shown = Rows.Count;
-        Counter = $"{Shown} / {Total}";
-        IsEmpty = !IsLoading && Shown == 0;
-        EmptyText = ClientPageText.Translate("当前日期没有符合筛选条件的运行日志");
-        PageText = ClientPageText.Translate("第 {0} / {1} 页", _pageIndex + 1, Math.Max(1, (Total + PageSize - 1) / PageSize));
-        OnPropertyChanged(nameof(CanNewer));
-        OnPropertyChanged(nameof(CanOlder));
-        OnPropertyChanged(nameof(CanUseRows));
-        OnPropertyChanged(nameof(CanCopyRequest));
-        OnPropertyChanged(nameof(CanOpenDiagnostic));
+        Counter = $"{(IsRequestView ? RequestRows.Count : Rows.Count)} / {Total}";
+        EmptyText = T(IsRequestView ? "当前日期没有符合筛选条件的请求" : "当前日期没有符合筛选条件的运行事件");
+        PageText = T("第 {0} / {1} 页", _pageIndex + 1, Math.Max(1, (Total + CurrentPageSize - 1) / CurrentPageSize));
+        foreach (var name in new[] { nameof(CanNewer), nameof(CanOlder), nameof(CanUseRows), nameof(CanExport), nameof(CanCopyRequest),
+            nameof(CanOpenDiagnostic), nameof(IsEmpty), nameof(ShowLoading), nameof(ShowFollowHint) }) OnPropertyChanged(name);
     }
 
     partial void OnSelectedDateChanged(DateTime? value)
@@ -244,208 +325,173 @@ public partial class LogPageViewModel : ViewModel
         if (!_followToday) AutoScroll = false;
         Schedule(resetPage: true);
     }
+    partial void OnIsRequestViewChanged(bool value)
+    {
+        if (value) { _eventSearch = Query; Query = _requestSearch; }
+        else { _requestSearch = Query; Query = _eventSearch; }
+        _afterId = 0;
+        OnPropertyChanged(nameof(IsEventView));
+        OnPropertyChanged(nameof(ShowClientFilter));
+        OnPropertyChanged(nameof(SearchHint));
+        OnPropertyChanged(nameof(CounterUnit));
+        UpdateDates();
+        Schedule(resetPage: true);
+    }
+    partial void OnAutoScrollChanged(bool value)
+    {
+        OnPropertyChanged(nameof(ShowFollowHint));
+        OnPropertyChanged(nameof(FollowHint));
+        if (value) Schedule(resetPage: true);
+        else if (_queryCancellation is not null)
+        {
+            // 勾选/滚动发生在后台读取期间时，旧结果不能再插入新行。
+            _version++;
+            _queryCancellation.Cancel();
+            Schedule();
+        }
+    }
+    partial void OnPendingCountChanged(int value) => OnPropertyChanged(nameof(FollowHint));
     partial void OnQueryChanged(string value) => Schedule(resetPage: true);
     partial void OnOnlySelectedChanged(bool value) => Schedule(resetPage: true);
     partial void OnWarningChanged(string value) => OnPropertyChanged(nameof(HasWarning));
     partial void OnIsLoadingChanged(bool value) => UpdateCounters();
-    partial void OnSelectedRowIndexChanged(int value)
+    partial void OnSelectedRequestChanged(RequestLogRow? value) { if (!_applyingRows && value is not null) PauseFollowing(); }
+    partial void OnSelectedEventChanged(LogEventRow? value)
     {
+        if (!_applyingRows && value is not null) PauseFollowing();
         OnPropertyChanged(nameof(CanCopyRequest));
         OnPropertyChanged(nameof(CanOpenDiagnostic));
     }
-    partial void OnFilterChanged(LogLevelFilter value)
-    {
-        foreach (var property in new[] { nameof(IsAll), nameof(IsInfo), nameof(IsWarning), nameof(IsError) }) OnPropertyChanged(property);
-        Schedule(resetPage: true);
-    }
+    partial void OnFilterChanged(LogLevelFilter value) => Schedule(resetPage: true);
     partial void OnSourceFilterChanged(LogSource? value)
     {
-        foreach (var property in new[] { nameof(IsAllSources), nameof(IsChannelProxy), nameof(IsChannelKeepAlive), nameof(IsPreparation), nameof(IsSystem), nameof(ShowClientFilter) }) OnPropertyChanged(property);
+        OnPropertyChanged(nameof(ShowClientFilter));
         if (!ShowClientFilter) OnlySelected = false;
         Schedule(resetPage: true);
     }
 
-    public bool IsAllSources => SourceFilter is null;
-    public bool IsChannelProxy => SourceFilter == LogSource.ChannelProxy;
-    public bool IsChannelKeepAlive => SourceFilter == LogSource.ChannelKeepAlive;
-    public bool IsPreparation => SourceFilter == LogSource.Preparation;
-    public bool IsSystem => SourceFilter == LogSource.System;
-    public bool IsAll => Filter == LogLevelFilter.All;
-    public bool IsInfo => Filter == LogLevelFilter.Info;
-    public bool IsWarning => Filter == LogLevelFilter.Warning;
-    public bool IsError => Filter == LogLevelFilter.Error;
-
-    [RelayCommand] private void OnSetFilter(string name) => Filter = name switch
-    {
-        "info" => LogLevelFilter.Info, "warning" => LogLevelFilter.Warning, "error" => LogLevelFilter.Error, _ => LogLevelFilter.All,
-    };
+    [RelayCommand] private void OnSetView(string name) => IsRequestView = name != "events";
     [RelayCommand] private void OnToggleOnlySelected() => OnlySelected = !OnlySelected;
-    [RelayCommand] private void OnSetSource(string name) => SourceFilter = name switch
-    {
-        "proxy" => LogSource.ChannelProxy, "keepalive" => LogSource.ChannelKeepAlive,
-        "preparation" => LogSource.Preparation, "system" => LogSource.System, _ => null,
-    };
     [RelayCommand] private void OnToday()
     {
         SelectedDate = Store.Today.ToDateTime(TimeOnly.MinValue);
         _afterId = 0;
-        AutoScroll = true;
         _followToday = true;
-        Schedule(resetPage: true);
+        OnLatest();
     }
-    [RelayCommand] private void OnRefresh() => Schedule(resetPage: true);
+    [RelayCommand] private void OnLatest() { AutoScroll = true; Schedule(resetPage: true); }
+    [RelayCommand] private async Task OnRefresh()
+    {
+        if (!_active) return;
+        Schedule();
+        if (_queryCancellation is not null) return;
+        _dirty = false;
+        await ReloadAsync();
+    }
     [RelayCommand] private void OnOlder()
     {
         if (!CanOlder) return;
-        _hasResult = false;
-        _pageIndex++;
         AutoScroll = false;
-        Schedule();
+        _pageIndex++;
+        PageChanged();
     }
     [RelayCommand] private void OnNewer()
     {
         if (!CanNewer) return;
-        _hasResult = false;
         _pageIndex--;
+        PageChanged();
+    }
+    private void PageChanged()
+    {
+        _version++;
+        _queryCancellation?.Cancel();
+        SelectedEvent = null;
+        SelectedRequest = null;
+        _resetScroll = true;
         Schedule();
     }
     [RelayCommand] private void OnClear()
     {
-        if (!CanUseRows) return;
+        if (!CanUseRows || IsRequestView) return;
         _afterId = _snapshot;
-        _entries = [];
         Rows.Clear();
-        SelectedRowIndex = -1;
+        SelectedEvent = null;
         Total = 0;
         _workspaceService.ClearLogs();
         Schedule(resetPage: true);
     }
+    [RelayCommand] private void OnToggleEvent(LogEventRow? row)
+    {
+        if (row is null || !CanUseRows) return;
+        SelectedEvent = row;
+        row.IsExpanded = !row.IsExpanded;
+    }
+    [RelayCommand] private void OnCopyEvent()
+    {
+        if (CanUseRows && SelectedEvent is { } row) Copy(row.FullLine, "日志已复制");
+    }
     [RelayCommand] private void OnCopyRequest()
     {
-        if (!CanCopyRequest || SelectedEntry?.RequestId is not { } id) return;
-        ClipboardSafe.SetText(id, success => _workspaceService.Workspace.Notice = ClientPageText.Translate(success ? "请求编号已复制" : "复制失败，请重试"));
+        if (CanCopyRequest) Copy(SelectedEvent!.Entry.RequestId!, "请求编号已复制");
     }
+    private void Copy(string text, string successText) => ClipboardSafe.SetText(text,
+        success => _workspaceService.Workspace.Notice = T(success ? successText : "复制失败，请重试"));
+
     [RelayCommand] private async Task OnOpenDiagnostic()
     {
-        if (!CanOpenDiagnostic || SelectedEntry is not { RequestId: { } id, RequestDate: { } date }) return;
+        if (!CanOpenDiagnostic || SelectedEvent?.Entry is not { RequestId: { } id, RequestDate: { } date }) return;
         var version = _version;
         try
         {
             var detail = await _workspaceService.Diagnostics.ReadDetailAsync(date, id);
             if (!_active || version != _version) return;
-            if (detail.Summary is null)
-            {
-                _workspaceService.Workspace.Notice = ClientPageText.Translate("该请求没有可用的诊断记录");
-                return;
-            }
-            var client = detail.Summary.Request.Client;
+            if (detail.Summary is not { } summary)
+            { _workspaceService.Workspace.Notice = T("该请求没有可用的诊断记录"); return; }
             var workspace = _workspaceService.Workspace;
-            if (workspace.SelectedClient != client) workspace.SelectClient(client);
+            if (workspace.SelectedClient != summary.Request.Client) workspace.SelectClient(summary.Request.Client);
             _workspaceService.Flush();
-            if (workspace.SelectedClient != client) return;
+            if (workspace.SelectedClient != summary.Request.Client) return;
             if (App.GetService<INavigationService>()?.Navigate(typeof(RequestDiagnosticsPage)) == true)
                 App.GetService<RequestDiagnosticsPageViewModel>()?.OpenRequest(date, id);
         }
-        catch { _workspaceService.Workspace.Notice = ClientPageText.Translate("该请求没有可用的诊断记录"); }
+        catch { _workspaceService.Workspace.Notice = T("该请求没有可用的诊断记录"); }
     }
+
     [RelayCommand] private async Task OnExport()
     {
-        if (!CanUseRows) return;
+        if (!CanExport) return;
+        var requests = IsRequestView;
         var query = CaptureQuery() with { SnapshotId = _snapshot };
+        var summaries = _requestSnapshot?.ToArray() ?? [];
+        var prices = CurrentPrices();
         var dialog = new SaveFileDialog
         {
-            FileName = $"运行日志-{query.Date:yyyy-MM-dd}.log", Filter = "日志文本 (*.log)|*.log|文本文件 (*.txt)|*.txt",
-            DefaultExt = ".log", AddExtension = true,
+            FileName = $"{(requests ? "请求日志" : "运行事件")}-{query.Date:yyyy-MM-dd}.{(requests ? "csv" : "log")}",
+            Filter = requests ? "CSV (*.csv)|*.csv" : "日志文本 (*.log)|*.log|文本文件 (*.txt)|*.txt",
+            DefaultExt = requests ? ".csv" : ".log", AddExtension = true,
         };
         if (dialog.ShowDialog(Application.Current.MainWindow) != true) return;
         var path = Path.GetFullPath(dialog.FileName);
         if (path.EndsWith(".db", StringComparison.OrdinalIgnoreCase) || path.EndsWith(".db-wal", StringComparison.OrdinalIgnoreCase)
             || path.EndsWith(".db-shm", StringComparison.OrdinalIgnoreCase))
-        {
-            Warning = ClientPageText.Translate("请选择日志文本文件，不能覆盖数据库");
-            return;
-        }
+        { Warning = T("请选择日志文本文件，不能覆盖数据库"); return; }
         var temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
         try
         {
-            using (var output = new StreamWriter(temporary, false, new UTF8Encoding(false)))
-                await Store.ExportAsync(query, output);
+            using (var output = new StreamWriter(temporary, false, new UTF8Encoding(requests)))
+            {
+                if (requests) await ExportRequestsAsync(output, summaries, query.Date, prices);
+                else await Store.ExportAsync(query, output);
+            }
             File.Move(temporary, path, overwrite: true);
-            _workspaceService.Workspace.Notice = ClientPageText.Translate("运行日志已导出");
+            _workspaceService.Workspace.Notice = T("日志已导出");
         }
-        catch { Warning = ClientPageText.Translate("运行日志导出失败，请检查目标文件是否可写"); }
+        catch { Warning = T("日志导出失败，请检查目标文件是否可写"); }
         finally { try { if (File.Exists(temporary)) File.Delete(temporary); } catch (IOException) { } catch (UnauthorizedAccessException) { } }
     }
     [RelayCommand] private void OnOpenDirectory()
     {
         try { Process.Start(new ProcessStartInfo("explorer.exe", Store.LogDirectory) { UseShellExecute = true }); }
-        catch { _workspaceService.Workspace.Notice = $"日志目录：{Store.LogDirectory}"; }
-    }
-
-    public sealed class BatchObservableCollection<T> : ObservableCollection<T>
-    {
-        public void AddRange(IEnumerable<T> items)
-        {
-            if (items is IReadOnlyList<T> { Count: 1 } single)
-            {
-                Add(single[0]);
-                return;
-            }
-
-            CheckReentrancy();
-            var changed = false;
-            foreach (var item in items)
-            {
-                Items.Add(item);
-                changed = true;
-            }
-
-            if (changed)
-            {
-                RaiseReset();
-            }
-        }
-
-        public void RemoveFirst(int count)
-        {
-            if (count <= 0)
-            {
-                return;
-            }
-
-            CheckReentrancy();
-            if (Items is List<T> list)
-            {
-                list.RemoveRange(0, Math.Min(count, list.Count));
-            }
-            else
-            {
-                for (var index = 0; index < count && Items.Count > 0; index++)
-                {
-                    Items.RemoveAt(0);
-                }
-            }
-
-            RaiseReset();
-        }
-
-        public void ReplaceAll(IEnumerable<T> items)
-        {
-            CheckReentrancy();
-            Items.Clear();
-            foreach (var item in items)
-            {
-                Items.Add(item);
-            }
-
-            RaiseReset();
-        }
-
-        private void RaiseReset()
-        {
-            OnPropertyChanged(new PropertyChangedEventArgs(nameof(Count)));
-            OnPropertyChanged(new PropertyChangedEventArgs("Item[]"));
-            OnCollectionChanged(new NotifyCollectionChangedEventArgs(NotifyCollectionChangedAction.Reset));
-        }
+        catch { _workspaceService.Workspace.Notice = T("日志目录：{0}", Store.LogDirectory); }
     }
 }

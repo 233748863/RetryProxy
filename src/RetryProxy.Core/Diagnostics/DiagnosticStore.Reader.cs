@@ -23,6 +23,29 @@ public sealed partial class DiagnosticStore
         return Retained(date);
     }
 
+    public Task<DiagnosticSummaries> ReadSummariesAsync(DateOnly date, CancellationToken cancellationToken = default)
+        => Task.Run(async () =>
+        {
+            await _queryGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                if (!RetainedForQuery(date)) return new DiagnosticSummaries([], null);
+                await FlushAsync(cancellationToken).ConfigureAwait(false);
+                if (!RetainedForQuery(date)) return new DiagnosticSummaries([], null);
+                var complete = Refresh(date, cancellationToken);
+                if (!RetainedForQuery(date)) return new DiagnosticSummaries([], null);
+                var rows = SnapshotRows(date, null, cancellationToken);
+                if (!RetainedForQuery(date)) return new DiagnosticSummaries([], null);
+                var warning = rows.Any(row => row.Summary.Incomplete) ? IncompleteWarning
+                    : !complete ? ReadWarning
+                    : HasUnattributedLoss(date, null, rows) ? UnattributedWarning : BackgroundWarning;
+                return new DiagnosticSummaries(rows.Select(row => row.Summary).ToArray(), warning);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+            catch { SetWarning(); return new DiagnosticSummaries([], ReadWarning); }
+            finally { _queryGate.Release(); }
+        }, cancellationToken);
+
     public Task<DiagnosticPage> QueryAsync(DiagnosticQuery query, CancellationToken cancellationToken = default)
         => Task.Run(async () =>
         {
@@ -57,7 +80,7 @@ public sealed partial class DiagnosticStore
                 // 提示按整组筛选结果计算（包含后续分页），不借用其他日期/请求留下的全局状态。
                 var warning = matches.Any(row => row.Summary.Incomplete) ? IncompleteWarning
                     : !readComplete ? ReadWarning
-                    : HasUnattributedLoss(query, allRows) ? UnattributedWarning : BackgroundWarning;
+                    : HasUnattributedLoss(query.Date, query.RequestId, allRows) ? UnattributedWarning : BackgroundWarning;
                 return new DiagnosticPage(items.Take(size).ToArray(), items.Length > size, filters, warning);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
@@ -321,13 +344,13 @@ public sealed partial class DiagnosticStore
         _cache!.IncompleteRequests.Concat(PendingRequestLosses(date))
             .Any(key => string.Equals(key.RequestId, requestId, StringComparison.OrdinalIgnoreCase));
 
-    private bool HasUnattributedLoss(DiagnosticQuery query, IReadOnlyList<QueryRow> rows)
+    private bool HasUnattributedLoss(DateOnly date, string? requestId, IReadOnlyList<QueryRow> rows)
     {
         var cache = _cache!;
-        if (cache.LegacyLoss || cache.UnattributedLoss || cache.ReadTruncated || _damagedDates.ContainsKey(query.Date)) return true;
+        if (cache.LegacyLoss || cache.UnattributedLoss || cache.ReadTruncated || _damagedDates.ContainsKey(date)) return true;
         var known = rows.Select(row => new RequestKey(row.Session, row.Summary.Request.RequestId)).ToHashSet();
-        return cache.IncompleteRequests.Concat(PendingRequestLosses(query.Date)).Any(key => !known.Contains(key) &&
-            (string.IsNullOrWhiteSpace(query.RequestId) || key.RequestId.StartsWith(query.RequestId.Trim(), StringComparison.OrdinalIgnoreCase)));
+        return cache.IncompleteRequests.Concat(PendingRequestLosses(date)).Any(key => !known.Contains(key) &&
+            (string.IsNullOrWhiteSpace(requestId) || key.RequestId.StartsWith(requestId.Trim(), StringComparison.OrdinalIgnoreCase)));
     }
 
     private List<QueryRow> SnapshotRows(DateOnly date, ClientType? client, CancellationToken token)

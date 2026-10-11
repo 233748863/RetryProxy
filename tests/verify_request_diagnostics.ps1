@@ -90,7 +90,8 @@ function Select-Option([string]$Id,[string]$Name) {
     Focus-App
     $combo.SetFocus()
     Send-Key 36
-    Wait-For { (Selected-OptionName $combo) -eq '全部' } "筛选器未回到第一项：$Id"
+    $first = switch ($Id) { 'LogSourceFilter' { '全部来源' } 'LogLevelFilter' { '全部级别' } default { '全部' } }
+    Wait-For { (Selected-OptionName $combo) -eq $first } "筛选器未回到第一项：$Id"
     for ($index=0; $index -lt 16; $index++) {
         if ((Selected-OptionName $combo) -eq $Name) { return }
         Send-Key 40
@@ -188,7 +189,7 @@ function Health([int]$Port) {
     finally { $response.Dispose() }
 }
 function Start-App {
-    $script:app=Start-Process -FilePath (Join-Path $runtime (Split-Path -Leaf $ExePath)) -WorkingDirectory $runtime -PassThru
+    $script:app=Start-Process -FilePath (Join-Path $runtime (Split-Path -Leaf $ExePath)) -WorkingDirectory $runtime -WindowStyle Hidden -PassThru
     $null=$app.Handle # 固定句柄，后续等待或强停只对应本次启动的实例。
     $record.runs += @{pid=$app.Id;startedAt=$app.StartTime.ToString('o');exit='running'}
     Wait-For { $script:window=[RetryProxyTrayVerification]::FindWindow($app.Id,'LLM Retry Proxy',$null); $window -ne [IntPtr]::Zero } '测试主窗口未出现'
@@ -399,7 +400,7 @@ public static class RequestDiagnosticWindow {
     Check ($claude.text.Contains('成功')) 'Claude 成功按共享客户端显示'
     Navigate '供应商' 'CurrentProviderKey'
     Wait-For { (Find-Control 'CurrentProviderKey').Current.Name.Contains('诊断 Claude') } '跨页面客户端选择未共享'
-    Navigate '运行日志' 'LogRows'; Check ($null -ne (Find-Control 'LogSearch')) '原运行日志导航和搜索仍可用'
+    Navigate '运行日志' 'RequestLogsTab'; Check ($null -ne (Find-Control 'LogSearch')) '原运行日志导航和搜索仍可用'
     Navigate '请求诊断' 'DiagnosticList'; Assert-Rows 1 'diag-claude-model'
     Invoke-Control 'SelectCodex'; Assert-Rows 2
 
@@ -508,8 +509,11 @@ public static class RequestDiagnosticWindow {
     Invoke-Control 'SelectClaude'; Assert-Rows 1 'diag-claude-model'
     Wait-For { $w=Find-Control 'DiagnosticWarning'; !$w -or $w.Current.IsOffscreen } '切换客户端后残留其他客户端的警告'
     Check $true '实际缺失仍提示，完整请求与其他客户端不受连带影响'
-    Navigate '运行日志' 'LogRows'
-    Invoke-Control 'LogSourceSystem'; Invoke-Control 'LogSourceAll'; Invoke-Control 'LogLevelAll'
+    Navigate '运行日志' 'RequestLogsTab'
+    Invoke-Control 'RuntimeEventsTab'
+    Select-Option 'LogSourceFilter' '系统'
+    Select-Option 'LogSourceFilter' '全部来源'
+    Select-Option 'LogLevelFilter' '全部级别'
     (Find-Control 'LogSearch').GetCurrentPattern([Windows.Automation.ValuePattern]::Pattern).SetValue($retry.id)
     Wait-For { (Texts-Under (Find-Control 'LogRows')).Contains('diag-retry-model') } '运行日志未能按完整请求编号查询'
     $runtimeRow=(Find-Control 'LogRows').FindFirst([Windows.Automation.TreeScope]::Descendants,[Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ControlTypeProperty,[Windows.Automation.ControlType]::ListItem))

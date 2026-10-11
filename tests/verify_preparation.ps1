@@ -115,7 +115,7 @@ function Get-LogCount {
 
 function Assert-LogControlsVisible {
     $rectangles = @()
-    foreach ($id in @('LogSourceAll', 'LogSourceProxy', 'LogSourceKeepAlive', 'LogSourcePreparation', 'LogSourceSystem', 'LogLevelAll', 'LogLevelWarning', 'LogSearch')) {
+    foreach ($id in @('LogSourceFilter', 'LogLevelFilter', 'LogSearch')) {
         $control = @(Find-Elements $id -ById)[0]
         if ($null -eq $control) { throw "Missing log control: $id" }
         $rect = $control.Current.BoundingRectangle
@@ -472,7 +472,8 @@ try {
     Close-PreparationDrawer
     Assert-WindowStable '取消准备抽屉'
     Invoke-Control '运行日志'
-    Wait-For { @(Find-Elements 'LogSourcePreparation' -ById).Count -gt 0 } 'Log source filters did not load'
+    Invoke-Control 'RuntimeEventsTab' -ById
+    Wait-For { @(Find-Elements 'LogSourceFilter' -ById).Count -gt 0 } 'Log source filters did not load'
     Assert-LogControlsVisible
     $logLines = @((Read-RetryProxyRuntimeLog -LogDirectory (Join-Path $runtime 'logs')) -split '\r?\n' | Where-Object { $_.Length -gt 0 })
     $preparationLines = @($logLines | Where-Object { $_ -match '(INFO|WARNING|ERROR) \[一键准备\]' })
@@ -481,7 +482,7 @@ try {
         if ($line -notmatch '\[一键准备\]\[准备 [12] · Codex\]' -or $line.Contains('[保活-')) { throw "Preparation log lost its identity: $line" }
     }
     Set-Field 'LogSearch' ''
-    Invoke-Control 'LogSourcePreparation' -ById
+    Select-ComboItem 'LogSourceFilter' '一键准备'
     Wait-For { (Get-LogCount) -eq $preparationLines.Count } 'Preparation source omitted task lifecycle logs'
     if (@(Find-Elements 'LogSelectedClient' -ById).Count -eq 0) { throw 'Current-client filter is missing for preparation logs' }
     Set-Field 'LogSearch' '准备 1'
@@ -489,21 +490,21 @@ try {
     Wait-For { (Get-LogCount) -eq $firstTaskCount } 'Task search did not isolate the first preparation'
     Set-Field 'LogSearch' ''
     Wait-For { (Get-LogCount) -eq $preparationLines.Count } 'Clearing task search did not restore the preparation logs'
-    Invoke-Control 'LogLevelWarning' -ById
+    Select-ComboItem 'LogLevelFilter' '警告'
     $warningCount = @($preparationLines | Where-Object { $_.Contains(' WARNING ') }).Count
     Wait-For { (Get-LogCount) -eq $warningCount } 'Severity and source filters did not combine'
-    Invoke-Control 'LogLevelAll' -ById
-    Invoke-Control 'LogSourceKeepAlive' -ById
+    Select-ComboItem 'LogLevelFilter' '全部级别'
+    Select-ComboItem 'LogSourceFilter' '通道保活'
     Wait-For { (Get-LogCount) -eq 0 } 'Independent preparation leaked into channel keepalive logs'
-    Invoke-Control 'LogSourceAll' -ById
-    Invoke-Control 'LogSourcePreparation' -ById
+    Select-ComboItem 'LogSourceFilter' '全部来源'
+    Select-ComboItem 'LogSourceFilter' '一键准备'
     Invoke-Control 'LogSelectedClient' -ById
     Invoke-Control 'SelectClaude' -ById
     Wait-For { (Get-LogCount) -eq 0 } 'Claude client filter matched Codex preparation logs'
     Invoke-Control 'SelectCodex' -ById
     Wait-For { (Get-LogCount) -eq $preparationLines.Count } 'Codex client filter lost its preparation logs'
     Invoke-Control 'LogSelectedClient' -ById
-    Invoke-Control 'LogSourceAll' -ById
+    Select-ComboItem 'LogSourceFilter' '全部来源'
     Wait-For { (Get-LogCount) -eq $logLines.Count } 'All sources did not restore every log line'
     Assert-LogControlsVisible
     Assert-WindowStable 'filtering log sources, tasks and severity'

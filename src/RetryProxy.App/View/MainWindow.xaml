@@ -90,6 +90,7 @@
                 </ui:NavigationViewItem>
 
                 <ui:NavigationViewItem Content="{i18n:T 运行日志}"
+                                       AutomationProperties.AutomationId="RuntimeLogsNavigation"
                                        NavigationCacheMode="Enabled"
                                        TargetPageType="{x:Type pages:LogPage}">
                     <ui:NavigationViewItem.Icon>

@@ -125,6 +125,9 @@ public sealed record DiagnosticDetail(
     bool HasMore,
     string? Warning);
 
+/// <summary>请求日志的当日摘要；不含事件正文，供筛选与固定分页范围使用。</summary>
+public sealed record DiagnosticSummaries(IReadOnlyList<DiagnosticSummary> Items, string? Warning);
+
 public interface IDiagnosticRequest
 {
     void Record(DiagnosticEntry entry);
@@ -141,6 +144,7 @@ public interface IDiagnosticRepository : IRequestDiagnostics, IDisposable
     DateOnly Today { get; }
     string? Warning { get; }
     Task<DiagnosticPage> QueryAsync(DiagnosticQuery query, CancellationToken cancellationToken = default);
+    Task<DiagnosticSummaries> ReadSummariesAsync(DateOnly date, CancellationToken cancellationToken = default);
     Task<DiagnosticDetail> ReadDetailAsync(DateOnly date, string requestId, int offset = 0,
         int pageSize = 100, CancellationToken cancellationToken = default);
     Task FlushAsync(CancellationToken cancellationToken = default);

@@ -119,7 +119,7 @@ function Check-HomeNavigation {
   @('HomeStatisticsCard','StatisticsTabOverview'),
   @('HomePreparationCard','AddPreparation'),
   @('HomeDiagnosticsCard','DiagnosticSearch'),
-  @('HomeLogsCard','LogRows'),
+  @('HomeLogsCard','RequestLogsTab'),
   @('HomeSettingsCard','SwitchAppearance')
  )) {
   Invoke-Control $case[0]
@@ -356,7 +356,7 @@ try {
   )
  }
  $env:RETRY_PROXY_CONFIG_JSON=$config|ConvertTo-Json -Depth 12 -Compress
- $app=if($UseCurrentDesktop){Start-Process -FilePath (Join-Path $runtime 'RetryProxy.exe') -WorkingDirectory $runtime -PassThru}
+ $app=if($UseCurrentDesktop){Start-Process -FilePath (Join-Path $runtime 'RetryProxy.exe') -WorkingDirectory $runtime -WindowStyle Hidden -PassThru}
  else{[RetryProxyTrayVerification]::StartPrivateProcess((Join-Path $runtime 'RetryProxy.exe'),$runtime)}
  Wait-For { $script:window=[RetryProxyTrayVerification]::FindWindow($app.Id,'LLM Retry Proxy',$null); $window -ne [IntPtr]::Zero } 'Window not created'
  Check-HomeNavigation

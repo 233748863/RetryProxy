@@ -40,9 +40,14 @@ function Wait-For([scriptblock]$Condition, [string]$Failure, [int]$Seconds=20) {
     throw $Failure
 }
 function Find-Control([string]$Value, [switch]$ByName) {
-    $element = [Windows.Automation.AutomationElement]::FromHandle($window)
     $property = if ($ByName) { [Windows.Automation.AutomationElement]::NameProperty } else { [Windows.Automation.AutomationElement]::AutomationIdProperty }
-    return $element.FindFirst([Windows.Automation.TreeScope]::Descendants,[Windows.Automation.PropertyCondition]::new($property,$Value))
+    $condition = [Windows.Automation.PropertyCondition]::new($property,$Value)
+    foreach ($handle in @($window) + @([RetryProxyTrayVerification]::WindowsForProcess($app.Id))) {
+        $element = [Windows.Automation.AutomationElement]::FromHandle($handle)
+        if (!$element -or $element.Current.IsOffscreen) { continue }
+        $found = $element.FindFirst([Windows.Automation.TreeScope]::Descendants,$condition)
+        if ($found -and !$found.Current.IsOffscreen) { return $found }
+    }
 }
 function Focus-App {
     $null = [LogComparisonWindow]::SetForegroundWindow($window)
@@ -68,8 +73,24 @@ function Navigate([string]$Name, [string]$Marker) {
 }
 function Set-Query([string]$Query) {
     (Find-Control 'LogSearch').GetCurrentPattern([Windows.Automation.ValuePattern]::Pattern).SetValue($Query)
-    # 绑定明确设置 Delay=200；等防抖与列表重建后再判断 UIA。
-    Start-Sleep -Milliseconds 650
+    # 等搜索防抖与后台查询结束；条目按稳定身份更新。
+    Start-Sleep -Milliseconds 1100
+}
+function Select-LogOption([string]$Id, [string]$Name) {
+    $combo = Find-Control $Id
+    $combo.SetFocus()
+    foreach ($key in @(36)) {
+        $null = [RetryProxyTrayVerification]::PostMessage($window,0x0100,[UIntPtr]$key,[IntPtr]1)
+        $null = [RetryProxyTrayVerification]::PostMessage($window,0x0101,[UIntPtr]$key,[IntPtr]::new([int64]0xC0000001))
+    }
+    for ($index=0; $index -lt 8; $index++) {
+        Start-Sleep -Milliseconds 100
+        $selection = @($combo.GetCurrentPattern([Windows.Automation.SelectionPattern]::Pattern).Current.GetSelection())
+        if ($selection.Count -eq 1 -and $selection[0].Current.Name -eq $Name) { return }
+        $null = [RetryProxyTrayVerification]::PostMessage($window,0x0100,[UIntPtr]40,[IntPtr]1)
+        $null = [RetryProxyTrayVerification]::PostMessage($window,0x0101,[UIntPtr]40,[IntPtr]::new([int64]0xC0000001))
+    }
+    throw "找不到日志筛选选项：$Id / $Name"
 }
 function Log-Texts {
     $rows = Find-Control 'LogRows'
@@ -105,9 +126,23 @@ function Set-LightTheme {
         Wait-For { (Theme) -ne $before } '外观按钮没有改变主题'
     }
     if ((Theme) -notin @(3,4,5)) { throw '外观按钮未切换至浅色主题' }
-    Navigate '运行日志' 'LogRows'
+    Navigate '运行日志' 'RequestLogsTab'
+    Invoke-Control 'RuntimeEventsTab'
 }
 function Capture([string]$Name, [int]$ExpectedWidth=0, [int]$ExpectedHeight=0) {
+    if ($Name -match 'lc0[1-6]') {
+        $list = Find-Control 'LogRows'
+        $rows = @($list.FindAll([Windows.Automation.TreeScope]::Children,[Windows.Automation.Condition]::TrueCondition))
+        foreach ($row in $rows) {
+            if ($row.Current.Name -notmatch 'HTTP [1-5][0-9]{2}' -or $row.Current.IsOffscreen) { continue }
+            $detail = $row.FindFirst([Windows.Automation.TreeScope]::Descendants,
+                [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::NameProperty,$row.Current.Name))
+            if ($detail -and !$detail.Current.IsOffscreen) { continue }
+            $button = $row.FindFirst([Windows.Automation.TreeScope]::Descendants,
+                [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ControlTypeProperty,[Windows.Automation.ControlType]::Button))
+            if ($button) { $button.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern).Invoke() }
+        }
+    }
     Focus-App; Start-Sleep -Milliseconds 400
     $bounds = [RetryProxyTrayVerification]::Bounds($window)
     # 调整尺寸后窗口恢复器可能把无效矩形还原；以截图当刻尺寸验收，防止文件名写窄窗但图片仍是 900px。
@@ -221,15 +256,18 @@ try {
     $historyLines = for ($i=0; $i -lt 450; $i++) { '{0:yyyy-MM-dd} 12:00:00 INFO [系统] history-fixture-{1:D3}' -f $historyDate,$i }
     $null = New-Item -ItemType Directory -Path (Join-Path $runtime 'logs') -Force
     [IO.File]::WriteAllLines((Join-Path $runtime 'logs/retry-proxy.log'), $historyLines, [Text.UTF8Encoding]::new($false))
-    $app = Start-Process -FilePath (Join-Path $runtime (Split-Path -Leaf $ExePath)) -WorkingDirectory $runtime -PassThru
+    $app = Start-Process -FilePath (Join-Path $runtime (Split-Path -Leaf $ExePath)) -WorkingDirectory $runtime -WindowStyle Hidden -PassThru
     $null = $app.Handle
     $record.pid = $app.Id; $record.ports=$ports; $record.upstreamPort=$upstreamPort
     Wait-For { $script:window=[RetryProxyTrayVerification]::FindWindow($app.Id,'LLM Retry Proxy',$null); $window -ne [IntPtr]::Zero } '主窗口未出现'
     foreach ($port in $ports.Values) { Wait-For { try { $null=Get-Health $port; return $true } catch { return $false } } '测试通道未启动' }
-    Navigate '运行日志' 'LogRows'
-    # 切到系统来源会明确把 OnlySelected 置 false，再回全部；该按钮没有 TogglePattern。
-    Invoke-Control 'LogSourceSystem'; Invoke-Control 'LogSourceAll'; Invoke-Control 'LogLevelAll'
+    Navigate '运行日志' 'RequestLogsTab'
+    Invoke-Control 'RuntimeEventsTab'
+    Select-LogOption 'LogSourceFilter' '系统'
+    Select-LogOption 'LogSourceFilter' '全部来源'
+    Select-LogOption 'LogLevelFilter' '全部级别'
     Set-Query ''
+    Invoke-Control 'LogMoreActions'
     Invoke-Control '清空显示' -ByName
     Wait-For { (Find-Control 'LogCounter').Current.Name -match '^0\s*/\s*0$' } '清空日志未完成'
     foreach ($case in $cases) {
@@ -267,6 +305,39 @@ try {
         ($record.cases | Where-Object id -eq $case.id).uiaText=$found.text
         Capture ('dark-'+$case.id)
     }
+    Invoke-Control 'RequestLogsTab'
+    Set-Query ''
+    Wait-For { (Find-Control 'LogCounter').Current.Name -eq '6 / 6' } '请求列表未按六次请求汇总'
+    Capture 'requests-dark'
+    foreach ($case in $cases) {
+        Set-Query $case.model
+        Wait-For { (Find-Control 'LogCounter').Current.Name -eq '1 / 1' } '请求模型搜索没有唯一匹配'
+        $texts = @((Find-Control 'RequestLogRows').FindAll([Windows.Automation.TreeScope]::Descendants,[Windows.Automation.Condition]::TrueCondition) |
+            ForEach-Object { $_.Current.Name }) -join "`n"
+        if (!$texts.Contains("HTTP $($case.status)") -or !$texts.Contains($case.model)) { throw '请求列表缺少实际模型或 HTTP 结果' }
+    }
+    Set-Query ''
+    Invoke-Control 'RequestLogsFailed'
+    Wait-For { (Find-Control 'LogCounter').Current.Name -eq '2 / 2' } '失败请求筛选数量错误'
+    Invoke-Control '全部' -ByName
+    Set-Query 'lc02'
+    Wait-For { (Find-Control 'LogCounter').Current.Name -eq '1 / 1' } '详情请求未找到'
+    $rowButton = (Find-Control 'RequestLogRows').FindFirst([Windows.Automation.TreeScope]::Descendants,
+        [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ControlTypeProperty,[Windows.Automation.ControlType]::Button))
+    $requestId = $rowButton.Current.AutomationId
+    Invoke-Control $requestId
+    Wait-For { $null -ne (Find-Control '相关运行日志' -ByName) } '请求行未展开'
+    Capture 'request-expanded-dark'
+    Invoke-Control '查看请求诊断' -ByName
+    Wait-For { $detail=Find-Control 'DiagnosticOverview'; $detail -and $detail.Current.Name.Contains($requestId) } '请求行未打开对应诊断'
+    Capture 'request-diagnostic-dark'
+    Invoke-Control 'DrawerCancel'
+    Wait-For { $null -eq (Find-Control 'DiagnosticOverview') } '诊断详情未关闭'
+    Invoke-Control '相关运行日志' -ByName
+    Wait-For { (Find-Control 'LogSearch').GetCurrentPattern([Windows.Automation.ValuePattern]::Pattern).Current.Value -eq $requestId } '关联日志未使用完整请求编号'
+    Wait-For { @(Log-Texts | Where-Object { $_.Contains($requestId) }).Count -gt 0 } '关联请求事件未出现'
+    Select-LogOption 'LogSourceFilter' '全部来源'
+    $record.requestView = @{requests=6;failed=2;search=$true;detail=$true;diagnostic=$true;relatedEvents=$true}
     # 搜索仅用于让虚拟化行可见；来源和级别始终全部，当前客户端限制始终关闭。
     foreach ($kind in @('codex','claude')) {
         Invoke-Control $(if ($kind -eq 'codex') {'SelectCodex'} else {'SelectClaude'})
@@ -275,6 +346,11 @@ try {
         Capture ('dark-'+$kind)
     }
     Set-LightTheme
+    Invoke-Control 'RequestLogsTab'
+    Set-Query ''
+    Wait-For { (Find-Control 'LogCounter').Current.Name -eq '6 / 6' } '浅色请求列表未恢复'
+    Capture 'requests-light'
+    Invoke-Control 'RuntimeEventsTab'
     foreach ($kind in @('codex','claude')) {
         Invoke-Control $(if ($kind -eq 'codex') {'SelectCodex'} else {'SelectClaude'})
         Set-Query $(if ($kind -eq 'codex') {'[Codex]'} else {'[Claude Code]'})
@@ -286,6 +362,11 @@ try {
     # 最小客户区宽度是 720px，外框必须留出边框；沿用既有验收的 760px 外框，避免触发异常尺寸恢复。
     [RetryProxyTrayVerification]::SetBounds($window,$bounds.Left,$bounds.Top,760,600)
     Wait-For { $b=[RetryProxyTrayVerification]::Bounds($window); ($b.Right-$b.Left) -eq 760 -and ($b.Bottom-$b.Top) -eq 600 -and [RetryProxyTrayVerification]::IsUsable($window) } '测试窗口未达到有效的 760x600 实际像素'
+    Invoke-Control 'RequestLogsTab'
+    Set-Query ''
+    Wait-For { (Find-Control 'LogCounter').Current.Name -eq '6 / 6' } '窄窗请求列表未恢复'
+    Capture 'requests-narrow-760x600' -ExpectedWidth 760 -ExpectedHeight 600
+    Invoke-Control 'RuntimeEventsTab'
     foreach ($id in @('lc02','lc03')) { Set-Query $id; Wait-For { @(Log-Texts).Count -gt 0 } '窄窗对照行未显示'; Capture ('narrow-760x600-'+$id) -ExpectedWidth 760 -ExpectedHeight 600 }
     Set-Query ''
     # 两客户端的实际请求都在同一列表中，证明仅当前客户端筛选已关闭（无需猜按钮颜色）。
@@ -293,6 +374,7 @@ try {
     $record.allClientsVisible=$true
     Set-Query 'history-fixture'
     (Find-Control 'RuntimeLogDate').GetCurrentPattern([Windows.Automation.ValuePattern]::Pattern).SetValue($historyDate.ToString('yyyy-MM-dd'))
+    Invoke-Control 'LogMoreActions'
     Invoke-Control '刷新' -ByName
     Wait-For { (Find-Control 'LogCounter').Current.Name -eq '200 / 450' } '历史日期未显示第一页'
     Invoke-Control 'RuntimeLogsOlder'
@@ -317,7 +399,7 @@ try {
     if (!$app.WaitForExit(25000) -or $app.ExitCode -ne 0) { throw '测试窗口未正常退出' }
     $record.normalExit=$true
     $app.Dispose()
-    $app = Start-Process -FilePath (Join-Path $runtime (Split-Path -Leaf $ExePath)) -WorkingDirectory $runtime -PassThru
+    $app = Start-Process -FilePath (Join-Path $runtime (Split-Path -Leaf $ExePath)) -WorkingDirectory $runtime -WindowStyle Hidden -PassThru
     $null = $app.Handle
     Wait-For { $script:window=[RetryProxyTrayVerification]::FindWindow($app.Id,'LLM Retry Proxy',$null); $window -ne [IntPtr]::Zero } '重启后主窗口未出现'
     Navigate '软件设置' 'RuntimeLogRetentionDays'

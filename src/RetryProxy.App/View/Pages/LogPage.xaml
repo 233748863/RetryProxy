@@ -7,7 +7,9 @@
       xmlns:i18n="clr-namespace:RetryProxy.Service.I18n"
       xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
       Title="LogPage" FontFamily="{StaticResource TextThemeFontFamily}"
+      ScrollViewer.CanContentScroll="False"
       Foreground="{DynamicResource TextFillColorPrimaryBrush}">
+    <!-- 禁止导航宿主额外滚动整页，列表自行处理滚动并保持分页在窗口内。 -->
     <Page.Resources>
         <ResourceDictionary Source="LogPageResources.xaml" />
     </Page.Resources>

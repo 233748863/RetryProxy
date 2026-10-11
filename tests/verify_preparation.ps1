@@ -327,7 +327,8 @@ try {
         } 'Private test window did not reach its compact size'
     }
     $initialBounds = [RetryProxyTrayVerification]::Bounds($window)
-    Wait-For { @(Find-Elements 'ProxySettings' -ById).Count -gt 0 } 'Application did not open Providers by default'
+    Invoke-Control 'ProviderNavigation' -ById
+    Wait-For { @(Find-Elements 'ProxySettings' -ById).Count -gt 0 } 'Application did not open Providers'
     Invoke-Control 'SelectCodex' -ById
     $destinations = @(
         @{ Navigation = 'StatisticsNavigation'; Marker = 'StatisticsTabOverview' },

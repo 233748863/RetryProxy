@@ -150,18 +150,35 @@ function Capture([string]$Name, [int]$ExpectedWidth=0, [int]$ExpectedHeight=0) {
         ($ExpectedHeight -gt 0 -and $bounds.Bottom-$bounds.Top -ne $ExpectedHeight)) { throw '截图当刻窗口尺寸与验收目标不符' }
     $image = [Drawing.Bitmap]::new($bounds.Right-$bounds.Left,$bounds.Bottom-$bounds.Top)
     $graphics = [Drawing.Graphics]::FromImage($image)
-    $rows = (Find-Control 'LogRows').Current.BoundingRectangle
+    $list = Find-Control 'RequestLogRows'
+    if (!$list) { $list = Find-Control 'LogRows' }
+    $rows = if ($list) { $list.Current.BoundingRectangle } else { $null }
+    if ($list -and $Name -notmatch 'diagnostic|failure') {
+        foreach ($id in @('LogCounter','RuntimeLogsNewer','RuntimeLogsOlder')) {
+            $footer = Find-Control $id
+            if (!$footer -or $footer.Current.BoundingRectangle.Bottom -gt $bounds.Bottom -or $footer.Current.BoundingRectangle.Top -lt $bounds.Top) {
+                throw "日志分页被挤出窗口：$id"
+            }
+        }
+        if ($rows.Bottom -gt $bounds.Bottom) { throw '日志列表超出窗口，未在列表内滚动' }
+    }
     try {
         $graphics.CopyFromScreen($bounds.Left,$bounds.Top,0,0,$image.Size)
         $image.Save((Join-Path $OutputDirectory ($Name+'.png')),[Drawing.Imaging.ImageFormat]::Png)
-        $x = [Math]::Max(0,[int][Math]::Ceiling($rows.Left-$bounds.Left))
-        $y = [Math]::Max(0,[int][Math]::Ceiling($rows.Top-$bounds.Top))
-        $w = [Math]::Min([int][Math]::Floor($rows.Width),$image.Width-$x)
-        $h = [Math]::Min([int][Math]::Floor($rows.Height),$image.Height-$y)
-        if ($w -le 0 -or $h -le 0) { throw '日志行区域不可见' }
-        $crop = $image.Clone([Drawing.Rectangle]::new($x,$y,$w,$h),$image.PixelFormat)
-        try { $crop.Save((Join-Path $OutputDirectory ($Name+'-rows.png')),[Drawing.Imaging.ImageFormat]::Png) } finally { $crop.Dispose() }
-        $record.captures += @{ name=$Name; theme=(Theme); width=$image.Width; height=$image.Height; query=(Find-Control 'LogSearch').GetCurrentPattern([Windows.Automation.ValuePattern]::Pattern).Current.Value; visibleTexts=@(Log-Texts); rows=@{x=$x;y=$y;width=$w;height=$h} }
+        $area = $null
+        if ($rows) {
+            $x = [Math]::Max(0,[int][Math]::Ceiling($rows.Left-$bounds.Left))
+            $y = [Math]::Max(0,[int][Math]::Ceiling($rows.Top-$bounds.Top))
+            $w = [Math]::Min([int][Math]::Floor($rows.Width),$image.Width-$x)
+            $h = [Math]::Min([int][Math]::Floor($rows.Height),$image.Height-$y)
+            if ($w -le 0 -or $h -le 0) { throw '日志行区域不可见' }
+            $crop = $image.Clone([Drawing.Rectangle]::new($x,$y,$w,$h),$image.PixelFormat)
+            try { $crop.Save((Join-Path $OutputDirectory ($Name+'-rows.png')),[Drawing.Imaging.ImageFormat]::Png) } finally { $crop.Dispose() }
+            $area = @{x=$x;y=$y;width=$w;height=$h}
+        }
+        $search = Find-Control 'LogSearch'
+        $query = if ($search) { $search.GetCurrentPattern([Windows.Automation.ValuePattern]::Pattern).Current.Value } else { '' }
+        $record.captures += @{ name=$Name; theme=(Theme); width=$image.Width; height=$image.Height; query=$query; visibleTexts=@(Log-Texts); rows=$area }
     } finally { $graphics.Dispose(); $image.Dispose() }
 }
 function Get-FreePort {

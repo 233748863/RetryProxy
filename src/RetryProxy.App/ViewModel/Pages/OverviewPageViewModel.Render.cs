@@ -1,6 +1,8 @@
+using CommunityToolkit.Mvvm.ComponentModel;
 using RetryProxy.Core.Metrics;
 using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.Globalization;
 using System.Linq;
 using System.Windows.Media;
@@ -9,7 +11,7 @@ namespace RetryProxy.ViewModel.Pages;
 
 public partial class OverviewPageViewModel
 {
-    public Brush AccentBrush => StatisticsText.Color(0);
+    [ObservableProperty] private Brush _accentBrush = StatisticsText.Color(0);
 
     private void RefreshLanguage()
     {
@@ -68,7 +70,7 @@ public partial class OverviewPageViewModel
 
     private void RenderTotals(UsageTotals t)
     {
-        OnPropertyChanged(nameof(AccentBrush));
+        AccentBrush = StatisticsText.Color(0);
         TotalRequests = t.Requests.ToString(CultureInfo.CurrentUICulture);
         RequestsDetail = StatisticsText.T("成功 {0} · 失败 {1} · 重试 {2}", t.Successes, t.Failures, StatisticsText.Count(t.Retries));
         RequestsHelp = StatisticsText.T("成功率 {0}。请求以结束日期归属，重试单独计数；保活、模型列表查询与未结束请求不计入分析。", StatisticsText.Rate(t.SuccessRate));
@@ -83,17 +85,18 @@ public partial class OverviewPageViewModel
         CostDetail = StatisticsText.T("已计价 {0}/{1} 次 · USD", t.Priced, t.Requests);
         CostHelp = StatisticsText.T("已知费用 {0}；{1} 次缺单价或用量，未计入；{2} 次仅计已知部分。", StatisticsText.Amount(t.Cost), t.Unpriced, t.PartiallyPriced) + "\n" + StatisticsText.CostHelp;
         StatisticsTokenTile Part(string name, decimal value, long measured, string detail) => new(
-            StatisticsText.T(name), measured == 0 ? "—" : (measured < t.Requests ? "≥" : string.Empty) + StatisticsText.Count(value),
+            name, StatisticsText.T(name), measured == 0 ? "—" : (measured < t.Requests ? "≥" : string.Empty) + StatisticsText.Count(value),
             StatisticsText.T(detail), StatisticsText.T("{0} Token · {1}/{2} 次有记录", StatisticsText.Exact(value), measured, t.Requests));
-        TokenTiles = new[]
+        var tiles = new[]
         {
             Part("普通输入", t.Input, t.InputReported, "不含缓存"), Part("输出用量", t.Output, t.OutputReported, "包含思考"),
             Part("缓存读取", t.CacheRead, t.ReadReported, "已复用的输入"), Part("缓存写入", t.CacheWrite, t.WriteReported, "新写入的输入"),
             Part("思考用量", t.Reasoning, t.ReasoningReported, "已包含在输出中"),
-            new StatisticsTokenTile(StatisticsText.T("输出速度"), t.Speed is { } speed ? StatisticsText.T("{0} /秒", speed.ToString("0.#", CultureInfo.CurrentUICulture)) : "—",
+            new StatisticsTokenTile("输出速度", StatisticsText.T("输出速度"), t.Speed is { } speed ? StatisticsText.T("{0} /秒", speed.ToString("0.#", CultureInfo.CurrentUICulture)) : "—",
                 StatisticsText.T("首内容 {0}", StatisticsText.Seconds(t.FirstContent)),
                 StatisticsText.T("{0} 次回复有速度记录", t.SpeedMeasured) + "\n" + StatisticsText.SpeedHelp),
         };
+        UpdateRows(TokenTiles, tiles, tile => tile.Id, (row, next) => row.Update(next));
     }
 
     private static UsageMetric MetricOf(string value) => value switch
@@ -108,7 +111,7 @@ public partial class OverviewPageViewModel
         var top = sorted.Take(7).Select((g, i) => new StatisticsCategory(g.Identity.Id, g.Identity.Name, StatisticsText.Color(i))).ToList();
         var rest = sorted.Skip(7).Select(g => g.Identity.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
         if (rest.Count > 0 && metric != UsageMetric.Speed) top.Add(new StatisticsCategory("\u001fother", StatisticsText.T("其他"), StatisticsText.Color(7)));
-        Categories = top;
+        CollectionSync.Update(Categories, top);
         var points = new List<StatisticsChartPoint>(report.Series.Count);
         foreach (var bucket in report.Series)
         {
@@ -122,8 +125,12 @@ public partial class OverviewPageViewModel
             var when = report.Bucket == "hour" ? bucket.Start.ToString("yyyy-MM-dd HH:00")
                 : report.Bucket is "week" or "month" ? $"{bucket.Start:yyyy-MM-dd} – {bucket.LastDate:yyyy-MM-dd}" : bucket.Start.ToString("yyyy-MM-dd");
             var label = report.Bucket == "hour" ? bucket.Start.ToString("HH:00") : report.Bucket == "month" ? bucket.Start.ToString("yy-MM") : bucket.Start.ToString("MM-dd");
-            points.Add(new StatisticsChartPoint(DateOnly.FromDateTime(bucket.Start) < report.FirstDate ? report.FirstDate : DateOnly.FromDateTime(bucket.Start),
-                bucket.LastDate, label, when + "\n" + TotalsHint(bucket.Totals), bucket.Totals.Value(metric), parts));
+            var previous = Chart?.Points.ElementAtOrDefault(points.Count);
+            // 列表默认按引用比较，先复用相同分段，才能识别未变化的整张图表。
+            var stableParts = previous is not null && previous.Parts.SequenceEqual(parts) ? previous.Parts : parts;
+            var point = new StatisticsChartPoint(DateOnly.FromDateTime(bucket.Start) < report.FirstDate ? report.FirstDate : DateOnly.FromDateTime(bucket.Start),
+                bucket.LastDate, label, when + "\n" + TotalsHint(bucket.Totals), bucket.Totals.Value(metric), stableParts);
+            points.Add(previous is not null && previous == point ? previous : point);
         }
         var empty = report.Totals.Requests == 0 ? "所选时段暂无已结束请求" : metric switch
         {
@@ -131,14 +138,17 @@ public partial class OverviewPageViewModel
             UsageMetric.Speed => "没有可测量的流式回复",
             _ => report.Totals.UsageReported > 0 ? "所选请求的已知用量为 0 Token" : "请求未报告用量",
         };
-        Chart = new StatisticsChartData(points, metric, StatisticsText.T(empty));
+        var emptyText = StatisticsText.T(empty);
+        if (Chart is not { } current || current.Metric != metric || current.EmptyText != emptyText || !current.Points.SequenceEqual(points))
+            Chart = new StatisticsChartData(points, metric, emptyText);
         var scale = report.Bucket switch { "hour" => "按小时", "week" => "按周", "month" => "按月", _ => "按天" };
-        ChartCaption = StatisticsText.T(scale) + " · " + (metric == UsageMetric.Speed
+        var caption = StatisticsText.T(scale) + " · " + (metric == UsageMetric.Speed
             ? StatisticsText.T("柱高为总体速度，彩线为分组速度") : StatisticsText.T("悬停查看数值，点击柱子筛选时段"));
-        if (report.UnplacedHours > 0) ChartCaption += StatisticsText.T(" · {0} 次未记录时间，计入总数", report.UnplacedHours);
+        if (report.UnplacedHours > 0) caption += StatisticsText.T(" · {0} 次未记录时间，计入总数", report.UnplacedHours);
+        ChartCaption = caption;
         var maximum = sorted.Length == 0 ? 0 : sorted.Max(g => g.Totals.Value(metric));
         var denominator = metric == UsageMetric.Speed ? maximum : report.Totals.Value(metric);
-        RankRows = sorted.Select(g =>
+        var ranks = sorted.Select(g =>
         {
             var color = top.FirstOrDefault(c => c.Id == g.Identity.Id)?.Brush ?? StatisticsText.Color(7);
             var val = g.Totals.Value(metric);
@@ -148,6 +158,7 @@ public partial class OverviewPageViewModel
             return new StatisticsRankRow(g.Identity.Id, g.Identity.Name, color, label, detail,
                 g.Identity.Name + "\n" + TotalsHint(g.Totals), denominator > 0 ? 100 * val / denominator : 0);
         }).ToArray();
+        UpdateRows(RankRows, ranks, row => row.Id, (row, next) => row.Update(next));
     }
 
     private static string TotalsHint(UsageTotals totals) => StatisticsText.T("请求 {0} · 成功 {1} · 失败 {2} · 重试 {3}",
@@ -187,17 +198,14 @@ public partial class OverviewPageViewModel
                 Brush color = empty;
                 if (value > 0 && peak > 0)
                 {
-                    var fill = StatisticsText.Color(0).Clone();
-                    fill.Opacity = 0.22 + 0.78 * Math.Ceiling(4 * value / peak) / 4;
-                    fill.Freeze();
-                    color = fill;
+                    color = StatisticsText.HeatColor((int)Math.Ceiling(4 * value / peak));
                 }
                 var hint = date.ToString("yyyy-MM-dd") + "\n" + (totals is null ? StatisticsText.T("没有已结束请求") : TotalsHint(totals));
                 cells.Add(new StatisticsHeatDay(date.ToDateTime(TimeOnly.MinValue), date <= report.Query.Today, color, hint,
                     report.FirstDate == report.Query.LastDate && date == report.FirstDate));
             }
         }
-        HeatDays = cells;
+        UpdateRows(HeatDays, cells, day => day.Date, (day, next) => day.Update(next));
         var months = new List<string>(53);
         var previous = -1;
         for (var week = 0; week < 53; week++)
@@ -206,7 +214,7 @@ public partial class OverviewPageViewModel
             months.Add(date.Month != previous ? date.ToString("MMM", CultureInfo.CurrentUICulture) : string.Empty);
             previous = date.Month;
         }
-        HeatMonths = months;
+        if (!HeatMonths.SequenceEqual(months)) HeatMonths = months;
         HeatCaption = StatisticsText.T("最近 53 周 · 活跃 {0} 天 · 点击查看当天", report.Heatmap.Count);
     }
 
@@ -214,7 +222,7 @@ public partial class OverviewPageViewModel
     {
         if (_report is not { } report) return;
         _page = Math.Clamp(_page, 0, Math.Max(0, (report.Records.Count - 1) / PageSize));
-        RequestRows = report.Records.Skip(_page * PageSize).Take(PageSize).Select(r =>
+        var rows = report.Records.Skip(_page * PageSize).Take(PageSize).Select(r =>
         {
             var tokens = r.Tokens;
             var usage = tokens is { HasUsage: true } ? (tokens.Complete ? string.Empty : "≥") + StatisticsText.Count(tokens.KnownTokens) : "—";
@@ -225,15 +233,29 @@ public partial class OverviewPageViewModel
             var hint = $"{r.Date:yyyy-MM-dd} {r.CompletedAt:HH:mm:ss}\n{r.Group(UsageDimension.Model).Name}\n{r.Group(UsageDimension.Provider).Name} · {r.KeyName}\n{details}\n"
                 + StatisticsText.T("首内容 {0} · 总耗时 {1} · 重试 {2}", StatisticsText.Seconds(r.Usage?.FirstContentSeconds), StatisticsText.Seconds(r.Usage?.DurationSeconds), r.Retries)
                 + "\n" + (r.Quote.Amount is { } exact ? (r.Quote.IsLowerBound ? "≥" : "≈") + StatisticsText.Amount(exact) : StatisticsText.T("缺少单价或计费用量"));
-            return new StatisticsRequestRow(r.Date.ToString("MM-dd") + "\n" + (r.CompletedAt?.ToString("HH:mm:ss") ?? "—"),
+            return new StatisticsRequestRow(r.RouteId, r.RequestId, r.Date.ToString("MM-dd") + "\n" + (r.CompletedAt?.ToString("HH:mm:ss") ?? "—"),
                 r.Group(UsageDimension.Model).Name, r.Group(UsageDimension.Provider).Name,
                 r.Group(UsageDimension.Client).Name + " · " + (r.KeyName.Length > 0 ? r.KeyName : StatisticsText.T("未记录 Key")),
                 status, StatisticsText.ThemeBrush(r.Outcome == RequestOutcome.Success ? "SystemFillColorSuccessBrush" : "SystemFillColorCriticalBrush"),
                 usage, StatisticsText.Rate(tokens?.HitRate, tokens?.PromptIsLowerBound == true), cost, StatisticsText.Seconds(r.Usage?.DurationSeconds), hint);
         }).ToArray();
+        UpdateRows(RequestRows, rows, row => row.Identity, (row, next) => row.Update(next));
         var pages = Math.Max(1, (report.Records.Count + PageSize - 1) / PageSize);
         PageCaption = StatisticsText.T("第 {0}/{1} 页 · 共 {2} 条 · 每页 {3} 条", _page + 1, pages, report.Records.Count, PageSize);
         UpdateCommands();
+    }
+
+    private static void UpdateRows<T, TKey>(ObservableCollection<T> target, IReadOnlyList<T> incoming,
+        Func<T, TKey> identity, Action<T, T> update) where TKey : notnull
+    {
+        var existing = target.ToDictionary(identity);
+        var rows = incoming.Select(next =>
+        {
+            if (!existing.TryGetValue(identity(next), out var row)) return next;
+            update(row, next);
+            return row;
+        }).ToArray();
+        CollectionSync.Update(target, rows);
     }
 
     private static string Part(decimal? value) => value is { } number ? StatisticsText.Exact(number) : StatisticsText.T("未获取");

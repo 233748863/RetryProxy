@@ -8,6 +8,7 @@ using RetryProxy.Service.Interface;
 using RetryProxy.Service.I18n;
 using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -38,6 +39,7 @@ public partial class OverviewPageViewModel : ViewModel
     private int _page;
 
     [ObservableProperty] private bool _isLoading;
+    [ObservableProperty] private bool _showLoading;
     [ObservableProperty] private bool _hasReport;
     [ObservableProperty] private bool _hasRequests;
     [ObservableProperty] private string _notice = string.Empty;
@@ -77,15 +79,15 @@ public partial class OverviewPageViewModel : ViewModel
     [ObservableProperty] private string _totalCost = "—";
     [ObservableProperty] private string _costDetail = string.Empty;
     [ObservableProperty] private string _costHelp = string.Empty;
-    [ObservableProperty] private IReadOnlyList<StatisticsTokenTile> _tokenTiles = [];
+    public ObservableCollection<StatisticsTokenTile> TokenTiles { get; } = [];
     [ObservableProperty] private StatisticsChartData? _chart;
-    [ObservableProperty] private IReadOnlyList<StatisticsCategory> _categories = [];
-    [ObservableProperty] private IReadOnlyList<StatisticsRankRow> _rankRows = [];
+    public ObservableCollection<StatisticsCategory> Categories { get; } = [];
+    public ObservableCollection<StatisticsRankRow> RankRows { get; } = [];
     [ObservableProperty] private string _chartCaption = string.Empty;
-    [ObservableProperty] private IReadOnlyList<StatisticsHeatDay> _heatDays = [];
+    public ObservableCollection<StatisticsHeatDay> HeatDays { get; } = [];
     [ObservableProperty] private IReadOnlyList<string> _heatMonths = [];
     [ObservableProperty] private string _heatCaption = string.Empty;
-    [ObservableProperty] private IReadOnlyList<StatisticsRequestRow> _requestRows = [];
+    public ObservableCollection<StatisticsRequestRow> RequestRows { get; } = [];
     [ObservableProperty] private string _pageCaption = string.Empty;
 
     public bool IsToday => SelectedPeriod == "today";
@@ -137,6 +139,7 @@ public partial class OverviewPageViewModel : ViewModel
         _generation++;
         _loadCancellation?.Cancel();
         IsLoading = false;
+        ShowLoading = false;
     }
 
     private void QueryChanged()
@@ -196,10 +199,12 @@ public partial class OverviewPageViewModel : ViewModel
         var token = cancellation.Token;
         _dirty = false;
         IsLoading = true;
+        // 自动刷新保留当前内容；初次加载、改筛选或手动刷新才显示进度。
+        ShowLoading = !HasReport || _forceRead;
         try
         {
             var query = Query();
-            if (_report?.Query != query) HasReport = false;
+            if (_report?.Query != query) { HasReport = false; ShowLoading = true; }
             var clients = _workspaceService.Workspace.Config.Routes.ToDictionary(r => r.Id, r => r.ClientType, StringComparer.Ordinal);
             var prices = CurrentPrices();
             var force = _forceRead;
@@ -241,7 +246,7 @@ public partial class OverviewPageViewModel : ViewModel
         finally
         {
             if (ReferenceEquals(_loadCancellation, cancellation)) _loadCancellation = null;
-            if (generation == _generation) IsLoading = false;
+            if (generation == _generation) { IsLoading = false; ShowLoading = false; }
             cancellation.Dispose();
         }
     }

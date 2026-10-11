@@ -21,7 +21,7 @@ using Xunit;
 
 namespace RetryProxy.App.Tests;
 
-public sealed class StatisticsViewModelTests
+public sealed partial class StatisticsViewModelTests
 {
     [Fact]
     public void FiltersPaginationAndRapidNavigationKeepTheLatestSelection() => Run(async () =>
@@ -189,6 +189,23 @@ public sealed class StatisticsViewModelTests
             }
             View = new OverviewPageViewModel(_workspace, Config);
         }
+
+        public void Append(string id, int daysAgo = 0, ClientType client = ClientType.Codex)
+        {
+            var date = DateOnly.FromDateTime(DateTime.Today).AddDays(-daysAgo);
+            var route = Config.Get().Proxy!.RouteFor(client)!;
+            new SqliteDailyStorage(_workspace.Data, route.Id, route.Name).Open(date, false).Journal!.Append(new DailyRequest
+            {
+                RequestId = id, Outcome = RequestOutcome.Success,
+                UpdatedAtUnixMs = new DateTimeOffset(date.ToDateTime(new TimeOnly(13, 0), DateTimeKind.Local)).ToUnixTimeMilliseconds(),
+                KeyId = "key", KeyName = "test key",
+                Attribution = new RequestAttribution { ProviderId = "provider", ProviderName = "test provider", Model = daysAgo == 0 ? "model-a" : "model-b", Client = client },
+                Usage = new RequestUsage { Model = daysAgo == 0 ? "model-a" : "model-b", InputAccounting = CacheInputAccounting.IncludesCached,
+                    InputTokens = 1000, CachedTokens = 800, OutputTokens = 100 },
+            });
+        }
+
+        public void NotifyRefresh() => _workspace.Flush();
 
         public void Dispose()
         {

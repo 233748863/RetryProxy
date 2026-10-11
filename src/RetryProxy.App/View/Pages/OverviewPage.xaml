@@ -140,7 +140,7 @@
         <TextBlock Text="{Binding RangeCaption}" Style="{StaticResource Muted}" Margin="0,0,0,12" AutomationProperties.AutomationId="StatisticsRangeCaption" />
         <!-- 固定加载提示的占位，刷新时不推动下方卡片和滚动内容。 -->
         <Grid Height="12">
-            <ProgressBar Height="2" IsIndeterminate="True" Margin="0,0,0,10" Visibility="{Binding IsLoading, Converter={StaticResource BooleanToVisibilityConverter}}" />
+            <ProgressBar Height="2" IsIndeterminate="True" Margin="0,0,0,10" Visibility="{Binding ShowLoading, Converter={StaticResource BooleanToVisibilityConverter}}" />
         </Grid>
         <Border Background="{DynamicResource ControlFillColorDefaultBrush}" CornerRadius="7" Padding="12" Margin="0,0,0,12"
                 Visibility="{Binding HasNotice, Converter={StaticResource BooleanToVisibilityConverter}}">

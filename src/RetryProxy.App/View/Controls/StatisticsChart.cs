@@ -27,6 +27,7 @@ public sealed class StatisticsChart : Control
     {
         Focusable = true;
         MinHeight = 180;
+        ToolTipService.SetShowDuration(this, int.MaxValue);
         SetResourceReference(ForegroundProperty, "TextFillColorSecondaryBrush");
         SetResourceReference(FontFamilyProperty, "TextThemeFontFamily");
         AutomationProperties.SetName(this, StatisticsText.T("用量趋势，方向键查看，回车选择时段"));
@@ -136,6 +137,8 @@ public sealed class StatisticsChart : Control
         _point = index;
         Cursor = index >= 0 ? Cursors.Hand : Cursors.Arrow;
         UpdateTooltip();
+        // 提示在进入图表后才创建，需主动打开，避免首次悬停错过系统触发时机。
+        if (ToolTip is ToolTip tip) tip.IsOpen = true;
         InvalidateVisual();
     }
 
@@ -143,6 +146,7 @@ public sealed class StatisticsChart : Control
     {
         base.OnMouseLeave(e);
         if (!IsKeyboardFocused) _point = -1;
+        if (ToolTip is ToolTip tip) tip.IsOpen = false;
         InvalidateVisual();
     }
 
@@ -180,9 +184,14 @@ public sealed class StatisticsChart : Control
 
     private void UpdateTooltip()
     {
-        if (ToolTip is ToolTip previous) previous.IsOpen = false;
         var text = Data is { } data && _point >= 0 && _point < data.Points.Count ? data.Points[_point].ToolTip : null;
-        ToolTip = text is null ? null : new ToolTip { Content = text, PlacementTarget = this, MaxWidth = 420 };
+        if (text is null)
+        {
+            if (ToolTip is ToolTip previous) previous.IsOpen = false;
+            ToolTip = null;
+        }
+        else if (ToolTip is ToolTip current) current.Content = text;
+        else ToolTip = new ToolTip { Content = text, PlacementTarget = this, MaxWidth = 420 };
         AutomationProperties.SetHelpText(this, text ?? string.Empty);
     }
 

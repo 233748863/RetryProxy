@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Linq;
 using System.Windows;
 using System.Windows.Media;
 using RetryProxy.Core.Metrics;
@@ -12,14 +13,15 @@ public sealed record StatisticsCategory(string Id, string Name, Brush Brush);
 public sealed record StatisticsChartPart(double Value, Brush Brush);
 public sealed record StatisticsChartPoint(DateOnly First, DateOnly Last, string Label, string ToolTip, double Value, IReadOnlyList<StatisticsChartPart> Parts);
 public sealed record StatisticsChartData(IReadOnlyList<StatisticsChartPoint> Points, UsageMetric Metric, string EmptyText);
-public sealed record StatisticsRankRow(string Id, string Name, Brush Brush, string Value, string Detail, string ToolTip, double Share);
-public sealed record StatisticsHeatDay(DateTime Date, bool IsEnabled, Brush Brush, string ToolTip, bool IsSelected);
-public sealed record StatisticsRequestRow(string Time, string Model, string Provider, string ClientKey, string Status, Brush StatusBrush,
-    string Tokens, string Cache, string Cost, string Duration, string ToolTip);
-public sealed record StatisticsTokenTile(string Label, string Value, string Detail, string ToolTip);
 
 internal static class StatisticsText
 {
+    // 复用冻结画刷；相同颜色不会因创建新对象触发无意义的绑定和图表更新。
+    private static readonly Brush[] DarkColors = Palette(["#A5B4FC", "#7DD3FC", "#6EE7B7", "#FCD34D", "#F9A8D4", "#C4B5FD", "#94A3B8", "#71717A"]);
+    private static readonly Brush[] LightColors = Palette(["#5B50DA", "#167BBD", "#128567", "#BC7C13", "#C34383", "#8854CC", "#61748C", "#92929D"]);
+    private static readonly Brush[] DarkHeatColors = HeatPalette(DarkColors[0]);
+    private static readonly Brush[] LightHeatColors = HeatPalette(LightColors[0]);
+
     public static string T(string text, params object[] args) => ClientPageText.Translate(text, args);
 
     public static string Count(decimal value)
@@ -58,14 +60,28 @@ internal static class StatisticsText
 
     public static Brush Color(int index)
     {
-        var dark = ThemeBrush("ApplicationBackgroundBrush") is SolidColorBrush bg && bg.Color.R + bg.Color.G + bg.Color.B < 384;
-        string[] colors = dark
-            ? ["#A5B4FC", "#7DD3FC", "#6EE7B7", "#FCD34D", "#F9A8D4", "#C4B5FD", "#94A3B8", "#71717A"]
-            : ["#5B50DA", "#167BBD", "#128567", "#BC7C13", "#C34383", "#8854CC", "#61748C", "#92929D"];
-        var brush = new SolidColorBrush((Color)ColorConverter.ConvertFromString(colors[Math.Clamp(index, 0, colors.Length - 1)]));
+        var colors = IsDark ? DarkColors : LightColors;
+        return colors[Math.Clamp(index, 0, colors.Length - 1)];
+    }
+
+    public static Brush HeatColor(int level) => (IsDark ? DarkHeatColors : LightHeatColors)[Math.Clamp(level, 1, 4) - 1];
+
+    private static bool IsDark => ThemeBrush("ApplicationBackgroundBrush") is SolidColorBrush bg && bg.Color.R + bg.Color.G + bg.Color.B < 384;
+
+    private static Brush[] Palette(string[] colors) => colors.Select(value =>
+    {
+        var brush = new SolidColorBrush((Color)ColorConverter.ConvertFromString(value));
+        brush.Freeze();
+        return (Brush)brush;
+    }).ToArray();
+
+    private static Brush[] HeatPalette(Brush color) => Enumerable.Range(1, 4).Select(level =>
+    {
+        var brush = color.Clone();
+        brush.Opacity = 0.22 + 0.78 * level / 4;
         brush.Freeze();
         return brush;
-    }
+    }).ToArray();
 
     public static string UsageHelp => T("Token = 模型计量文本的单位。总用量 = 普通输入 + 缓存读取 + 缓存写入 + 输出；思考用量已包含在输出中。缺少用量时只累计已知部分，以 ≥ 标记下限。");
     public static string CacheHelp => T("缓存命中率 = 已复用的输入 / 总输入，按用量加权。仅计算总输入与缓存读取均有效的请求；Claude 未报告缓存写入时以 ≤ 标记上限。");

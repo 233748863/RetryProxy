@@ -138,7 +138,10 @@
             <ui:Button Content="{i18n:T 重置筛选}" Command="{Binding ResetFiltersCommand}" VerticalAlignment="Bottom" HorizontalAlignment="Stretch" Margin="0,0,10,10" MinHeight="32" AutomationProperties.AutomationId="StatisticsResetFilters" />
         </UniformGrid>
         <TextBlock Text="{Binding RangeCaption}" Style="{StaticResource Muted}" Margin="0,0,0,12" AutomationProperties.AutomationId="StatisticsRangeCaption" />
-        <ProgressBar Height="2" IsIndeterminate="True" Margin="0,0,0,10" Visibility="{Binding IsLoading, Converter={StaticResource BooleanToVisibilityConverter}}" />
+        <!-- 固定加载提示的占位，刷新时不推动下方卡片和滚动内容。 -->
+        <Grid Height="12">
+            <ProgressBar Height="2" IsIndeterminate="True" Margin="0,0,0,10" Visibility="{Binding IsLoading, Converter={StaticResource BooleanToVisibilityConverter}}" />
+        </Grid>
         <Border Background="{DynamicResource ControlFillColorDefaultBrush}" CornerRadius="7" Padding="12" Margin="0,0,0,12"
                 Visibility="{Binding HasNotice, Converter={StaticResource BooleanToVisibilityConverter}}">
             <TextBlock Text="{Binding Notice}" TextWrapping="Wrap" Foreground="{DynamicResource SystemFillColorCautionBrush}" AutomationProperties.AutomationId="StatisticsNotice" />

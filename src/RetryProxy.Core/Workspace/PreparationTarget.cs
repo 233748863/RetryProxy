@@ -1,5 +1,7 @@
 using RetryProxy.Core.Cli;
 using RetryProxy.Core.Config;
+using System;
+using System.Collections.Generic;
 
 namespace RetryProxy.Core.Workspace;
 
@@ -21,6 +23,7 @@ public sealed class PreparationTarget
     public required string KeyName { get; init; }
     public required CliCredential Credential { get; init; }
     public string DefaultModel { get; init; } = string.Empty;
+    public IReadOnlyList<RequestRule> RequestRules { get; init; } = Array.Empty<RequestRule>();
 
     public override string ToString() => $"PreparationTarget {{ {ClientType}, {ProviderName} · {KeyName} }}";
 }

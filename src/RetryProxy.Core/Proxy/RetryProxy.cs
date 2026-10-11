@@ -1332,6 +1332,15 @@ public sealed class RetryProxy
             }
         }
 
+        var ruleFields = string.Empty;
+        if (HttpMethods.IsPost(ctx.Method) && RequestRuleRewriter.IsGenerationPath(ctx.SafePath))
+        {
+            var result = RequestRuleRewriter.Apply(snapshot.RequestRules, headers, body);
+            body = result.Body;
+            ruleFields = result.LogFields;
+            if (result.Changed > 0) reasoningEffort = RequestMetadata.Parse(body).ReasoningEffort;
+        }
+
         var cacheRequest = _promptCache.Prepare(snapshot.UpstreamBaseUrl, ctx.Method, ctx.SafePath, headers, body,
             ctx.RequestId.StartsWith(ProxyMetrics.KeepAlivePrefix, StringComparison.Ordinal));
         if (streaming || model is not null)
@@ -1379,7 +1388,7 @@ public sealed class RetryProxy
             Model = model,
             ReasoningEffort = reasoningEffort,
             ModelIdentity = modelIdentity,
-            LogFields = (label.Length > 0 ? $"，{label}" : string.Empty) + rewrite,
+            LogFields = (label.Length > 0 ? $"，{label}" : string.Empty) + rewrite + ruleFields,
         };
     }
 

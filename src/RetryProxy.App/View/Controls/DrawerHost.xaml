@@ -39,7 +39,9 @@
                                Foreground="{ui:ThemeResource SystemFillColorCriticalBrush}" TextWrapping="Wrap"
                                AutomationProperties.LiveSetting="Assertive" />
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                        <ui:Button x:Name="CancelButton" AutomationProperties.AutomationId="DrawerCancel" Content="{i18n:T 取消}" Click="CloseClicked" MinWidth="80" Margin="0,0,8,0" />
+                        <ui:Button x:Name="CancelButton" AutomationProperties.AutomationId="DrawerCancel" Click="CloseClicked" MinWidth="80" Margin="0,0,8,0">
+                            <TextBlock x:Name="CancelText" Text="{i18n:T 取消}" MinWidth="48" TextAlignment="Center" />
+                        </ui:Button>
                         <ui:Button x:Name="SaveButton" AutomationProperties.AutomationId="DrawerSave" Content="{i18n:T 保存}" Click="SaveClicked" MinWidth="80" Appearance="Primary" />
                     </StackPanel>
                 </StackPanel>

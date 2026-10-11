@@ -378,6 +378,10 @@ public sealed class ProxyService
                 .WithDiagnostics(_diagnostics);
             if (_preparationProxy is { } preparation)
             {
+                lock (_lock)
+                {
+                    if (_snapshot is { } prepared) proxy.UpdateSnapshot(prepared);
+                }
                 proxy.AsPreparationProxy(preparation.ApiKey, preparation.AccessKey, preparation.AuthMode);
             }
         }

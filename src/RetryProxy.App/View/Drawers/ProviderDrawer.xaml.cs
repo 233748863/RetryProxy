@@ -52,6 +52,7 @@ public partial class ProviderDrawer : DrawerPage
         var claude = Draft.ClientType == ClientType.Claude;
         AuthPanel.Visibility = ContextCheck.Visibility = RolesExpander.Visibility = claude ? Visibility.Visible : Visibility.Collapsed;
         CodexPanel.Visibility = claude ? Visibility.Collapsed : Visibility.Visible;
+        RulesEditor.Load(Draft.ClientType, Draft.RequestRules);
         UpdateModels();
         RefreshKeys();
         _initialState = CaptureState();
@@ -73,10 +74,12 @@ public partial class ProviderDrawer : DrawerPage
         Haiku = new { HaikuField.ModelText, HaikuField.ExplicitContext },
         Fable = new { FableField.ModelText, FableField.ExplicitContext },
         Window = ContextWindowBox.Text, Compact = AutoCompactBox.Text, Draft.Keys, Draft.FetchedModels,
+        Rules = RulesEditor.CaptureState(),
     });
 
     public string? ReadDraft()
     {
+        if (RulesEditor.Read(out var rules) is { } ruleError) return ruleError;
         long? window = null, compact = null;
         if (Draft.ClientType == ClientType.Codex)
         {
@@ -104,6 +107,7 @@ public partial class ProviderDrawer : DrawerPage
         Draft.Models.Fable = FableField.Read();
         Draft.Models.ContextWindow = window;
         Draft.Models.AutoCompactTokenLimit = compact;
+        Draft.RequestRules = rules;
         if (Draft.BaseUrl != _modelsSourceUrl) Draft.FetchedModels.Clear();
         try { Draft.Validate(); }
         catch (ConfigException error) { return error.Message; }

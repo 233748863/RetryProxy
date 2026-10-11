@@ -34,6 +34,8 @@ public sealed class ProviderEndpoint : IEquatable<ProviderEndpoint>
 
     public List<ProviderKey> Keys { get; set; } = new();
 
+    public List<RequestRule> RequestRules { get; set; } = new();
+
     public ProviderEndpoint()
     {
     }
@@ -54,6 +56,7 @@ public sealed class ProviderEndpoint : IEquatable<ProviderEndpoint>
         WebsiteUrl = WebsiteUrl.Trim();
         Notes = Notes.Trim();
         Models.NormalizeInPlace();
+        foreach (var rule in RequestRules) rule.NormalizeInPlace();
         FetchedModels = FetchedModels.Where(model => !string.IsNullOrWhiteSpace(model))
             .Select(model => model.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         foreach (var key in Keys)
@@ -97,6 +100,8 @@ public sealed class ProviderEndpoint : IEquatable<ProviderEndpoint>
         }
 
         var keyIds = new HashSet<string>();
+        if (RequestRules.Count > RequestRule.MaxRules) throw new ConfigException("每个供应商最多设置 64 条请求规则");
+        foreach (var rule in RequestRules) rule.Validate();
         var keyNames = new HashSet<string>();
         foreach (var key in Keys)
         {
@@ -144,6 +149,7 @@ public sealed class ProviderEndpoint : IEquatable<ProviderEndpoint>
         WebsiteUrl = WebsiteUrl,
         Notes = Notes,
         Keys = Keys.Select(key => key.Clone()).ToList(),
+        RequestRules = RequestRules.Select(rule => rule.Clone()).ToList(),
     };
 
     public bool Equals(ProviderEndpoint? other)
@@ -158,6 +164,7 @@ public sealed class ProviderEndpoint : IEquatable<ProviderEndpoint>
             && FetchedModels.SequenceEqual(other.FetchedModels)
             && WebsiteUrl == other.WebsiteUrl
             && Notes == other.Notes
+            && RequestRules.SequenceEqual(other.RequestRules)
             && Keys.SequenceEqual(other.Keys);
     }
 

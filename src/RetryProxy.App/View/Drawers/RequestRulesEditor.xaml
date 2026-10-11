@@ -1,0 +1,12 @@
+<UserControl x:Class="RetryProxy.View.Drawers.RequestRulesEditor"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:i18n="clr-namespace:RetryProxy.Service.I18n"
+             xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml">
+    <StackPanel>
+        <TextBlock Text="{i18n:T 按列表顺序执行，模型条件匹配实际发送的模型。保存后生效。}" TextWrapping="Wrap" Margin="0,8,0,8"
+                   Foreground="{ui:ThemeResource TextFillColorSecondaryBrush}" />
+        <StackPanel x:Name="Rows" />
+        <ui:Button x:Name="AddButton" Content="{i18n:T 添加规则}" Click="AddClicked" HorizontalAlignment="Left" />
+    </StackPanel>
+</UserControl>

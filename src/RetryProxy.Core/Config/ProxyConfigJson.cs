@@ -186,6 +186,22 @@ public static class ProxyConfigJson
         writer.WriteString("website_url", provider.WebsiteUrl);
         writer.WriteString("notes", provider.Notes);
         writer.WriteNumber("sort_index", sortIndex);
+        writer.WriteStartArray("request_rules");
+        foreach (var rule in provider.RequestRules)
+        {
+            writer.WriteStartObject();
+            writer.WriteBoolean("enabled", rule.Enabled);
+            writer.WriteString("model_pattern", rule.ModelPattern);
+            writer.WriteString("path", rule.Path);
+            writer.WriteString("action", rule.Action switch { RequestRuleAction.SetIfMissing => "set_if_missing", RequestRuleAction.Remove => "remove", _ => "set" });
+            if (rule.Action != RequestRuleAction.Remove)
+            {
+                writer.WritePropertyName("value");
+                writer.WriteRawValue(rule.ValueJson);
+            }
+            writer.WriteEndObject();
+        }
+        writer.WriteEndArray();
         writer.WriteStartArray("keys");
         foreach (var key in provider.Keys)
         {
@@ -342,6 +358,7 @@ public static class ProxyConfigJson
             AuthMode = ProviderOptionExtensions.ParseAuthMode(authText)
                 ?? throw new ConfigException($"{label} auth_mode 只能是 bearer 或 x_api_key"),
             Models = ParseModels(value, label),
+            RequestRules = ParseArray(value, "request_rules", (element, _) => ParseRequestRule(element)),
             WebsiteUrl = OptionalString(value, "website_url", string.Empty),
             Notes = OptionalString(value, "notes", string.Empty),
             Keys = ParseArray(value, "keys", (element, keyIndex) => ParseKey(element, $"{label} keys 第 {keyIndex} 项")),
@@ -378,6 +395,30 @@ public static class ProxyConfigJson
         models.ContextWindow = OptionalLong(element, "context_window", $"{label} models.context_window");
         models.AutoCompactTokenLimit = OptionalLong(element, "auto_compact_token_limit", $"{label} models.auto_compact_token_limit");
         return models;
+    }
+
+    private static RequestRule ParseRequestRule(JsonElement value)
+    {
+        if (value.ValueKind != JsonValueKind.Object) throw new ConfigException("请求规则必须是对象");
+        var action = OptionalString(value, "action", "set") switch
+        {
+            "set" => RequestRuleAction.Set,
+            "set_if_missing" => RequestRuleAction.SetIfMissing,
+            "remove" => RequestRuleAction.Remove,
+            _ => throw new ConfigException("请选择有效的请求规则操作"),
+        };
+        var rule = new RequestRule
+        {
+            Enabled = Boolean(value, "enabled", true, "请求规则 enabled"),
+            ModelPattern = OptionalString(value, "model_pattern", string.Empty),
+            Path = RequiredString(value, "path", "请求规则缺少参数路径"),
+            Action = action,
+            ValueJson = action == RequestRuleAction.Remove ? "null" : value.TryGetProperty("value", out var parameter)
+                ? parameter.GetRawText() : throw new ConfigException("请求规则缺少参数值"),
+        };
+        rule.NormalizeInPlace();
+        rule.Validate();
+        return rule;
     }
 
     private static RoleModel ParseRole(JsonElement models, string name, string label)

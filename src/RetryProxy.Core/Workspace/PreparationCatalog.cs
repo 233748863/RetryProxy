@@ -34,6 +34,7 @@ public sealed class PreparationCatalog(
             model += "[1M]";
         return new PreparationTarget
         {
+            RequestRules = provider.RequestRules.Select(rule => rule.Clone()).ToArray(),
             ClientType = client,
             Key = reference,
             ProviderName = provider.Name,

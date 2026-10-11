@@ -47,6 +47,9 @@
             <TextBlock Text="{i18n:T 自动压缩阈值（可空）}" Margin="0,12,0,4" />
             <ui:TextBox x:Name="AutoCompactBox" AutomationProperties.Name="{i18n:T 自动压缩阈值（可空）}" />
         </StackPanel>
+        <Expander x:Name="RulesExpander" Header="{i18n:T 请求规则}" IsExpanded="False" Margin="0,16,0,0">
+            <drawers:RequestRulesEditor x:Name="RulesEditor" />
+        </Expander>
         <TextBlock Text="{i18n:T Key 列表}" FontWeight="SemiBold" Margin="0,20,0,8" />
         <StackPanel x:Name="KeyRows" />
         <ui:Button Content="{i18n:T 添加 Key}" Click="AddKeyClicked" HorizontalAlignment="Left" Margin="0,8,0,0" />

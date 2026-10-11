@@ -22,6 +22,8 @@ internal static class DrawerText
     {
         var direct = T(message);
         if (direct != message) return direct;
+        var rule = Regex.Match(message, "^请求规则 ([0-9]+)：(.+)$");
+        if (rule.Success) return Format("请求规则 {0}：{1}", rule.Groups[1].Value, Error(rule.Groups[2].Value));
         var route = Regex.Match(message, "^(?:转发)?通道“([^”]*)”：(.+)$");
         if (route.Success) return Format("{0}：{1}", route.Groups[1].Value, Error(route.Groups[2].Value));
         var http = Regex.Match(message, "^获取模型失败：服务商返回 HTTP ([0-9]+)，请检查地址及 API Key$");

@@ -201,7 +201,7 @@ public partial class DrawerHost : UserControl
         TitleText.Text = DrawerText.T(page.TitleKey);
         SaveButton.Content = DrawerText.T(_entries.Count > 1 ? "保存并返回" : page.SaveButtonKey);
         SaveButton.Visibility = page.IsReadOnly ? Visibility.Collapsed : Visibility.Visible;
-        CancelButton.Content = DrawerText.T(page.IsReadOnly ? "关闭" : "取消");
+        CancelText.Text = DrawerText.T(page.IsReadOnly ? "关闭" : "取消");
         CancelButton.Margin = page.IsReadOnly ? new Thickness(0) : new Thickness(0, 0, 8, 0);
         BackButton.Visibility = _entries.Count > 1 ? Visibility.Visible : Visibility.Collapsed;
         var enabled = !_saving && !_transitioning && !_closing;

@@ -1,0 +1,55 @@
+<UserControl x:Class="RetryProxy.View.Drawers.RequestRuleField"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:i18n="clr-namespace:RetryProxy.Service.I18n"
+             xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml">
+    <Border Padding="12" Margin="0,0,0,8" CornerRadius="4" BorderThickness="1"
+            BorderBrush="{ui:ThemeResource ControlStrokeColorDefaultBrush}">
+        <StackPanel>
+            <StackPanel Orientation="Horizontal">
+                <TextBlock x:Name="NumberText" FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,0,12,0" />
+                <CheckBox x:Name="EnabledCheck" AutomationProperties.Name="{i18n:T 启用规则}">
+                    <TextBlock Text="{i18n:T 启用规则}" TextWrapping="Wrap" MinWidth="80" />
+                </CheckBox>
+            </StackPanel>
+            <WrapPanel Margin="0,8,0,0">
+                <ui:Button x:Name="UpButton" Content="{i18n:T 上移}" Click="UpClicked" Margin="0,0,8,4" />
+                <ui:Button x:Name="DownButton" Content="{i18n:T 下移}" Click="DownClicked" Margin="0,0,8,4" />
+                <ui:Button Content="{i18n:T 删除规则}" Click="RemoveClicked" Margin="0,0,0,4" />
+            </WrapPanel>
+            <TextBlock Text="{i18n:T 生效模型}" Margin="0,8,0,4" />
+            <ui:TextBox x:Name="ModelPatternBox" MaxLength="256" AutomationProperties.Name="{i18n:T 生效模型}" />
+            <TextBlock Text="{i18n:T 留空表示全部模型；* 匹配任意文字。}" TextWrapping="Wrap" Margin="0,4,0,0"
+                       Foreground="{ui:ThemeResource TextFillColorSecondaryBrush}" />
+            <TextBlock Text="{i18n:T 请求参数}" Margin="0,12,0,4" />
+            <ComboBox x:Name="ParameterBox" SelectionChanged="ParameterChanged" AutomationProperties.Name="{i18n:T 请求参数}" />
+            <StackPanel x:Name="CustomPathPanel" Margin="0,8,0,0">
+                <ui:TextBox x:Name="PathBox" MaxLength="256" AutomationProperties.Name="{i18n:T 自定义参数路径}" />
+                <TextBlock Text="{i18n:T 用点分隔层级，例如 reasoning.effort。}" TextWrapping="Wrap" Margin="0,4,0,0"
+                           Foreground="{ui:ThemeResource TextFillColorSecondaryBrush}" />
+            </StackPanel>
+            <TextBlock Text="{i18n:T 操作}" Margin="0,12,0,4" />
+            <ComboBox x:Name="ActionBox" SelectionChanged="ActionChanged" AutomationProperties.Name="{i18n:T 规则操作}">
+                <ComboBoxItem Content="{i18n:T 设置参数}" />
+                <ComboBoxItem Content="{i18n:T 仅缺失时补齐}" />
+                <ComboBoxItem Content="{i18n:T 删除参数}" />
+            </ComboBox>
+            <StackPanel x:Name="ValuePanel">
+                <TextBlock Text="{i18n:T 值类型}" Margin="0,12,0,4" />
+                <ComboBox x:Name="ValueTypeBox" SelectionChanged="ValueTypeChanged" AutomationProperties.Name="{i18n:T 值类型}">
+                    <ComboBoxItem Content="{i18n:T 数值}" />
+                    <ComboBoxItem Content="{i18n:T 文字}" />
+                    <ComboBoxItem Content="{i18n:T 开关}" />
+                    <ComboBoxItem Content="JSON" />
+                </ComboBox>
+                <TextBlock Text="{i18n:T 参数值}" Margin="0,8,0,4" />
+                <ui:TextBox x:Name="ValueBox" TextWrapping="Wrap" AcceptsReturn="True" MinHeight="36" MaxHeight="160"
+                            VerticalScrollBarVisibility="Auto" MaxLength="16384" AutomationProperties.Name="{i18n:T 参数值}" />
+                <ComboBox x:Name="BooleanBox" SelectedIndex="0" AutomationProperties.Name="{i18n:T 开关值}">
+                    <ComboBoxItem Content="{i18n:T 开启}" />
+                    <ComboBoxItem Content="{i18n:T 关}" />
+                </ComboBox>
+            </StackPanel>
+        </StackPanel>
+    </Border>
+</UserControl>

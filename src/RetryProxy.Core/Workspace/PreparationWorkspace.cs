@@ -375,7 +375,7 @@ public sealed class PreparationWorkspace
                     .AsPreparationProxy(plan.Upstream.ApiKey, plan.Credential.ApiKey, plan.Upstream.AuthMode);
                 task.Service = service;
                 service.SetUiNotifier(_uiNotifier);
-                if (!service.RequestStart(plan.Runtime)) throw new InvalidOperationException();
+                if (!service.RequestStart(plan.Runtime, ChannelSnapshot.FromRuntime(plan.Runtime, plan.Target?.RequestRules))) throw new InvalidOperationException();
                 startedCount++;
                 logger.WithActivity(LogActivity.Preparation).Info($"已提交准备 · 模型 {task.Model} · 思考 {task.ReasoningEffort.Label()}");
             }
